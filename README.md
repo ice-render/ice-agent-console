@@ -39,8 +39,10 @@ npm run dev          # 同时起 AG-UI 后端(8093) 和前端 dev server(8094)
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 |
 | 今天天气怎么样 | 兜底：不画图，只回文字 |
 
-**也可以在图上直接操作**：点柱子、或框选一段区间 → 会触发新一轮 run，
-你的操作作为结构化上下文上报给 agent。
+**也可以在图上直接操作**：
+- 点柱子、或框选一段区间 → 触发新一轮 run，你的操作作为结构化上下文上报
+- 卡片底部那条**控件栏**（`ice-web-components` 画在另一张画布上）：
+  「解释这张图」/「换个画法」/「看实时数据」 —— 同样走 AG-UI 上行
 
 ```bash
 npm run serve        # 只跑静态产物（仍需后端在跑）
@@ -66,13 +68,29 @@ npm run serve        # 只跑静态产物（仍需后端在跑）
 
 ### 2.3 双向：用户在图上的操作回到 agent
 
-点数据点（`item:click`）、框选区间（`brush:end`）→ 作为**结构化上下文**塞进下一轮 run
-的 `context` 字段，而不是拼进用户说的话里。
+三个来源，走**同一条** `context` 通道：
 
+| 来源 | 事件 | 来自哪块画布 |
+|---|---|---|
+| 点数据点 | `item:click` | 图表层 |
+| 框选区间 | `brush:end` | 图表层 |
+| 点控件按钮 | 控件自己的 `click` | **控件层（第二块画布）** |
+
+它们都作为**结构化上下文**塞进下一轮 run 的 `context` 字段，而不是拼进用户说的话里。
 分开的意义：agent 分得清哪部分是"用户做的"、哪部分是"用户说的"。
+
 接上模型之后，提示词里可以给"用户动作"一个明确的地位。
 
-### 2.4 双向：诊断回灌的自修复
+### 2.4 双向：`state` 让 agent 知道"现在画面上是什么"
+
+`context` 只能告诉 agent **用户做了什么**；要让 agent 知道**现在画面上是什么**，
+得靠协议的 `state` 字段 —— 客户端把当前的图表定义放在 `state.chart` 里回传。
+
+控件条上的「解释这张图」和「换个画法」就是读它：
+前者逐项说出当前图表的类型/列/编码，后者**只换 `kind`、数据一行不动**重新画一张。
+agent 不需要你复述"刚才画的是什么"。
+
+### 2.5 双向：诊断回灌的自修复
 
 `ice-chart-dsl` 的 `validateChartDsl` **任何输入都不抛异常**，它的设计目的就是
 "给 agent 做自修复用的反馈通道"——诊断里带可用列名、表达式字符位置。
@@ -94,7 +112,7 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 |---|---|---|
 | 协议层 | `server/`、`src/domain/agui/` | AG-UI 事件的编解码、归约 |
 | 翻译层 | `server/agents/dsl-to-events.ts`、`src/domain/ice/` | "想画什么" ↔ "事件序列" ↔ "ICE 调用" |
-| 渲染层 | `src/view/` | DOM thread 外壳 + canvas 卡片 |
+| 渲染层 | `src/view/` | DOM thread 外壳 + 卡片里的 canvas 层 |
 
 ### 3.2 一个刻意的分界：DOM 外壳 + canvas 内容
 
@@ -102,10 +120,42 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 应用外壳、表单、弹窗这类自成一体的画布界面。Thread 式消息流不行：
 消息要能选中复制、要能走输入法、要有浏览器原生的滚动惯性、要能被屏幕阅读器读。
 
-所以**DOM 管 thread 外壳（消息列表/滚动/输入框/卡片容器），canvas 管卡片内容（图表）**。
+所以**DOM 管 thread 外壳（消息列表/滚动/输入框/卡片容器），canvas 管卡片内容**。
 这个工程不是纯 canvas 应用，这是有意为之。
 
-### 3.3 纯核心 + 命令式外壳
+### 3.3 卡片里是**两块**画布
+
+一张图表卡片里有两个独立的 ICE 实例：
+
+```
+┌─ 卡片 ─────────────────────────────────┐
+│ .chart-wrap  <canvas>                   │  ← ICE 实例 ①（ice-chart 自己 new 的）
+│ .widget-wrap <canvas>                   │  ← ICE 实例 ②（ice-web-components 的控件条）
+└─────────────────────────────────────────┘
+```
+
+为什么要两块而不是一块：**引擎的模型是「一层 = 一个 ICE 实例 + 一张 canvas」**，
+而 `ice-chart` 内部自己 `new ICE()`、不接受外部实例（见 `docs/upstream-gaps.md` 第 7 条）。
+硬塞只能走 `addMark`，但那个槽位是**按数据坐标**摆位的（适合"锚在异常点上的浮动按钮"），
+不适合"卡片底部一条控件栏"。两种需求，两个层。
+
+分工的判据是"这东西该跟着数据坐标走，还是该跟着卡片布局走"：
+
+| 放哪 | 什么进这里 |
+|---|---|
+| 图表层（`addMark`） | 与数据绑定的东西：阈值线、异常点标记、锚在某个点上的小按钮 |
+| 控件层（第二块画布） | 卡片级的控件：一排动作按钮、图表类型切换 |
+| DOM 外壳 | 消息、输入框、滚动 —— 需要可访问性与输入法的东西 |
+
+**层之间是并排关系，不是叠加**，所以不需要 `linkViewport` / `setInputPassthrough` /
+`composeLayersToCanvas` —— 那些只在层与层重叠时才有意义。
+`src/domain/ice/layer.ts` 因此只有"尺寸转交 + 一起销毁"两件事，**故意没做成大抽象**。
+
+控件条用 canvas 画而不是 DOM `<button>`，代价要说清楚：**canvas 控件没有 DOM 的可访问性、
+输入法、Cmd+F**。这里选它是因为要试的正是"canvas 控件层能不能跟图表共存"，
+顺带拿到同一套主题。聊天区那部分仍然是真 DOM —— 分界线没变。
+
+### 3.4 纯核心 + 命令式外壳
 
 `src/domain/agui/reducer.ts` 是**纯函数**，返回 `{state, effects}`：
 它只描述"要做什么"，不碰 DOM。碰 canvas 的活在 `src/entries/boot.ts` 的 `applyEffects` 里。
@@ -129,6 +179,8 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | `CUSTOM: ice/point-at` | `showHoverAtValue(x)` | 指着讲 |
 | 上行 `item:click` | → 新 run，`context` 带结构化交互 | 见 §2.3 |
 | 上行 `brush:end` | → 新 run，`context` 带选区 | 同上 |
+| 上行 控件按钮 click | → 新 run，`context` 带 `widget-action` | 来自**第二块画布** |
+| 下行 **读** `RunAgentInput.state` | agent 据此知道当前图表是什么 | 见 §2.4 |
 
 ### 4.1 事件顺序：先画后讲
 
@@ -188,8 +240,9 @@ RUN_FINISHED
 4. **不做 thread 持久化。** 刷新即清空。`threadId` 已经按协议在用，但没存。
 5. **不做 reasoning / subagent / activity 事件。** 协议里有，本工程没用。
    归约器对未知事件是丢弃语义，所以它们不会导致崩溃，只是不显示。
-6. **不用 `ice-web-components`。** M1 只用到引擎 + 图表 + DSL 三个包。
-   人机回环（interrupt）要用到表单时才是它上场的时候。
+6. **不做完整的人机回环（interrupt / resume）。** `ice-web-components` 已经接进来了
+   （§3.3），但只用它画了卡片底部的控件条。`interrupt` 要用 `ICEFormModel` 收参数、
+   提交后开新 run 带 `resume` —— 那条路还没走。
 
 ---
 
@@ -208,8 +261,12 @@ ice-agent-console/
 ├── src/
 │   ├── domain/              纯逻辑，无 DOM
 │   │   ├── agui/            SSE 解析 / 归约器 / JSON Patch
-│   │   └── ice/             协议 → ICE 的纯翻译
-│   ├── view/                DOM 外壳 + canvas 卡片
+│   │   └── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
+│   ├── view/                DOM 外壳 + canvas 层
+│   │   ├── chart-adapter.ts 图表层（ICE 实例 ①）
+│   │   ├── widget-layer.ts  控件层（ICE 实例 ②，ice-web-components 画）
+│   │   ├── card.ts          卡片 = 两块画布
+│   │   └── thread.ts        thread 外壳
 │   └── entries/boot.ts      接线：分发动作、执行 effects、触发 run
 ├── shared/contract.ts       自定义事件名 / context 键（server 与 web 的唯一出处）
 ├── tests/  e2e/             jest 单测 + playwright
@@ -265,11 +322,15 @@ npm run verify:full   # 上面 + playwright
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **91 passed** / 6 suites |
-| e2e | **12 passed** / 4 specs |
-| 源码 | 2334 行（`server` + `src` + `shared`，含注释） |
-| 测试 | 1557 行（`tests` + `e2e`） |
-| 生产包 | 622 KiB（引擎 282 + 图表 281 + DSL 19 + 应用 234，未压缩） |
+| 单测 | **97 passed** / 7 suites |
+| e2e | **16 passed** / 5 specs |
+| 源码 | 2721 行（`server` + `src` + `shared`，含注释） |
+| 测试 | 1830 行（`tests` + `e2e`） |
+| 生产包 | 1113 KiB（引擎 283 + 图表 281 + 控件库 488 + DSL 19 + 应用 242，未压缩） |
+
+> 控件库（`ice-web-components`）一进来就占掉 488 KiB —— 是反着用的代价：
+> 它是个 84 个组件的完整工具集，这里只用到了 `ICEButton`。
+> 真要瘦身得走 tree-shaking（它目前的产物是 UMD 单文件，摇不掉）。
 
 e2e 的判据**不是"DOM 里有没有 canvas"**——canvas 元素存在但全白是很典型的一种失败。
 用例一律数**非透明像素**，并断言画布内容在某些事件前后**确实变了**（比如"指着讲"）。
@@ -299,6 +360,9 @@ LLM:     用户消息 → (模型) ─┘
 
 方括号里那一段（`dsl-to-events.ts`）**两个实现共享**。M2 真正新增的只有
 "把自然语言变成 `ChartPlan`"，下游一行不动。
+
+`context`（用户做了什么）与 `state`（画面上是什么）两条输入通道都已经通了（§2.3 / §2.4），
+所以接模型时不用再动管道 —— 提示词里把这两条讲清楚就行。
 
 `server/index.ts` 里换实现只动一行：
 

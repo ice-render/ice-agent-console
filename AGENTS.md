@@ -17,6 +17,15 @@
    用 `validateChartDsl → compileChartDsl → createChart / setOption`，实例只建一次。
 4. **`appendData` 只能用在数值/时间轴。** 它不补 `xAxis.data`，类目轴追加新类目会错位。
    判不了就走全量 `setOption`（判断逻辑在 `src/domain/ice/option-mapping.ts`）。
+5. **一张卡片里是两块画布，别把它们混起来。**
+   `.chart-wrap` 是图表（`ice-chart` 自己 `new ICE()`）、`.widget-wrap` 是控件条
+   （`ice-web-components` 画在另一个 ICE 实例上）。写选择器时**必须指明是哪一块** ——
+   `.card canvas` 会命中第一块，那种"靠 DOM 顺序"的写法一旦有人调整顺序就会静默量错对象
+   （`e2e/helpers.ts` 里的 `CHART_CANVAS` / `WIDGET_CANVAS`）。
+   层之间是**并排**的，不需要 `linkViewport` / `setInputPassthrough`。
+6. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
+   `__iceAgentConsole.widgetRects()`（应用挂出来的矩形查询），不要写死像素偏移 ——
+   按钮宽度是按文案字数算的，改一个字就全错位。
 
 ---
 
@@ -30,8 +39,10 @@
 | JSON Patch / 追加识别 | `src/domain/agui/state-patch.ts` |
 | SSE 解析 | `src/domain/agui/sse.ts` |
 | 协议 → ICE 的纯翻译 | `src/domain/ice/option-mapping.ts` |
+| 层（canvas + ICE 实例）的尺寸与生命周期 | `src/domain/ice/layer.ts` |
 | 图表实例的建立与交互接线 | `src/view/chart-adapter.ts` |
-| 卡片 DOM | `src/view/card.ts` |
+| 控件层（第二块画布，ice-web-components） | `src/view/widget-layer.ts` |
+| 卡片 DOM（两块画布的容器） | `src/view/card.ts` |
 | thread DOM 外壳 | `src/view/thread.ts` |
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |
