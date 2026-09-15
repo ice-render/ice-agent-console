@@ -64,12 +64,12 @@ module.exports = (env, argv) => {
     performance: { hints: false },
     devServer: {
       static: { directory: path.resolve(__dirname, 'public') },
-      port: 8094,
+      port: 8100,
       open: false,
       hot: true,
       // 这里**故意不配 proxy**：SSE 走 dev-server 的反向代理容易被中间层缓冲，
       // 出问题时很难判断是协议问题还是代理问题。改为 server 直接开 CORS，
-      // 前端直连 http://localhost:8093/agui（见 server/index.ts 的允许来源）。
+      // 前端直连 http://localhost:8099/agui（见 server/index.ts 的允许来源）。
     },
     devtool: isProd ? false : 'eval-source-map',
   };

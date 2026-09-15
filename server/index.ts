@@ -14,7 +14,7 @@ import { AGUI_PATH, SSE_HEADERS, encodeKeepAlive, encodeSse } from './protocol';
 import { ScriptedAgent, DEFAULT_PACE, NO_PACE, type Pace } from './agents/scripted';
 import type { AgentRun } from './agents/types';
 
-const PORT = Number(process.env.ICE_AGENT_API_PORT || 8093);
+const PORT = Number(process.env.ICE_AGENT_API_PORT || 8099);
 
 /**
  * 节奏可以通过环境变量关掉。e2e 和本地快速验证用 `ICE_AGENT_PACE=0`，

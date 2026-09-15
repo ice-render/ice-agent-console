@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 一条命令起两个进程：AG-UI 后端（8093）+ 前端 dev server（8094）。
+ * 一条命令起两个进程：AG-UI 后端（8099）+ 前端 dev server（8100）。
  *
  * 家族其它仓库都是"一个进程"的纯静态应用，npm start 就够了。
  * 这个工程有后端，但又不想为了 concurrently 这种小工具引一个依赖，
@@ -52,8 +52,8 @@ process.on('SIGTERM', () => shutdown(0));
 
 console.log(`
   ice-agent-console
-    AG-UI 后端   http://localhost:8093/agui
-    控制台页面   http://localhost:8094
+    AG-UI 后端   http://localhost:8099/agui
+    控制台页面   http://localhost:8100
 
   Ctrl-C 一起收掉。
 `);

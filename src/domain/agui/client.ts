@@ -12,13 +12,13 @@
 import { SseParser, parseSseJson } from './sse';
 
 /**
- * 后端地址。dev 下前端在 8094、后端在 8093，跨源——所以 server 开了 CORS。
+ * 后端地址。dev 下前端在 8100、后端在 8099，跨源——所以 server 开了 CORS。
  * 这里**故意不走 webpack-dev-server 的反向代理**：SSE 经中间层容易被缓冲，
  * 出问题时很难判断是协议问题还是代理问题。
  */
 export function apiUrl(): string {
   const override = (globalThis as any).ICE_AGENT_API;
-  return override || 'http://localhost:8093/agui';
+  return override || 'http://localhost:8099/agui';
 }
 
 export interface RunMessage {

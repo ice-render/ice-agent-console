@@ -9,7 +9,7 @@
     "dev:web": "webpack serve --mode development",
     "start": "npm run dev",
     "build": "webpack --mode production",
-    "serve": "http-server dist -p 8094 -c-1",
+    "serve": "http-server dist -p 8100 -c-1",
     "types:check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "jest --runInBand",
     "test:e2e": "playwright test",

@@ -27,10 +27,10 @@ ls ice-render/dist/index.cjs ice-chart/dist/index.cjs ice-chart-dsl/dist/index.c
 
 cd ice-agent-console
 npm install
-npm run dev          # 同时起 AG-UI 后端(8093) 和前端 dev server(8094)
+npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 ```
 
-打开 http://localhost:8094 。界面上有四个快捷按钮，对应四个剧本：
+打开 http://localhost:8100 。界面上有四个快捷按钮，对应四个剧本：
 
 | 按钮 | 演示什么 |
 |---|---|
@@ -301,12 +301,21 @@ agent 后端跑在 Node 里，误用浏览器 API 只会在运行时炸，而且
 
 ### 8.3 端口
 
-8093（AG-UI 后端） / 8094（页面）。与家族其它仓库错开：
-引擎 8090 / 实体设计器 8091 / smart-water 8092 / game 8098。
+**8099**（AG-UI 后端） / **8100**（页面）—— 两个号是因为本仓有两个服务。
+
+家族端口一仓一个，**权威表在 `ice-render/AGENTS.md`**（引擎 8090 / 实体设计器 8091 /
+smart-water 8092 / web-components 8093 / render-dsl 8094 / react-demo 8095 /
+chart-dsl 8096 / entity-designer-dsl 8097 / game 8098 / 本仓 8099+8100 / web-components-dsl 8101）。
+新增服务**先在那张表里登记再写进配置** —— 那条规矩是有代价换来的：表下面记着一次真实事故，
+某仓私自用了 8093，而 `ice-web-components` 的 playwright 也是 8093 且
+`reuseExistingServer: true`，于是它的 e2e 静默复用了别人的服务目录、9 个用例全红，
+排查很久才发现是端口串号。
+
+`reuseExistingServer` 在本仓一律 `false`：端口被占时**响亮失败**，不要静默复用。
 
 ### 8.4 不用 dev-server 反向代理
 
-前端**直连** `http://localhost:8093/agui`，后端开 CORS。
+前端**直连** `http://localhost:8099/agui`，后端开 CORS。
 SSE 经中间层容易被缓冲，出问题时很难判断是协议问题还是代理问题。
 
 ---
