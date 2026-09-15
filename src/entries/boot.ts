@@ -23,6 +23,7 @@ import {
   type TextItem,
 } from '../domain/agui/reducer';
 import { ThreadView } from '../view/thread';
+import type { WidgetAction } from '../view/widget-layer';
 
 // ---------------------------------------------------------------------------
 // DOM 抓手
@@ -56,23 +57,57 @@ let autoRepairUsed = false;
 // 渲染 + effects
 // ---------------------------------------------------------------------------
 
-const view = new ThreadView(threadEl, {
-  onItemClick: (p) => {
-    // 上行第 1 种：用户点了一个数据点。这正是"点击触发"的入口——
-    // 没有对话面也可以跑 run，AG-UI 只规范 run 内部，不管 run 由谁触发。
-    void send(`我点了「${p.xValue}」这个点，这里为什么是这样？`, {
-      interaction: { kind: 'item-click', ...p },
-    });
+/**
+ * 卡片底部控件条上的按钮。
+ *
+ * 三个都走 AG-UI 上行（点一下触发新一轮 run），因为这里要证明的正是
+ * **第二块画布是活的、能参与协议回路**，不是一张图片。它们跟图上点击/框选
+ * 走同一条 `context` 通道，只是 kind 不同。
+ */
+const WIDGET_ACTIONS: WidgetAction[] = [
+  { id: 'explain', text: '解释这张图', variant: 'primary' },
+  { id: 'redraw', text: '换个画法' },
+  { id: 'stream', text: '看实时数据' },
+];
+
+/** 控件动作 → 送给 agent 的一句话。 */
+const WIDGET_PROMPTS: Record<string, string> = {
+  explain: '解释一下这张图',
+  redraw: '换个画法',
+  stream: '看一下实时吞吐量',
+};
+
+const view = new ThreadView(
+  threadEl,
+  {
+    onItemClick: (p) => {
+      // 上行第 1 种：用户点了一个数据点。这正是"点击触发"的入口——
+      // 没有对话面也可以跑 run，AG-UI 只规范 run 内部，不管 run 由谁触发。
+      void send(`我点了「${p.xValue}」这个点，这里为什么是这样？`, {
+        interaction: { kind: 'item-click', ...p },
+      });
+    },
+    onBrushEnd: (range) => {
+      // 上行第 2 种：用户框选了一段区间。
+      // 结构化数据走 context，而不是塞进用户说的话里——两者语义不同，不该糊在一起。
+      const span = range?.x ? `${range.x[0]} ~ ${range.x[1]}` : '一段区间';
+      void send(`我框选了 ${span}，这里为什么波动？`, {
+        interaction: { kind: 'brush', range },
+      });
+    },
   },
-  onBrushEnd: (range) => {
-    // 上行第 2 种：用户框选了一段区间。
-    // 结构化数据走 context，而不是塞进用户说的话里——两者语义不同，不该糊在一起。
-    const span = range?.x ? `${range.x[0]} ~ ${range.x[1]}` : '一段区间';
-    void send(`我框选了 ${span}，这里为什么波动？`, {
-      interaction: { kind: 'brush', range },
-    });
-  },
-});
+  {
+    actions: WIDGET_ACTIONS,
+    // 上行第 3 种：**canvas 控件**上的点击。
+    // 前两种来自图表那张画布，这一种来自控件条那张 —— 两个 ICE 实例、两张画布，
+    // 走的是同一条协议通道。
+    onAction: (actionId) => {
+      void send(WIDGET_PROMPTS[actionId] ?? actionId, {
+        interaction: { kind: 'widget-action', action: actionId },
+      });
+    },
+  }
+);
 
 function dispatch(action: Action): void {
   const { state: next, effects } = reduce(state, action);
@@ -269,6 +304,11 @@ window.addEventListener('resize', () => view.resizeAll());
 (globalThis as any).__iceAgentConsole = {
   getState: () => state,
   apiUrl: () => apiUrl(),
+  /**
+   * 最后一张卡片控件条上各按钮的矩形。
+   * canvas 里没有 DOM 目标可定位，e2e 要点中某个按钮就得知道它画在哪。
+   */
+  widgetRects: () => view.lastCard()?.widgetRects() ?? [],
 };
 
 inputEl.focus();

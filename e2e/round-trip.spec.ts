@@ -42,7 +42,7 @@ test('框选区间触发一轮新 run', async ({ page }) => {
 
   await useChip(page, '看看各渠道的月度销量');
 
-  const canvas = page.locator('.card canvas').first();
+  const canvas = page.locator('.chart-wrap canvas').first();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 
@@ -76,7 +76,7 @@ test('点击不会破坏已有图表（上行不该有副作用）', async ({ pa
   const state = await readState(page);
   expect(state.sharedState.chart.kind).toBe('bar');
   const ink = await page.evaluate(() => {
-    const canvas = document.querySelector('.card canvas') as HTMLCanvasElement;
+    const canvas = document.querySelector('.chart-wrap canvas') as HTMLCanvasElement;
     const ctx = canvas.getContext('2d')!;
     const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
     let n = 0;

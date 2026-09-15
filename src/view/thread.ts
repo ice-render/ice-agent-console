@@ -13,7 +13,7 @@
  */
 import type { ThreadState, TextItem, ToolItem } from '../domain/agui/reducer';
 import type { InteractionHandlers } from './chart-adapter';
-import { CardView } from './card';
+import { CardView, type CardWidgets } from './card';
 
 interface TextSlot {
   wrap: HTMLElement;
@@ -28,7 +28,9 @@ export class ThreadView {
   constructor(
     private readonly root: HTMLElement,
     /** 上行通道的回调。每张图表卡片创建时都会挂上它。 */
-    private readonly handlers: InteractionHandlers = {}
+    private readonly handlers: InteractionHandlers = {},
+    /** 卡片底部的 canvas 控件条（第二块画布）。不传就不建。 */
+    private readonly widgets?: CardWidgets
   ) {
     this.emptyEl = root.querySelector('.empty');
   }
@@ -77,7 +79,7 @@ export class ThreadView {
   private renderTool(item: ToolItem): HTMLElement {
     let card = this.cards.get(item.id);
     if (!card) {
-      card = new CardView(item.id, this.handlers);
+      card = new CardView(item.id, this.handlers, this.widgets);
       this.cards.set(item.id, card);
     }
     card.update(item);

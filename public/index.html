@@ -166,6 +166,18 @@
       .card .card-body { padding: 12px; }
       .card canvas { display: block; width: 100%; }
 
+      /*
+       * 控件层：卡片里的**第二块画布**（图表是第一块）。
+       * 两条虚线把它跟图表分开，是为了让"这是另一张 canvas、另一个 ICE 实例"这件事
+       * 在视觉上也是明确的 —— 否则它看起来就像图表的一部分。
+       */
+      .widget-wrap {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px dashed var(--line);
+      }
+      .widget-wrap canvas { display: block; }
+
       /* 流式拼装中的参数（半成品 DSL）——这是 AG-UI 相对"只转个圈"的差别所在 */
       .args {
         font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

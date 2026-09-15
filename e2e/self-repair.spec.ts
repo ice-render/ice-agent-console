@@ -39,18 +39,24 @@ test('坏 DSL 被拦下 → 诊断回灌 → 自动修复', async ({ page }) => 
   // 诊断必须带"可用列名"，否则回灌给模型也没法修
   await expect(firstCard.locator('.diag li').first()).toContainText('销售额');
   await expect(firstCard.locator('.diag li').first()).toContainText('销量');
-  await expect(firstCard.locator('canvas')).toBeHidden();
+  await expect(firstCard.locator('.chart-wrap canvas')).toBeHidden();
+  // 校验没通过的卡片不该建控件层 —— 那是第二个 ICE 实例 + 第二张画布，白占。
+  // 选择器要精确到图表那张：卡片现在有多块画布（图表 + 控件条）。
+  await expect(firstCard.locator('.widget-wrap canvas')).toHaveCount(0);
 
   // ---- 第二张卡片：修好了，画出来了 ----
   expect(tools[1].dsl.encoding.y).toBe('销量');
   const secondCard = page.locator('.card').nth(1);
   await expect(secondCard).toHaveAttribute('data-status', 'done');
-  await expect(secondCard.locator('canvas')).toBeVisible();
+  await expect(secondCard.locator('.chart-wrap canvas')).toBeVisible();
+  await expect(secondCard.locator('.widget-wrap canvas')).toBeVisible();
 
-  const canvases = await page.locator('.card canvas').count();
-  expect(canvases).toBe(2);
+  // 两张卡片共 3 块画布：坏的那张只有图表画布（还没建控件层），好的那张图表 + 控件各一块
+  expect(await page.locator('.card canvas').count()).toBe(3);
+  expect(await page.locator('.card .chart-wrap canvas').count()).toBe(2);
+
   const inkLast = await page.evaluate(() => {
-    const list = Array.from(document.querySelectorAll('.card canvas')) as HTMLCanvasElement[];
+    const list = Array.from(document.querySelectorAll('.chart-wrap canvas')) as HTMLCanvasElement[];
     const canvas = list[list.length - 1];
     const ctx = canvas.getContext('2d')!;
     const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);

@@ -1,6 +1,14 @@
 import { expect, type Page } from '@playwright/test';
 
 /** 归约后的状态形状。只声明 e2e 用得到的字段。 */
+/**
+ * 图表那块画布。卡片里现在有**两块** canvas（图表 + 控件条），
+ * 所以选择器必须写清楚指的是哪一块 —— `.card canvas` 虽然也能命中第一块，
+ * 但那种"靠 DOM 顺序"的写法一旦有人调整顺序就会静默去量错对象。
+ */
+export const CHART_CANVAS = '.card .chart-wrap canvas';
+export const WIDGET_CANVAS = '.card .widget-wrap canvas';
+
 export interface ConsoleState {
   threadId: string;
   runId: string | null;
@@ -85,7 +93,7 @@ export async function useChip(page: Page, text: string): Promise<ConsoleState> {
 }
 
 /** 画布上非透明像素数。用来断言"图真的画出来了"，而不是"canvas 元素存在"。 */
-export async function countInk(page: Page, selector = '.card canvas'): Promise<number> {
+export async function countInk(page: Page, selector = CHART_CANVAS): Promise<number> {
   return page.evaluate((sel) => {
     const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
     if (!canvas) return -1;
@@ -105,7 +113,7 @@ export async function countInk(page: Page, selector = '.card canvas'): Promise<n
  *
  * 用来断言"某件事发生之后画面变了"。比逐个像素对比稳，也不需要知道高亮画在哪。
  */
-export async function canvasSignature(page: Page, selector = '.card canvas'): Promise<string> {
+export async function canvasSignature(page: Page, selector = CHART_CANVAS): Promise<string> {
   return page.evaluate((sel) => {
     const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
     if (!canvas) return 'no-canvas';
@@ -146,7 +154,7 @@ export function collectErrors(page: Page): string[] {
  *
  * 返回是否命中。
  */
-export async function clickChartItem(page: Page, selector = '.card canvas'): Promise<boolean> {
+export async function clickChartItem(page: Page, selector = CHART_CANVAS): Promise<boolean> {
   const box = await page.locator(selector).first().boundingBox();
   if (!box) return false;
 
@@ -180,4 +188,56 @@ export async function clickChartItem(page: Page, selector = '.card canvas'): Pro
     }
   }
   return false;
+}
+
+/**
+ * 点卡片控件条上的某个按钮（按 actionId）。
+ *
+ * 控件是 canvas 画的，**没有 DOM 目标可以点**，所以从应用挂出来的矩形查询里定位。
+ * 矩形是画布内的 CSS 像素偏移，而引擎的坐标语义就是 CSS 像素，所以直接相加即可。
+ */
+export async function clickWidgetAction(page: Page, actionId: string): Promise<void> {
+  const point = await page.evaluate((id) => {
+    const rects = (window as any).__iceAgentConsole.widgetRects();
+    const hit = rects.find((r: any) => r.id === id);
+    if (!hit) return null;
+    const canvas = document.querySelector('.card .widget-wrap canvas') as HTMLCanvasElement | null;
+    if (!canvas) return null;
+    const box = canvas.getBoundingClientRect();
+    return {
+      x: box.left + hit.left + hit.width / 2,
+      y: box.top + hit.top + hit.height / 2,
+    };
+  }, actionId);
+
+  if (!point) throw new Error(`控件条上找不到「${actionId}」（或控件层还没建出来）`);
+  await page.mouse.click(point.x, point.y);
+}
+
+/** 统计卡片里的画布数量与各自的着墨量。图表与控件是两张画布，分开数。 */
+export async function cardCanvasStats(page: Page): Promise<{
+  count: number;
+  chart: { width: number; height: number; ink: number } | null;
+  widget: { width: number; height: number; ink: number } | null;
+}> {
+  return page.evaluate(() => {
+    const ink = (canvas: HTMLCanvasElement | null) => {
+      if (!canvas) return -1;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return -1;
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) n++;
+      return n;
+    };
+    const size = (canvas: HTMLCanvasElement | null) =>
+      canvas ? { width: canvas.width, height: canvas.height, ink: ink(canvas) } : null;
+
+    const card = document.querySelector('.card');
+    return {
+      count: card ? card.querySelectorAll('canvas').length : 0,
+      chart: size(card?.querySelector('.chart-wrap canvas') as HTMLCanvasElement | null),
+      widget: size(card?.querySelector('.widget-wrap canvas') as HTMLCanvasElement | null),
+    };
+  });
 }

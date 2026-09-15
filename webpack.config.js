@@ -13,12 +13,13 @@ const WORKSPACE = path.resolve(__dirname, '..');
  * 所以这里把用到的家族包**全部 alias 到同级仓库目录**，强制全工程只有一份 ice-render。
  * 副作用是好的：改完兄弟仓库的源码 npm run build 一下，本工程立刻吃到新版本。
  *
- * （M1 只用三个包。ice-web-components 留给 M2 的 interrupt 表单。）
+ * （M1 用引擎 + 图表 + DSL 三个包；控件层用 ice-web-components。）
  */
 const family = {
   'ice-render': path.resolve(WORKSPACE, 'ice-render'),
   '@damoqiongqiu/ice-chart': path.resolve(WORKSPACE, 'ice-chart'),
   '@damoqiongqiu/ice-chart-dsl': path.resolve(WORKSPACE, 'ice-chart-dsl'),
+  'ice-web-components': path.resolve(WORKSPACE, 'ice-web-components'),
 };
 
 module.exports = (env, argv) => {

@@ -67,7 +67,7 @@ test('追加之后图还能交互（快路径不该把监听弄丢）', async ({
   const rowsAfterAppend = (await readState(page)).sharedState.chart.data.rows.length;
   expect(rowsAfterAppend).toBe(9);
 
-  const canvas = page.locator('.card canvas').first();
+  const canvas = page.locator('.chart-wrap canvas').first();
   const box = (await canvas.boundingBox())!;
 
   const base = await readState(page);

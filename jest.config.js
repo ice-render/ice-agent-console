@@ -8,6 +8,7 @@ module.exports = {
   moduleNameMapper: {
     '^@damoqiongqiu/ice-chart-dsl$': '<rootDir>/../ice-chart-dsl/dist/index.cjs',
     '^@damoqiongqiu/ice-chart$': '<rootDir>/../ice-chart/dist/index.cjs',
+    '^ice-web-components$': '<rootDir>/../ice-web-components/dist/index.cjs',
     '^ice-render$': '<rootDir>/../ice-render/dist/index.cjs',
   },
   transform: {

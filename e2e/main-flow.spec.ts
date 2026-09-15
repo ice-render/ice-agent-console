@@ -29,16 +29,20 @@ test('主链路：文字流式 → 卡片上画布 → 指着讲', async ({ page
   // ---- 文字是流式的：跟着归约状态采样，长度应当出现过多个值 ----
   // 直接读状态而不是读第一个 `.bubble`——第一个气泡是本地插入的用户消息，
   // 它一开始就是完整文本，拿它采样永远看不到"逐段到达"。
+  //
+  // **采到两个不同长度就退出**，不要等整轮跑完：后面还要在"高亮之前"取画布快照，
+  // 在这里等到 idle 的话，那一步取到的就已经是高亮之后了。
+  // （早先这版就是等 idle 的 —— 它能过是因为高亮的淡入动画还没结束、
+  //  两次采样恰好不同。加了控件层之后时序一变就变成确定性失败。）
   const assistantLengths = new Set<number>();
   const deadline = Date.now() + 8000;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && assistantLengths.size < 2) {
     const snapshot = await readState(page);
     const joined = snapshot.items
       .filter((i) => i.kind === 'text' && i.text !== undefined)
       .map((i) => i.text!.length)
       .join(',');
     assistantLengths.add(joined.length);
-    if (snapshot.status === 'idle' && snapshot.eventCount > before.eventCount) break;
     await page.waitForTimeout(25);
   }
   expect(assistantLengths.size, '文字应当逐段到达，而不是一次到位').toBeGreaterThan(1);
@@ -47,9 +51,8 @@ test('主链路：文字流式 → 卡片上画布 → 指着讲', async ({ page
   await page.waitForSelector('.card[data-status="done"]', { timeout: 30_000 });
 
   // 在 STATE_SNAPSHOT 刚到的那一刻取"高亮之前"的画面。
-  // 这个时刻是**确定的**：快照之后还有两拍解说，指点事件排在它们后面，
-  // 所以这里一定还没高亮。反过来，如果在"卡片 done"之后就取，
-  // 取到的可能已经是高亮之后了——第一版就是这么红的。
+  // 这个时刻是**确定的**：快照之后还有两拍解说（约 1 秒），指点事件排在它们后面，
+  // 所以这里一定还没高亮。
   await waitForState(page, (s) => s.sharedState !== null, undefined, 30_000);
   const ink = await countInk(page);
   expect(ink, '画布上必须有实际绘制内容').toBeGreaterThan(1000);

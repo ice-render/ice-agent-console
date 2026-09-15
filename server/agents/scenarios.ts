@@ -138,51 +138,134 @@ function textOnlyPlan(message: string): ChartPlan {
 }
 
 /**
- * 用户在图上做了动作（点了数据点 / 框选了一段）。
+ * 用户在图上/控件条上做了动作。
  *
- * 这个剧本的意义不在于回答得多好，而在于**证明上行通道真的通了**：
- * 应用把结构化交互塞进 `context`，agent 读到了它，并且能说出来。
+ * 三种来源走同一条 `context` 通道，靠 `kind` 区分：
+ * - `item-click` / `brush`：来自**图表**那张画布
+ * - `widget-action`：来自**控件条**那张画布（`ice-web-components` 画的按钮）
  *
- * 这一条到了 M2 会变成真正的追问——"为什么 3 月线上最高"要模型结合数据回答。
- * 但通道本身现在就该是通的，否则接模型时会分不清"是模型不会答，还是上下文没送到"。
+ * 后者的意义在于证明"第二块画布也是活的、能参与协议回路"。
+ *
+ * 其中 `explain` 与 `redraw` 会去读 `input.state.chart` —— 也就是 AG-UI 的 `state` 字段
+ * 把**客户端当前的图表定义**同步回 agent。这是本工程第一次用上这个字段：
+ * 单向的 context 只能告诉 agent"用户做了什么"，state 才能告诉它"现在画面上是什么"。
  */
-function interactionReplyPlan(interaction: string): ChartPlan {
+function interactionPlan(interaction: string, currentChart: any): ChartPlan | null {
   let parsed: any = null;
   try {
     parsed = JSON.parse(interaction);
   } catch {
-    parsed = null;
+    return null;
   }
 
-  let text = '我收到了你在图上的操作。';
+  if (parsed?.kind === 'widget-action') {
+    switch (parsed.action) {
+      case 'explain':
+        return explainPlan(currentChart);
+      case 'redraw':
+        return redrawPlan(currentChart);
+      case 'stream':
+        return streamingPlan();
+      default:
+        return { beats: [{ text: `控件「${parsed.action}」我还没接上。` }] };
+    }
+  }
+
   if (parsed?.kind === 'item-click') {
-    text =
-      `你在图上点了「${parsed.xValue}」` +
-      (parsed.seriesName ? `（${parsed.seriesName}系列，值 ${parsed.value}）` : '') +
-      `。\n` +
-      `这个交互是通过 AG-UI 的 context 字段送上来的，不是拼在你说的话里——` +
-      `所以我知道哪部分是"你做的"、哪部分是"你说的"。\n` +
-      `接上模型之后，这里就会变成一次真正的追问。`;
-  } else if (parsed?.kind === 'brush') {
-    const span = parsed?.range?.x ? `${parsed.range.x[0]} ~ ${parsed.range.x[1]}` : '一段区间';
-    text =
-      `你框选了 ${span}。\n` +
-      `框选范围同样是走 context 上来的结构化数据，` +
-      `接上模型之后就能针对这一段做归因。`;
+    return {
+      beats: [
+        {
+          text:
+            `你在图上点了「${parsed.xValue}」` +
+            (parsed.seriesName ? `（${parsed.seriesName}系列，值 ${parsed.value}）` : '') +
+            `。\n` +
+            `这个交互是通过 AG-UI 的 context 字段送上来的，不是拼在你说的话里——` +
+            `所以我知道哪部分是"你做的"、哪部分是"你说的"。\n` +
+            `接上模型之后，这里就会变成一次真正的追问。`,
+        },
+      ],
+    };
   }
 
-  return { beats: [{ text }] };
+  if (parsed?.kind === 'brush') {
+    const span = parsed?.range?.x ? `${parsed.range.x[0]} ~ ${parsed.range.x[1]}` : '一段区间';
+    return {
+      beats: [
+        {
+          text:
+            `你框选了 ${span}。\n` +
+            `框选范围同样是走 context 上来的结构化数据，` +
+            `接上模型之后就能针对这一段做归因。`,
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+/** 「解释这张图」：**读 state** 里客户端回传的图表定义，逐项说出来。 */
+function explainPlan(current: any): ChartPlan {
+  if (!current) {
+    return { beats: [{ text: '卡片上现在还没有图 —— 先让我画一张，再来解释。' }] };
+  }
+  const enc = current.encoding || {};
+  const rows = Array.isArray(current.data?.rows) ? current.data.rows.length : 0;
+  const columns = Array.isArray(current.data?.columns) ? current.data.columns.join(' / ') : '(未声明)';
+  const channels = [`x=${enc.x}`];
+  if (enc.y) channels.push(`y=${enc.y}`);
+  if (enc.series) channels.push(`分组=${enc.series}`);
+
+  return {
+    beats: [
+      {
+        text:
+          `这张图的定义我读到了 —— 它是通过 AG-UI 的 state 字段同步给我的，` +
+          `不是靠猜：\n` +
+          `  · 类型：${current.kind}\n` +
+          `  · 标题：${current.title || '(无)'}\n` +
+          `  · 列：${columns}\n` +
+          `  · 行数：${rows}\n` +
+          `  · 编码：${channels.join('，')}\n\n` +
+          `接上模型之后，这里会是结合数据的一次真正解释。`,
+      },
+    ],
+  };
+}
+
+/**
+ * 「换个画法」：**读 state** 拿到当前图表，只换呈现方式、数据不动 —— 对照组。
+ *
+ * 这是最能说明 `state` 用途的例子：agent 不需要你复述"刚才画的是什么"。
+ */
+function redrawPlan(current: any): ChartPlan {
+  if (!current) return salesPlan();
+
+  const nextKind = current.kind === 'line' ? 'bar' : 'line';
+  const label = nextKind === 'line' ? '折线' : '柱状';
+  return {
+    dsl: {
+      ...current,
+      kind: nextKind,
+      title: `${current.title || '图表'}（改成${label}图）`,
+    },
+    intro: `好，同一份数据换成${label}图重画一版。`,
+    beats: [{ text: `数据一行没动，只换了呈现方式 —— 你看到的差异全部来自图表类型本身。` }],
+  };
 }
 
 /**
  * 剧本选择。规则很土，但**必须是确定性的**——e2e 和单测都靠它。
  *
- * `interaction` 是用户在图上做动作的 JSON 串（由应用塞进 context 送上来）。
+ * @param interaction 用户在图上/控件条上做动作的 JSON 串（应用塞进 context 送上来）
+ * @param state       AG-UI 的共享状态。客户端把**当前图表定义**放在 `state.chart` 里，
+ *                    所以 agent 能读到"现在画面上是什么"，不必让用户复述
  */
 export function buildPlan(
   message: string,
   hasDiagnostics: boolean,
-  interaction?: string | null
+  interaction?: string | null,
+  state?: any
 ): ChartPlan {
   const text = (message || '').trim();
 
@@ -190,7 +273,10 @@ export function buildPlan(
   if (hasDiagnostics) return repairPlan(true);
 
   // 用户在图上做了动作：优先应答这件事，因为它比关键词更能说明意图
-  if (interaction) return interactionReplyPlan(interaction);
+  if (interaction) {
+    const plan = interactionPlan(interaction, state?.chart);
+    if (plan) return plan;
+  }
 
   if (/故意|画错|写错|坏|诊断|修复/.test(text)) return repairPlan(false);
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
