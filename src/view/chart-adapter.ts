@@ -17,6 +17,7 @@
 import { createChart, type ChartOption, type ICEChart } from '@damoqiongqiu/ice-chart';
 import { compileChartDsl, formatDiagnostics, validateChartDsl } from '@damoqiongqiu/ice-chart-dsl';
 import { planAppend, withRoundTripInteractions } from '../domain/ice/option-mapping';
+import { applyThemeToIce } from '../domain/theme';
 
 export interface ChartInteractionPayload {
   seriesId?: string;
@@ -71,6 +72,10 @@ export class ChartAdapter {
       this.chart = createChart(this.canvas, option, {
         dpr: (globalThis as any).devicePixelRatio || 1,
       });
+      // `createChart` 内部自己 `new ICE()`（这是上游缺口第 7 条），所以实例要在这里
+      // 才拿得到。图表的 `theme: 'auto'` 是按**引擎主题背景色的亮度**判明暗的 ——
+      // 所以这一句同时也决定了图表画成亮色还是暗色。
+      applyThemeToIce((this.chart as any).ice);
       this.wireInteractions(this.chart);
       this.resize();
     }

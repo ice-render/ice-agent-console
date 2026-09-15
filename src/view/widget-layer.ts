@@ -16,6 +16,7 @@
 import { ICE } from 'ice-render';
 import { ICEButton } from 'ice-web-components';
 import { Layer } from '../domain/ice/layer';
+import { applyThemeToIce } from '../domain/theme';
 
 export interface WidgetAction {
   id: string;
@@ -57,6 +58,8 @@ export class WidgetLayer {
 
     this.ice = new ICE();
     this.ice.init(this.canvas, { dpr: (globalThis as any).devicePixelRatio || 1 });
+    // 这一层是**自己的 ICE 实例**，主题要逐个实例对齐（引擎主题是实例级的）
+    applyThemeToIce(this.ice);
 
     this.layer = new Layer('widgets', this.canvas, this.ice);
     this.build(actions, options.onAction);

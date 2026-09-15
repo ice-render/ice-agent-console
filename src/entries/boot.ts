@@ -15,6 +15,7 @@ import {
   VIEW_INTERACTION_CONTEXT_KEY,
 } from '../../shared/contract';
 import { runAgent, apiUrl, type ResumeEntry } from '../domain/agui/client';
+import { installTheme } from '../domain/theme';
 import {
   initialState,
   reduce,
@@ -43,6 +44,10 @@ if (!threadEl || !metaEl || !formEl || !inputEl || !sendEl || !chipsEl) {
 // ---------------------------------------------------------------------------
 // 状态
 // ---------------------------------------------------------------------------
+
+// **主题必须在任何组件构造之前装** —— 库的主题是"组件构造时读一次"。
+// 放这儿而不是放进 `main.ts`：这里就是"第一个会造组件的地方"的上游。
+installTheme();
 
 const threadId = `thread_${Math.random().toString(36).slice(2, 10)}`;
 let state = initialState(threadId);

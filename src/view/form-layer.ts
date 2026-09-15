@@ -10,6 +10,7 @@
  */
 import { renderFormDsl, type RenderFormDslResult } from 'ice-web-components-dsl';
 import { Layer } from '../domain/ice/layer';
+import { applyThemeToIce } from '../domain/theme';
 
 export interface FormLayerOptions {
   /** 用户提交且**校验通过**时回调。 */
@@ -40,6 +41,9 @@ export class FormLayer {
       width: cssWidth,
       onSubmit: (values) => options.onSubmit(values),
     });
+    // 表单层这个 ICE 实例是 DSL 内部建的，从 `result.ice` 拿到再对齐主题 ——
+    // 否则表单控件会是亮色主题（库的主题在构造时读一次，这里是构造之后的第一时间）
+    applyThemeToIce(this.result.ice);
     this.layer = new Layer('form', this.canvas, this.result.ice);
 
     if (options.onDiagnostics) {

@@ -12,6 +12,8 @@ import http from 'node:http';
 import { RunAgentInputSchema } from '@ag-ui/core';
 import { AGUI_PATH, SSE_HEADERS, encodeKeepAlive, encodeSse } from './protocol';
 import { ScriptedAgent, DEFAULT_PACE, NO_PACE, type Pace } from './agents/scripted';
+import { LlmAgent } from './agents/llm';
+import { describeConfig, loadConfig } from './config';
 import type { AgentRun } from './agents/types';
 
 const PORT = Number(process.env.ICE_AGENT_API_PORT || 8099);
@@ -23,11 +25,20 @@ const PORT = Number(process.env.ICE_AGENT_API_PORT || 8099);
 const pace: Pace = process.env.ICE_AGENT_PACE === '0' ? NO_PACE : DEFAULT_PACE;
 
 /**
- * 换 agent 实现只动这一行。M2 大概是：
- *   const agent: AgentRun = process.env.LLM_API_KEY ? new LlmAgent(...) : new ScriptedAgent(pace);
- * 没有 key 就退回脚本化——保证 clone 下来不看文档也能跑。
+ * **两种模式，一个接口。**
+ *
+ * 配了模型（`ICE_LLM_API_KEY`）就走 `LlmAgent`，没配就走 `ScriptedAgent`。
+ * 换实现只动这一行 —— 因为两者的产出都是同一串 AG-UI 事件，
+ * 下面的传输层、前端归约器、渲染层全都分辨不出来也不需要分辨。
+ *
+ * "没配就走剧本"不是降级：这个工程本来就是从剧本模式长出来的（M1），
+ * 接模型是 M2。所以 clone 下来不看文档也能跑，配了 key 就换成真模型。
  */
-const agent: AgentRun = new ScriptedAgent(pace);
+const config = loadConfig();
+
+/** 选实现。这一行就是 M1 / M2 的开关。 */
+const agent: AgentRun =
+  config.mode === 'llm' && config.llm ? new LlmAgent(config.llm, pace) : new ScriptedAgent(pace);
 
 const CORS_HEADERS: Record<string, string> = {
   // 本地演示，直接开。生产要收敛到具体来源。
@@ -142,7 +153,14 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && url.startsWith('/health')) {
-    sendJson(res, 200, { ok: true, agent: 'scripted', pace: pace.textChunk });
+    // 探活也报当前模式 —— 排查"为什么没走模型"时第一眼看的就是这里
+    sendJson(res, 200, {
+      ok: true,
+      agent: config.mode,
+      ...(config.mode === 'llm' && config.llm ? { model: config.llm.model, baseUrl: config.llm.baseUrl } : {}),
+      reason: config.reason,
+      pace: pace.textChunk,
+    });
     return;
   }
 
@@ -151,5 +169,10 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[agui] endpoint  http://localhost:${PORT}${AGUI_PATH}`);
-  console.log(`[agui] agent     ScriptedAgent（确定性；节奏 ${pace.textChunk}ms/字）`);
+  console.log(
+    config.mode === 'llm'
+      ? `[agui] agent     LlmAgent（真模型；节奏 ${pace.textChunk}ms/字）`
+      : `[agui] agent     ScriptedAgent（确定性剧本；节奏 ${pace.textChunk}ms/字）`
+  );
+  for (const line of describeConfig(config)) console.log(line);
 });

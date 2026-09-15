@@ -23,15 +23,38 @@
        *
        * 所以分界划在这儿：**DOM 管 thread 外壳，canvas 管卡片内容（图表）**。
        */
+      /*
+       * 颜色**不在这里写死** —— 下面这些变量由 `src/domain/theme.ts` 在启动时
+       * 从 `ice-web-components` 的主题 token 表写进来（`applyThemeToCss()`）。
+       *
+       * 为什么这么做：这个界面是"DOM 外壳 + canvas 内容"两半拼的，两边各抄一套颜色
+       * 必然漂 —— 第一版就是画布里的控件是 Bootstrap 深灰、外壳是另一套蓝，像两个应用。
+       * 现在只有一份 token 表，两边都从它读。
+       *
+       * 这几行只是**兜底**（JS 没跑起来时不至于白屏），值取自暗色主题。
+       */
       :root {
+        --bg: #212529;
+        --panel: #2b3035;
+        --elevated: #343a40;
+        --line: #495057;
+        --text: #dee2e6;
+        --muted: #adb5bd;
+        --hint: #8a9199;
         --ice: #61d9fb;
-        --ice-deep: #0d7ea8;
-        --bg: #f5f7fa;
-        --panel: #ffffff;
-        --line: #e2e8f0;
-        --text: #1f2933;
-        --muted: #6b7785;
+        --ice-soft: #04222b;
+        --ice-line: #14657f;
+        --ok: #198754;
+        --warn: #ffc107;
+        --err: #dc3545;
+        --warn-bg: #332701;
+        --warn-line: #664d03;
+        --err-bg: #2c0b0e;
+        --err-line: #842029;
+        --bubble-user: #04222b;
+        --bubble-agent: #343a40;
         --radius: 10px;
+        color-scheme: dark;
       }
 
       * { box-sizing: border-box; }
@@ -69,7 +92,7 @@
         margin: 0;
         letter-spacing: 0.2px;
       }
-      header h1 span { color: var(--ice-deep); }
+      header h1 span { color: var(--ice); }
       header .meta {
         font-size: 12px;
         color: var(--muted);
@@ -93,10 +116,10 @@
         line-height: 2;
       }
       .empty code {
-        background: #eef2f6;
+        background: var(--elevated);
         padding: 1px 6px;
         border-radius: 4px;
-        color: var(--ice-deep);
+        color: var(--ice);
       }
 
       /* ---------- 消息（文字气泡） ---------- */
@@ -118,9 +141,9 @@
         background: var(--ice);
         color: #06414f;
       }
-      .msg.user .who { background: #e5e9f0; color: #4a5568; }
+      .msg.user .who { background: var(--elevated); color: var(--text); }
       .msg .bubble {
-        background: #f1f5f9;
+        background: var(--bubble-agent);
         border-radius: var(--radius);
         padding: 8px 12px;
         max-width: 76%;
@@ -129,7 +152,7 @@
         min-height: 20px;
       }
       .msg.user { flex-direction: row-reverse; }
-      .msg.user .bubble { background: #e8f7fd; }
+      .msg.user .bubble { background: var(--bubble-user); }
       .msg.user .who { order: 2; }
 
       /* ---------- 卡片（生成式 UI） ---------- */
@@ -138,8 +161,8 @@
         border-radius: var(--radius);
         margin: 0 0 14px 40px;
         overflow: hidden;
-        background: #fff;
-        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+        background: var(--panel);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
       }
       .card > .card-head {
         padding: 8px 12px;
@@ -149,7 +172,7 @@
         gap: 8px;
         font-size: 12px;
         color: var(--muted);
-        background: #fafbfc;
+        background: var(--elevated);
       }
       .card > .card-head .title { color: var(--text); font-weight: 600; font-size: 13px; }
       .card > .card-head .status { margin-left: auto; }
@@ -159,8 +182,8 @@
         box-shadow: 0 0 0 3px rgba(97, 217, 251, 0.2);
       }
       .card[data-status='streaming'] .dot { animation: pulse 1s ease-in-out infinite; }
-      .card[data-status='error'] .dot { background: #e5484d; box-shadow: 0 0 0 3px rgba(229, 72, 77, 0.18); }
-      .card[data-status='done'] .dot { background: #30a46c; box-shadow: 0 0 0 3px rgba(48, 164, 108, 0.18); }
+      .card[data-status='error'] .dot { background: var(--err); box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.22); }
+      .card[data-status='done'] .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.22); }
       @keyframes pulse { 50% { opacity: 0.25; } }
 
       .card .card-body { padding: 12px; }
@@ -193,8 +216,9 @@
       /* 流式拼装中的参数（半成品 DSL）——这是 AG-UI 相对"只转个圈"的差别所在 */
       .args {
         font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        background: #0f172a;
-        color: #b6e3f5;
+        /* 半成品 DSL 的代码块：比面板再深一档，跟"正文气泡"区分开 */
+        background: #101418;
+        color: #9fdcf2;
         border-radius: 6px;
         padding: 10px 12px;
         max-height: 168px;
@@ -220,12 +244,12 @@
       .diag li {
         padding: 7px 10px;
         border-radius: 6px;
-        background: #fff5f5;
-        border: 1px solid #ffd9d9;
-        color: #a12b2b;
+        background: var(--err-bg);
+        border: 1px solid var(--err-line);
+        color: #f1aeb5;
         margin-bottom: 6px;
       }
-      .diag li.warn { background: #fffaeb; border-color: #ffe8b3; color: #8a6100; }
+      .diag li.warn { background: var(--warn-bg); border-color: var(--warn-line); color: #ffda6a; }
       .diag li code { color: inherit; opacity: 0.75; }
 
       .hint {
@@ -233,7 +257,7 @@
         color: var(--muted);
         margin-top: 8px;
       }
-      .hint b { color: var(--ice-deep); font-weight: 600; }
+      .hint b { color: var(--ice); font-weight: 600; }
 
       /* ---------- 输入区 ---------- */
       footer {
@@ -256,7 +280,10 @@
         outline: none;
         min-height: 42px;
         max-height: 140px;
+        background: var(--elevated);
+        color: var(--text);
       }
+      #input::placeholder { color: var(--hint); }
       #input:focus { border-color: var(--ice); box-shadow: 0 0 0 3px rgba(97, 217, 251, 0.18); }
       #send {
         flex: none;
@@ -277,11 +304,16 @@
         padding: 4px 10px;
         border-radius: 999px;
         border: 1px solid var(--line);
-        background: #fff;
+        background: var(--elevated);
         color: var(--muted);
         cursor: pointer;
       }
-      .chip:hover { border-color: var(--ice); color: var(--ice-deep); }
+      .chip:hover { border-color: var(--ice); color: var(--ice); }
+      /* 滚动条也跟着暗色，否则右边会亮一条 */
+      #thread::-webkit-scrollbar, .args::-webkit-scrollbar { width: 10px; height: 10px; }
+      #thread::-webkit-scrollbar-thumb, .args::-webkit-scrollbar-thumb {
+        background: var(--line); border-radius: 5px;
+      }
     </style>
   </head>
   <body>

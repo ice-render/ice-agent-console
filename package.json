@@ -14,7 +14,9 @@
     "test": "jest --runInBand",
     "test:e2e": "playwright test",
     "verify": "npm run types:check && npm test && npm run build",
-    "verify:full": "npm run verify && npm run test:e2e"
+    "verify:full": "npm run verify && npm run test:e2e",
+    "llm:check": "tsx scripts/llm-check.ts",
+    "shoot": "node scripts/shoot-docs.cjs"
   },
   "dependencies": {
     "@ag-ui/core": "0.0.59"

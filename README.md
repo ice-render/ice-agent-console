@@ -1,47 +1,60 @@
 # ice-agent-console
 
-把 **ICE 家族**接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表以卡片形式**内联在对话时间线里**。
+把 **ICE 家族**接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表与表单以卡片形式**内联在对话时间线里**。
 
-一个最小可运行实例。没有模型（M1 阶段），后端是一个确定性的规则 agent——但**协议链路、渲染链路、
-往返链路全是真的**。换成真模型只需要替换"把自然语言变成图表计划"那一小块。
+![主界面](docs/images/hero.png)
+
+一个最小可运行实例，**两种模式、一个接口**：
+
+| 模式 | 什么时候用 | 后端是什么 |
+|---|---|---|
+| **剧本模式**（默认） | 不配任何东西就能跑。演示、录屏、e2e | `ScriptedAgent` —— 确定性的规则 agent |
+| **模型模式** | 配上 token 之后 | `LlmAgent` —— 真模型决定画什么、问什么 |
+
+两种模式产出的都是**同一串 AG-UI 事件**，所以传输层、前端归约器、渲染层完全分辨不出来，
+也不需要分辨。换模型只动一个文件（`server/agents/llm.ts`）。
 
 ```
-┌─────────────┐   POST /agui (RunAgentInput)   ┌──────────────────┐
-│  浏览器      │ ─────────────────────────────► │  AG-UI endpoint  │
-│             │                                │  (node:http)     │
-│  DOM thread │ ◄───── SSE 事件流 ──────────── │  ScriptedAgent   │
-│  + canvas   │                                └──────────────────┘
-└─────────────┘
-   ICE 负责卡片里的图
+┌─────────────┐   POST /agui (RunAgentInput)   ┌──────────────────────┐
+│  浏览器      │ ─────────────────────────────► │  AG-UI endpoint      │
+│             │                                │  (node:http)         │
+│  DOM thread │ ◄───── SSE 事件流 ──────────── │  ScriptedAgent /     │
+│  + canvas   │                                │  LlmAgent            │
+└─────────────┘                                └──────────────────────┘
+   ICE 负责卡片里的图与表单                    ↑ OpenAI 兼容接口（可选）
 ```
 
 ---
 
 ## 1. 快速开始
 
-前置：三个兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录）。
+前置：**四个**兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录）。
 
 ```bash
 # 在 ice-render/ 目录下
-ls ice-render/dist/index.cjs ice-chart/dist/index.cjs ice-chart-dsl/dist/index.cjs  # 都应在
+ls ice-render/dist/index.cjs ice-chart/dist/index.cjs ice-chart-dsl/dist/index.cjs \
+   ice-web-components/dist/index.cjs ice-web-components-dsl/dist/index.cjs   # 都应在
 
 cd ice-agent-console
 npm install
 npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 ```
 
-打开 http://localhost:8100 。界面上有四个快捷按钮，对应四个剧本：
+打开 http://localhost:8100 。**不配任何东西**就能用 —— 这时走的是内置剧本。
 
-| 按钮 | 演示什么 |
-|---|---|
-| 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 上画布 → **指着 3 月讲** |
-| 要下发指令 | **人机回环**：中断 → 出表单卡 → 填完提交 → 带 `resume` 开新 run |
-| 看看新控件都能用吗 | **控件原型页**：一张表单里放 10 个字段，覆盖 `ice-web-components-dsl` 0.3.0 新接的 9 个类型 |
-| 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 |
-| 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 |
-| 今天天气怎么样 | 兜底：不画图，只回文字 |
+界面是暗色的（见 §3.5），下面那排快捷按钮各对应一条回路：
+
+| 按钮 | 演示什么 | 截图 |
+|---|---|---|
+| 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 上画布 → **指着 3 月讲** | 头图 |
+| 要下发指令 | **人机回环**：中断 → 出表单卡 → 填完提交 → 带 `resume` 开新 run | [表单卡](docs/images/form-card.png) |
+| 看看新控件都能用吗 | **控件原型页**：一张表单里放 10 个字段，覆盖 DSL 0.3.0 的 20 个字段类型 | [新控件](docs/images/showcase.png) |
+| 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 | [流式追加](docs/images/streaming.png) |
+| 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 | [自修复](docs/images/self-repair.png) |
+| 今天天气怎么样 | 兜底：不画图，只回文字 | — |
 
 **也可以在图上直接操作**：
+
 - 点柱子、或框选一段区间 → 触发新一轮 run，你的操作作为结构化上下文上报
 - 卡片底部那条**控件栏**（`ice-web-components` 画在另一张画布上）：
   「解释这张图」/「换个画法」/「看实时数据」 —— 同样走 AG-UI 上行
@@ -50,11 +63,113 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 npm run serve        # 只跑静态产物（仍需后端在跑）
 ```
 
+### 1.1 接自己的大模型
+
+**只要接口兼容 OpenAI 的 `/chat/completions` 就行** —— 官方、DeepSeek、通义、本地的 ollama /
+vLLM / LM Studio 都可以。填三行，重启：
+
+```bash
+cd ice-agent-console
+cp .env.example .env
+```
+
+```ini
+ICE_LLM_API_KEY=sk-你的token
+ICE_LLM_BASE_URL=https://api.openai.com/v1     # 本地 ollama 是 http://localhost:11434/v1
+ICE_LLM_MODEL=gpt-4o-mini
+```
+
+重启 `npm run dev`，看启动横幅：
+
+```
+[agui] agent     LlmAgent（真模型；节奏 26ms/字）
+[config] 读到了 .env
+[config] 模型   gpt-4o-mini
+[config] 接口   https://api.openai.com/v1
+[config] token  sk-a…mnop（56 位）
+```
+
+#### 全部配置项
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `ICE_LLM_API_KEY` | 空 | **token**。留空就走剧本模式 |
+| `ICE_LLM_BASE_URL` | `https://api.openai.com/v1` | **接口地址**，不含结尾斜杠（代码会拼 `/chat/completions`） |
+| `ICE_LLM_MODEL` | `gpt-4o-mini` | 模型名。**要选支持 tool calling 的** —— 本工程靠工具调用决定画什么 |
+| `ICE_LLM_TEMPERATURE` | `0.3` | 采样温度。要它稳定挑工具就调低 |
+| `ICE_LLM_TIMEOUT_MS` | `60000` | 单次请求超时。本地小模型首字慢就调大 |
+| `ICE_LLM_MODE` | `auto` | `auto` 有 key 就用模型 / `scripted` 永远走剧本 / `llm` 必须走模型 |
+| `ICE_AGENT_PACE` | `26` | 播放节奏（毫秒/字）。`0` = 不等，e2e 用 |
+| `ICE_AGENT_API_PORT` | `8099` | 后端端口（家族端口表登记过，一般不用改） |
+
+几个刻意的取舍：
+
+- **也认 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`** —— 你本机已经有的话不用再抄一份。
+- **`process.env` 优先于 `.env`**：容器里注入的变量不会被仓库里的一份文件顶掉。
+- **显式写了 `ICE_LLM_MODE=llm` 却没给 token → 启动直接报错**，不会静默退回剧本。
+  静默退回会让你以为配好了、实际一直在看假的。同理，**接口报错（401 / 404 / 超时）会原样抛到界面上**
+  变成一条红色气泡，里面是接口的真实报错，不降级。
+- **token 在日志里只打前后各 4 位** —— 启动日志经常被贴到 issue 里。
+- `.env` 已进 `.gitignore`，只有 `.env.example` 进版本库。
+
+#### 配完先跑自检
+
+配大模型最容易卡住的不是代码，是那三行配置：token 打错一位、地址少了 `/v1`、
+模型名不存在、接口不支持 tool calling……这些在界面上看起来都只是"没反应"。所以有一条命令：
+
+```bash
+npm run llm:check
+```
+
+```
+ice-agent-console · 大模型配置自检
+
+  接口   https://api.openai.com/v1
+  模型   gpt-4o-mini
+  token  sk-a…mnop（56 位）
+
+✓ 接口通了，模型回了："收到"
+✓ 模型会调工具：render_chart，参数解析成功
+✓ 认得出图表类型：kind = bar
+
+✓ 配置可用。跑 npm run dev，然后把刚才那句问一遍试试。
+```
+
+它会打两次请求：一次最小的（验连通性 / token / 模型名），一次**带工具的**
+（验这个模型会不会用 tool calling —— 这一条是本工程能不能用的关键，
+而很多接口的报错信息在这件事上很含糊）。失败时会把错误翻译成能直接动手改的一句话。
+
+### 1.2 模型模式下它会怎么做
+
+工具一共三个，都在 `server/agents/tools.ts`：
+
+| 工具 | 干什么 |
+|---|---|
+| `render_chart` | 把数据画成图表卡 |
+| `collect_input` | **渲染成可填的表单，并让这一轮停下来等提交** —— 在协议里这就是一次中断 |
+| `point_at` | 画完之后指着某个数据点讲（`xValue` 必须是刚画那张图的 x 刻度之一） |
+
+一次 run 里**调两次模型**：第一次让它选工具；把工具结果回灌之后再调第二次，拿"画完之后的那句话"。
+这是为了对齐剧本里的卡片形态（`先说一句 → 卡片 → 再讲一句`），也是真实 agent 循环的形状。
+
+> **工具 schema 故意写得不等穷尽。** 表单 DSL 的完整约束有 38 个错误码，
+> 全塞进 schema 既贵又没用 —— 值语义（"默认值必须在 options 里"）本来就不是 JSON Schema 能表达的。
+> 所以这里只写结构骨架，值语义交给下游：客户端的 `validateFormDsl` 校验，
+> 不通过就把**带"可用取值"的结构化诊断**经 `context` 回灌，下一轮模型自己改。
+> 那条自修复回路本来就在（§2.6），**剧本模式与模型模式共用它** ——
+> 剧本是"故意写错"，模型是"真的写错"，回路的代码一行不差。
+
+> **文本不是真 token 流。** 事件序列是一份纯函数（`dsl-to-events.ts` 的 `planToEvents`），
+> 真流式意味着要再写一份"边收边发"的实现，两份必然漂。所以这里是拿到完整回复后
+> 按节奏分片播 —— 观感上"它在逐字打"是一样的，区别只在开始打之前多等一次网络往返。
+
 ---
 
 ## 2. 它演示了什么
 
 四条回路，都是这个工程存在的理由：
+
+![流式追加](docs/images/streaming.png)
 
 ### 2.1 单向：事件流驱动画布
 
@@ -116,8 +231,12 @@ RUN_FINISHED { outcome: { type: 'interrupt', interrupts: [{ id, reason, message 
 | 恢复 = **开新 run** + `resume` | 不是"接着跑"，所以前端要带上答案重发 |
 | `status: 'resolved' \| 'cancelled'` | 只有两个取值 |
 
-表单本身由 `ice-web-components-dsl` 渲染 —— agent 只声明"要问什么"。
-**这是 M1 里唯一一处"Agent 不只是说话，而是要用户做一件事"的能力。**
+表单本身由 `ice-web-components-dsl` 渲染 —— agent 只声明"要问什么"：
+
+![表单卡](docs/images/form-card.png)
+
+**这是目前唯一一处"Agent 不只是说话，而是要用户做一件事"的能力。**
+接上模型之后它同样成立：模型调 `collect_input` 就等于宣告"我需要用户提供信息"。
 
 ### 2.6 双向：诊断回灌的自修复
 
@@ -127,9 +246,11 @@ RUN_FINISHED { outcome: { type: 'interrupt', interrupts: [{ id, reason, message 
 这条回路把它用起来：坏 DSL → 客户端校验拦下 → 诊断走 `context` 回灌 →
 agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 
-脚本化阶段就把这条回路走通，意义在于 M2 接真模型时回路上的每一段都已经测过了。
+![自修复](docs/images/self-repair.png)
+
+脚本化阶段就把这条回路走通，意义在于接真模型时回路上的每一段都已经测过了。
 那时候唯一的变量只剩"模型这次吐的对不对"——而这个定位能力在 LLM 应用里最值钱，
-因为平时你分不清是模型的问题还是管道的问题。
+因为平时你分不清是模型的问题还是管道的问题。**所以模型模式直接复用了同一条回路。**
 
 ---
 
@@ -203,6 +324,28 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 它只描述"要做什么"，不碰 DOM。碰 canvas 的活在 `src/entries/boot.ts` 的 `applyEffects` 里。
 
 这样归约器可以被穷举测试（连"边画边指"的事件顺序都能断言），而 canvas 脏活留在需要它的地方。
+
+### 3.5 主题：画布与外壳读同一份 token
+
+界面是**两半拼起来的**（§3.2），所以"做成暗色"要同时动两处 —— 而两处各维护一套颜色必然会漂。
+第一版就是那样：画布里的控件是 Bootstrap 深灰、外壳是另一套蓝，拼在一起像两个应用。
+
+现在只有**一份 token 表**（`ice-web-components` 的 `ICEThemeTokens`），`src/domain/theme.ts` 负责分发：
+
+| 谁 | 怎么拿到颜色 |
+|---|---|
+| 画布里的**控件** | `iceUIManager.setTheme()` —— 库的主题是"组件构造时读一次"，所以在 boot 时定死 |
+| 画布里的**引擎外壳**（选中框 / 手柄 / 阴影色） | `applyThemeToEngine(ice)` —— 引擎主题是**实例级**的，卡片里那三块画布各调一次 |
+| 画布里的**图表** | 不用单独调：`ICEChart` 的 `theme: 'auto'` 按**引擎主题背景色的亮度**判明暗 |
+| **DOM 外壳** | `applyThemeToCss()` 把同一张表写进 CSS 变量，样式表里只引用 `var(--…)` |
+
+不直接用库内置的 `dark`：它是 Bootstrap 中性灰基调（主色 `#0d6efd`），
+而 ICE 家族的品牌色是冰蓝 `#61D9FB`。所以在它之上打了一层补丁，把 primary 一族换成冰蓝 ——
+深底上冰蓝比 Bootstrap 蓝亮得多，也更像"同一个产品"。
+
+**没做成运行时切换的开关**，不是因为懒：库的主题在组件构造时读一次，热切换要重建所有卡片里的
+组件树，而卡片里还跑着 rAF、事件监听与流式更新。要做的话正确的做法是重建整条 thread，
+等真有人要切换时再做。
 
 ---
 
@@ -310,7 +453,8 @@ fit(cssWidth: number) {
 
 范围边界，写下来免得被当成遗漏：
 
-1. **不做真模型。** M1 是确定性的规则 agent。接口（`AgentRun`）已经留好，见 §10。
+1. **模型模式下不做多轮工具循环。** 固定两圈（选工具 → 给结论），见 §10 末尾。
+   要"先查数据再画"得让它循环，那是下一步。
 2. **不做 mark 拖动改历史。** `addMark` + `mark:drag` 是 ICE 独有的能力，但它属于
    **就地改历史**，跟 Thread"消息发出即定"的语义冲突。真要做得改设计
    （建议方向：拖动不写回原卡片，而是追加一条新消息触发新 run）。
@@ -330,17 +474,22 @@ fit(cssWidth: number) {
 ```
 ice-agent-console/
 ├── server/                  AG-UI endpoint（原生 node:http，运行时只依赖 @ag-ui/core）
-│   ├── index.ts             路由、SSE、错误处理、取消
+│   ├── index.ts             路由、SSE、错误处理、取消、选 agent
+│   ├── config.ts            .env + 环境变量 → 两种模式的判定（含 token 脱敏）
 │   ├── protocol.ts          SSE 帧编码
 │   └── agents/
 │       ├── types.ts         AgentRun 接口 ← M1/M2 的分界线
-│       ├── dsl-to-events.ts 图表计划 → 事件序列 ← M1/M2 共享
-│       ├── scenarios.ts     剧本（规则）← M2 会被模型替换
-│       └── scripted.ts      确定性 agent + 播放节奏
+│       ├── dsl-to-events.ts 计划 → 事件序列 ← 两种模式共享
+│       ├── scripted.ts      剧本模式：确定性 agent + 播放节奏
+│       ├── scenarios.ts     剧本模式：关键词 → 计划
+│       ├── llm.ts           模型模式：LlmAgent（自然语言 → 计划）
+│       ├── llm-client.ts    模型模式：/chat/completions 客户端（fetch，无 SDK）
+│       └── tools.ts         模型模式：tool 定义 + 系统提示词
 ├── src/
 │   ├── domain/              纯逻辑，无 DOM
 │   │   ├── agui/            SSE 解析 / 归约器 / JSON Patch
-│   │   └── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
+│   │   ├── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
+│   │   └── theme.ts         主题：一份 token 分发给画布与 DOM
 │   ├── view/                DOM 外壳 + canvas 层
 │   │   ├── chart-adapter.ts 图表层（ICE 实例 ①）
 │   │   ├── widget-layer.ts  控件层（ICE 实例 ②，ice-web-components 画）
@@ -349,7 +498,13 @@ ice-agent-console/
 │   │   └── thread.ts        thread 外壳
 │   └── entries/boot.ts      接线：分发动作、执行 effects、触发 run
 ├── shared/contract.ts       自定义事件名 / context 键（server 与 web 的唯一出处）
+├── public/index.html        页面骨架 + 样式（颜色全走 CSS 变量，见 §3.5）
+├── scripts/
+│   ├── dev.mjs              一条命令起两个进程
+│   ├── llm-check.ts         npm run llm:check —— 配完模型先跑这个
+│   └── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图
 ├── tests/  e2e/             jest 单测 + playwright
+├── docs/images/             README 里的截图（2× 采集，按内容盒裁切）
 └── docs/upstream-gaps.md    对上游的观察
 ```
 
@@ -361,7 +516,7 @@ ice-agent-console/
 
 | 用途 | 机制 |
 |---|---|
-| 运行时打包 | webpack `resolve.alias` → 同级仓库目录 |
+| 运行时打包 | webpack `resolve.alias` → 同级仓库目录（5 个：引擎 / 图表 / chart-dsl / 控件库 / 表单 DSL） |
 | 类型检查 | tsconfig `paths` → 同级仓库目录 |
 | 单测 | jest `moduleNameMapper` → 同级仓库的 `dist/index.cjs` |
 
@@ -405,17 +560,28 @@ SSE 经中间层容易被缓冲，出问题时很难判断是协议问题还是�
 ```bash
 npm run verify        # types:check(两个 tsconfig) + jest + build
 npm run verify:full   # 上面 + playwright
+npm run llm:check     # 模型配置自检（不懂模型也能跑：没配就报"当前是剧本模式"）
+npm run shoot         # 重拍 docs/images 里的截图（需先 npm run dev）
 ```
+
+**模型路径不填 token 也能测**：`tests/llm-agent.test.ts` 会起一个**真的 http 服务**冒充
+OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以不 mock `fetch`：
+要验的正是"配上一个接口就能用"，而那包括 URL 拼接、请求头、请求体形状、响应解析、
+两次调用的循环 —— mock 掉 `fetch` 会把最容易错的那部分一起 mock 掉。
+
+    ✓ 两轮：先选工具、再给结论；URL / 头 / 体都拼对了
+    ✓ 表单：调 collect_input → RUN_FINISHED 带 interrupt（前端进 waiting）
+    ✓ 模型直接回一句话（没调工具）→ 只有文字，没有卡片
+    ✓ 把诊断与画布交互翻译进提示词（自修复回路与追问都靠它）
+    ✓ 接口报错时原样抛出去（不悄悄退回剧本）
 
 当前规模：
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **118 passed** / 7 suites |
+| 单测 | **140 passed** / 9 suites |
 | e2e | **24 passed** / 7 specs |
-| 源码 | 3260 行（`server` + `src` + `shared`，含注释） |
-| 测试 | 2410 行（`tests` + `e2e`） |
-| 生产包 | 1132 KiB（引擎 290 + 图表 281 + 控件库 488 + DSL 16 + 应用 257，未压缩） |
+| 生产包 | 约 1.1 MiB（引擎 / 图表 / 控件库 / DSL 四个兄弟仓的产物 + 应用自己那点） |
 
 > 控件库（`ice-web-components`）一进来就占掉 488 KiB —— 是反着用的代价：
 > 它是个 84 个组件的完整工具集，这里只用到了 `ICEButton`。
@@ -432,48 +598,46 @@ e2e 的判据**不是"DOM 里有没有 canvas"**——canvas 元素存在但全�
 
 ---
 
-## 10. M2：模型接在哪
+## 10. M2：模型接在哪（已经接了）
 
-只有一个地方要动：
+这个工程一开始是按"接口先定、实现后补"做的：`AgentRun` 就是那条分界线，
+`ScriptedAgent` 先占着位置。**接模型时那条分界线纹丝不动** —— 新增的全部代码是
+`server/agents/` 下的四个文件，`dsl-to-events.ts` 一行没改：
+
+```
+剧本:  用户消息 → (关键词规则) ─┐
+                                ├→ ToolCardPlan → [DSL → 分片成 TOOL_CALL_ARGS + 文本叙述 → 事件序列]
+模型:  用户消息 → (大模型)     ─┘
+```
+
+换实现只动一行：
 
 ```ts
-// server/agents/types.ts
-export interface AgentRun {
-  run(input: RunAgentInput, signal?: AbortSignal): AsyncIterable<AnyEvent>;
-}
+// server/index.ts
+const agent: AgentRun =
+  config.mode === 'llm' && config.llm ? new LlmAgent(config.llm, pace) : new ScriptedAgent(pace);
 ```
 
-M1 是 `ScriptedAgent`。M2 加一个 `LlmAgent` 实现同一个接口即可：
+三条输入通道在剧本阶段就已经全部打通，所以接模型时**管道一行没动** ——
+提示词里把这三条讲清楚就行：
 
-```
-脚本化:  用户消息 → (规则) ─┐
-                            ├→ ChartPlan → [DSL → 分片成 TOOL_CALL_ARGS + 文本叙述 → 事件序列]
-LLM:     用户消息 → (模型) ─┘
-```
+| 通道 | 模型模式怎么用它 |
+|---|---|
+| `context` | 两条扩展通道分开翻译：渲染端**诊断**（触发自修复）+ 用户**在画布上的动作**（触发追问） |
+| `state` | 作为一条"当前画布状态"的消息喂进去，它才能做"换个画法"这类事 |
+| `resume` | 上一轮中断的答复。模型据此知道"我问的那些，用户填了什么" |
 
-方括号里那一段（`dsl-to-events.ts`）**两个实现共享**。M2 真正新增的只有
-"把自然语言变成 `ChartPlan`"，下游一行不动。
+**还没做的（真要上生产要补的）**：
 
-三条输入通道都已经通了：`context`（用户做了什么）、`state`（画面上是什么）、
-`resume`（用户对中断的答复）。所以接模型时不用再动管道 —— 提示词里把这三条讲清楚就行。
+- **真 token 流**（见 §1.2 的说明：现在是一份纯函数事件序列，不做第二份流式实现）
+- **多轮工具调用**：现在固定两圈（选工具 → 给结论）。要"先查一次数据再画"就得让它循环
+- **真实数据源**：模型现在只能拿到对话里已有的数字，没有接数据库/接口的工具。
+  这也意味着它**只能说对话里出现过的数** —— 有工具之后才谈得上"去查一下"
+- **鉴权**：这个 endpoint 是裸的（本地演示）。上线要加 token 校验与按用户限流
+- **`resume` 之后的续跑**：现在答复完是开一个**新** run（协议如此），
+  但如果模型想说"好，那我按这些参数继续下发"，需要一个"继续执行"的工具
 
-对 M2 尤其重要的是 `resume`：模型要先决定"我还缺什么参数"，再产出一份表单 DSL，
-然后**停下来**（中断）。这三步里前两步是模型擅长的事，第三步是协议保证的。
-
-`server/index.ts` 里换实现只动一行：
-
-```ts
-const agent: AgentRun = process.env.LLM_API_KEY
-  ? new LlmAgent(...)
-  : new ScriptedAgent(pace);   // 没有 key 就退回脚本化——clone 下来不看文档也能跑
-```
-
-**M2 可以直接吃现成的东西**：`ice-chart-dsl` 里已经有
-`skills/ice-chart-dsl/SKILL.md` 和 `prompts/agent-prompt.md`，那是给模型的输出契约。
-
-另外，M2 时 API key 必须在 Node 侧（不能进浏览器）——当前架构已经是对的。
-
----
+--- 
 
 ## 11. 上游缺口
 
