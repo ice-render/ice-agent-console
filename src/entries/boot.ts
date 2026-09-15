@@ -1,0 +1,275 @@
+/**
+ * 把各层接起来。
+ *
+ * 这个文件只做三件事，**没有业务逻辑**：
+ *   1. 把动作分发给归约器；
+ *   2. 执行归约器吐出来的 effects（碰 canvas 的脏活在这儿）；
+ *   3. 把上行事件（用户输入、图上交互）翻译成新的 run。
+ *
+ * 有一点值得注意：`pendingDiagnostics` 是**渲染端发现的问题**，
+ * 它不属于协议状态，但必须跨轮存活——所以要放在归约器外面。
+ * 这是"纯核心 + 命令式外壳"模式下必然会出现的边界状态，放在这里比塞进 state 诚实。
+ */
+import {
+  DSL_DIAGNOSTICS_CONTEXT_KEY,
+  VIEW_INTERACTION_CONTEXT_KEY,
+} from '../../shared/contract';
+import { runAgent, apiUrl } from '../domain/agui/client';
+import {
+  initialState,
+  reduce,
+  type Action,
+  type Effect,
+  type TextItem,
+} from '../domain/agui/reducer';
+import { ThreadView } from '../view/thread';
+
+// ---------------------------------------------------------------------------
+// DOM 抓手
+// ---------------------------------------------------------------------------
+
+const threadEl = document.getElementById('thread');
+const metaEl = document.getElementById('meta');
+const formEl = document.getElementById('composer') as HTMLFormElement | null;
+const inputEl = document.getElementById('input') as HTMLTextAreaElement | null;
+const sendEl = document.getElementById('send') as HTMLButtonElement | null;
+const chipsEl = document.getElementById('chips');
+
+if (!threadEl || !metaEl || !formEl || !inputEl || !sendEl || !chipsEl) {
+  throw new Error('页面骨架缺失：public/index.html 里的元素 id 跟 boot.ts 对不上');
+}
+
+// ---------------------------------------------------------------------------
+// 状态
+// ---------------------------------------------------------------------------
+
+const threadId = `thread_${Math.random().toString(36).slice(2, 10)}`;
+let state = initialState(threadId);
+let running = false;
+
+/** 渲染端诊断。跨轮存活，所以要放在归约器外面。 */
+let pendingDiagnostics: string | null = null;
+/** 自修复只自动重试一次，避免"诊断永远修不好"时无限打转。 */
+let autoRepairUsed = false;
+
+// ---------------------------------------------------------------------------
+// 渲染 + effects
+// ---------------------------------------------------------------------------
+
+const view = new ThreadView(threadEl, {
+  onItemClick: (p) => {
+    // 上行第 1 种：用户点了一个数据点。这正是"点击触发"的入口——
+    // 没有对话面也可以跑 run，AG-UI 只规范 run 内部，不管 run 由谁触发。
+    void send(`我点了「${p.xValue}」这个点，这里为什么是这样？`, {
+      interaction: { kind: 'item-click', ...p },
+    });
+  },
+  onBrushEnd: (range) => {
+    // 上行第 2 种：用户框选了一段区间。
+    // 结构化数据走 context，而不是塞进用户说的话里——两者语义不同，不该糊在一起。
+    const span = range?.x ? `${range.x[0]} ~ ${range.x[1]}` : '一段区间';
+    void send(`我框选了 ${span}，这里为什么波动？`, {
+      interaction: { kind: 'brush', range },
+    });
+  },
+});
+
+function dispatch(action: Action): void {
+  const { state: next, effects } = reduce(state, action);
+  state = next;
+
+  // 先渲染再执行 effects：mount 需要用渲染阶段创建出来的 canvas 元素
+  view.render(state);
+
+  const feedback = applyEffects(effects);
+  if (feedback !== null) {
+    // 两件事都要做，少一件回路就是断的：
+    //   1. 写进归约状态（界面要能显示"校验没通过"）
+    //   2. 记到 pendingDiagnostics（下一轮 run 要把它塞进 context 送给 agent）
+    // 第一版只做了 1，结果自修复那一轮从来没被触发过——e2e 才把它逼出来。
+    pendingDiagnostics = feedback;
+    state = reduce(state, { type: '@local/diagnostics', text: feedback }).state;
+  }
+
+  updateMeta();
+}
+
+/** 执行 effects。返回本轮新产生的诊断文本（如果有）。 */
+function applyEffects(effects: Effect[]): string | null {
+  let diagnostics: string | null = null;
+
+  for (const effect of effects) {
+    switch (effect.type) {
+      case 'mount-chart': {
+        const card = view.card(effect.toolCallId);
+        const result = card?.mount(effect.dsl);
+        if (result && !result.ok) {
+          diagnostics = result.diagnostics;
+        }
+        break;
+      }
+      case 'append-rows': {
+        const card = view.card(effect.toolCallId);
+        if (!card) break;
+        if (!card.appendRows(effect.rows)) {
+          // 快路径判不了（比如类目轴要补 xAxis.data）→ 退回全量重绘。
+          // 慢一点但一定对，这比"看起来更快但偶尔画错"强。
+          if (state.sharedState?.chart) card.mount(state.sharedState.chart);
+        }
+        break;
+      }
+      case 'point-at': {
+        // 「指着讲」：作用在最后一张活着的图表卡片上
+        view.lastCard()?.pointAt(effect.value);
+        break;
+      }
+      case 'clear-point': {
+        view.lastCard()?.clearPoint();
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return diagnostics;
+}
+
+function updateMeta(): void {
+  const charts = state.items.filter((i) => i.kind === 'tool' && i.status !== 'streaming').length;
+  const status =
+    state.status === 'running' ? '运行中' : state.status === 'error' ? '出错' : '空闲';
+  metaEl!.innerHTML =
+    `thread <b>${state.threadId.slice(-6)}</b> · ` +
+    `事件 <b>${state.eventCount}</b> · ` +
+    `卡片 <b>${charts}</b> · ` +
+    `<b>${status}</b>` +
+    (state.error ? ` · ${state.error}` : '');
+}
+
+// ---------------------------------------------------------------------------
+// 跑一次 run
+// ---------------------------------------------------------------------------
+
+interface SendOptions {
+  /** 图上交互产生的结构化上下文。 */
+  interaction?: Record<string, any>;
+  /** 这是自修复的自动重试，不要再插一条用户气泡。 */
+  auto?: boolean;
+}
+
+async function send(text: string, options: SendOptions = {}): Promise<void> {
+  if (running) return;
+
+  if (!options.auto) {
+    dispatch({ type: '@local/user-message', text });
+    autoRepairUsed = false;
+  }
+
+  running = true;
+  sendEl!.disabled = true;
+  updateMeta();
+
+  // context 是 AG-UI 留给应用扩展的通道。这里装两样东西：
+  // 上一轮渲染端的诊断（自修复用）、用户在图上做的事（追问用）。
+  const context: Array<{ description: string; value: string }> = [];
+  if (pendingDiagnostics) {
+    context.push({ description: DSL_DIAGNOSTICS_CONTEXT_KEY, value: pendingDiagnostics });
+    pendingDiagnostics = null;
+  }
+  if (options.interaction) {
+    context.push({
+      description: VIEW_INTERACTION_CONTEXT_KEY,
+      value: JSON.stringify(options.interaction),
+    });
+  }
+
+  const messages = state.items
+    .filter((item): item is TextItem => item.kind === 'text')
+    .map((item) => ({ id: item.id, role: item.role, content: item.text }));
+
+  const runId = `run_${Date.now().toString(36)}`;
+
+  try {
+    await runAgent(
+      {
+        threadId,
+        runId,
+        messages,
+        state: state.sharedState ?? {},
+        context,
+      },
+      {
+        onEvent: (event) => dispatch(event),
+        onError: (err) => dispatch({ type: 'RUN_ERROR', message: err.message }),
+      }
+    );
+  } finally {
+    running = false;
+    sendEl!.disabled = false;
+  }
+
+  // 自修复回路：这一轮渲染端报了错，就带着诊断自动再来一次。
+  // 脚本化阶段就把这条回路走通，M2 换成真模型时这一段的代码一行都不用动。
+  if (pendingDiagnostics && !autoRepairUsed) {
+    autoRepairUsed = true;
+    await send('', { auto: true });
+    return;
+  }
+
+  updateMeta();
+}
+
+// ---------------------------------------------------------------------------
+// 输入
+// ---------------------------------------------------------------------------
+
+const CHIPS = [
+  '看看各渠道的月度销量',
+  '看一下实时吞吐量',
+  '故意画错',
+  '今天天气怎么样',
+];
+
+for (const text of CHIPS) {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'chip';
+  chip.textContent = text;
+  chip.addEventListener('click', () => void send(text));
+  chipsEl.append(chip);
+}
+
+formEl.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = '';
+  inputEl.style.height = '';
+  void send(text);
+});
+
+inputEl.addEventListener('keydown', (event) => {
+  // Enter 发送，Shift+Enter 换行
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    formEl.requestSubmit();
+  }
+});
+
+window.addEventListener('resize', () => view.resizeAll());
+
+/**
+ * 把归约后的状态挂出来。
+ *
+ * 这不是"为测试而加的钩子"——这是个控制台，SSE 流是看不见摸不着的，
+ * 没有它就只能靠猜"现在到底收到了什么"。调试价值是主要的，e2e 能断言协议层
+ * 的状态（而不是只能断言像素）是顺带的好处。
+ */
+(globalThis as any).__iceAgentConsole = {
+  getState: () => state,
+  apiUrl: () => apiUrl(),
+};
+
+inputEl.focus();
+updateMeta();

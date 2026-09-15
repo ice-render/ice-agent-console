@@ -1,0 +1,26 @@
+{
+  // server 侧的类型门禁：**故意不加载 DOM lib**。
+  //
+  // 这不是形式主义——它让 `document` / `window` / `HTMLElement` 在 server 代码里
+  // 直接编译失败。AG-UI 的 agent 后端跑在 Node 里，一旦误用了浏览器 API，
+  // 只有在运行时才会炸，而且往往是在某个分支上（比如只在出错路径里用了 document）。
+  //
+  // web 侧那半边门禁（"web 里不许用 process"）没有对应的强约束：
+  // e2e 和 playwright.config.ts 跟 src 共用一个 tsconfig，而它们本来就需要 node types。
+  // 所以这里只保真这一侧。
+  "compilerOptions": {
+    "target": "es2020",
+    "lib": ["es2020"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["server", "shared"]
+}

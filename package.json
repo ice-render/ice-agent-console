@@ -1,0 +1,37 @@
+{
+  "name": "ice-agent-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AG-UI 事件流驱动 ICE 画布的控制台：Thread 式对话，图表内联成卡片",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "tsx watch server/index.ts",
+    "dev:web": "webpack serve --mode development",
+    "start": "npm run dev",
+    "build": "webpack --mode production",
+    "serve": "http-server dist -p 8094 -c-1",
+    "types:check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "jest --runInBand",
+    "test:e2e": "playwright test",
+    "verify": "npm run types:check && npm test && npm run build",
+    "verify:full": "npm run verify && npm run test:e2e"
+  },
+  "dependencies": {
+    "@ag-ui/core": "0.0.59"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/jest": "29.5.14",
+    "@types/node": "^22.10.2",
+    "html-webpack-plugin": "^5.6.0",
+    "http-server": "^14.1.1",
+    "jest": "29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-loader": "^9.5.1",
+    "tsx": "^4.19.2",
+    "typescript": "5.9.3",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1"
+  }
+}

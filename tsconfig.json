@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "es2019",
+    "lib": ["dom", "dom.iterable", "es2019"],
+    "module": "esnext",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["jest", "node"],
+
+    // 家族包的类型从**同级仓库目录**直接解析，不走 node_modules。
+    //
+    // 为什么不装成 `file:` 依赖（即家族里 react-demo 的做法）：那条路有记录在案的坑——
+    // `file:` 会让 npm 遍历被链接包的依赖树跑 prepare，撞上某些包锁定的老 typescript；
+    // 而且它留下的 node_modules 软链在后续 install 时会写坏宿主工程的 @types。
+    // 这里只需要类型（运行时由 webpack 的 resolve.alias 负责），所以 paths 就够，
+    // 不往 node_modules 里塞任何东西。
+    //
+    // 代价必须知道：`npm install` 之后仍需要三个兄弟仓库各自 `npm run build`
+    // 生成 dist/types，否则类型检查会报找不到模块。
+    "baseUrl": ".",
+    "paths": {
+      "ice-render": ["../ice-render"],
+      "@damoqiongqiu/ice-chart": ["../ice-chart"],
+      "@damoqiongqiu/ice-chart-dsl": ["../ice-chart-dsl"]
+    }
+  },
+  "include": ["src", "shared", "tests", "e2e", "playwright.config.ts"]
+}

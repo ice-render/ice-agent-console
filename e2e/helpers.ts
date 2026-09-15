@@ -1,0 +1,183 @@
+import { expect, type Page } from '@playwright/test';
+
+/** 归约后的状态形状。只声明 e2e 用得到的字段。 */
+export interface ConsoleState {
+  threadId: string;
+  runId: string | null;
+  status: 'idle' | 'running' | 'error';
+  items: Array<{ kind: 'text' | 'tool'; id: string; text?: string; argsRaw?: string; status?: string }>;
+  sharedState: any;
+  pointAt: { value: any; seq: number } | null;
+  diagnostics: string | null;
+  error: string | null;
+  eventCount: number;
+}
+
+export interface ConsoleHandle {
+  getState: () => ConsoleState;
+  apiUrl: () => string;
+}
+
+/** 读应用内部状态。比只看 DOM 强得多——协议层的东西在 DOM 里是看不全的。 */
+export async function readState(page: Page): Promise<ConsoleState> {
+  return page.evaluate(() => (window as any).__iceAgentConsole.getState());
+}
+
+/**
+ * 等一次 run 真正跑完。
+ *
+ * **不能只看 `status === 'idle'`**：点下按钮之后、第一条事件到达之前，状态还是上一轮留下的
+ * `idle`，于是等待会立刻返回——测试就在 run 还没开始时往下走了。
+ * 所以判据是"空闲 **且** 事件数涨过基线"：这两条同时成立才说明新一轮已经跑完。
+ */
+export async function waitSettled(page: Page, minEventCount = 1, timeout = 40_000): Promise<void> {
+  await page.waitForFunction(
+    (min) => {
+      const s = (window as any).__iceAgentConsole.getState();
+      return s.status === 'idle' && s.eventCount >= min;
+    },
+    minEventCount,
+    { timeout }
+  );
+}
+
+/** 执行一个会触发 run 的动作，并等它落定。返回落定后的状态。 */
+export async function settleAfter(
+  page: Page,
+  action: () => Promise<void>,
+  timeout = 40_000
+): Promise<ConsoleState> {
+  const before = await readState(page);
+  await action();
+  await waitSettled(page, before.eventCount + 1, timeout);
+  return readState(page);
+}
+
+/**
+ * 等状态满足条件。用于等"收到第 N 条事件"这类中间态。
+ *
+ * 谓词会被序列化后在浏览器里执行，所以**不能闭包引用外面的变量**——
+ * 需要的基线值要通过 `arg` 传进去（第一版就是踩了这个：谓词里用 `before.eventCount`，
+ * 到了浏览器里变成 `ReferenceError: before is not defined`）。
+ */
+export async function waitForState(
+  page: Page,
+  predicate: (s: ConsoleState, arg?: any) => boolean,
+  arg?: any,
+  timeout = 30_000
+): Promise<void> {
+  await page.waitForFunction(
+    ([src, value]: [string, any]) => {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function('s', 'arg', `return (${src})(s, arg)`);
+      return fn((window as any).__iceAgentConsole.getState(), value);
+    },
+    [predicate.toString(), arg] as [string, any],
+    { timeout }
+  );
+}
+
+/** 点快捷按钮触发剧本（比打字稳，不受输入法影响），并等这一轮跑完。 */
+export async function useChip(page: Page, text: string): Promise<ConsoleState> {
+  return settleAfter(page, async () => {
+    await page.locator('.chip', { hasText: text }).first().click();
+  });
+}
+
+/** 画布上非透明像素数。用来断言"图真的画出来了"，而不是"canvas 元素存在"。 */
+export async function countInk(page: Page, selector = '.card canvas'): Promise<number> {
+  return page.evaluate((sel) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+    if (!canvas) return -1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return -1;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let ink = 0;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] !== 0) ink++;
+    }
+    return ink;
+  }, selector);
+}
+
+/**
+ * 画布内容指纹。
+ *
+ * 用来断言"某件事发生之后画面变了"。比逐个像素对比稳，也不需要知道高亮画在哪。
+ */
+export async function canvasSignature(page: Page, selector = '.card canvas'): Promise<string> {
+  return page.evaluate((sel) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+    if (!canvas) return 'no-canvas';
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return 'no-ctx';
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // 采样而不是全量：够灵敏，又不用把几 MB 数据搬出来
+    let hash = 2166136261;
+    for (let i = 0; i < data.length; i += 97) {
+      hash ^= data[i];
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }, selector);
+}
+
+/** 收集会话期间所有 console / page / 网络错误。判据不能只看"有没有报错"，但零报错是底线。 */
+export function collectErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(`console: ${m.text()}`);
+  });
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  page.on('requestfailed', (r) => errors.push(`requestfailed: ${r.url()}`));
+  page.on('response', (r) => {
+    if (r.status() >= 400) errors.push(`http ${r.status()}: ${r.url()}`);
+  });
+  return errors;
+}
+
+/**
+ * 在图表上点中一个数据点。
+ *
+ * **canvas 里没有 DOM 目标可以定位**，所以只能按相对坐标试。这里按一组
+ * 已实测过的位置依次尝试，命中为止——比写死一个坐标稳（视口或布局微调不会让用例
+ * 随机变红），也比"随便点一下然后期望它有反应"有意义：后者红的时候你分不清
+ * 是上行断了还是没点中。
+ *
+ * 返回是否命中。
+ */
+export async function clickChartItem(page: Page, selector = '.card canvas'): Promise<boolean> {
+  const box = await page.locator(selector).first().boundingBox();
+  if (!box) return false;
+
+  // 柱状图的柱子集中在绘图区中下部；这些位置是实测出来的，不是猜的
+  const candidates: Array<[number, number]> = [
+    [0.1, 0.6],
+    [0.12, 0.62],
+    [0.16, 0.64],
+    [0.2, 0.64],
+    [0.26, 0.64],
+    [0.1, 0.55],
+    [0.18, 0.55],
+    [0.3, 0.62],
+    [0.4, 0.62],
+    [0.5, 0.6],
+  ];
+
+  for (const [nx, ny] of candidates) {
+    const before = await readState(page);
+    await page.mouse.click(box.x + box.width * nx, box.y + box.height * ny);
+    try {
+      // 命中会同步插一条本地用户消息（不必等整轮 run）
+      await page.waitForFunction(
+        (n) => (window as any).__iceAgentConsole.getState().items.length > n,
+        before.items.length,
+        { timeout: 800 }
+      );
+      return true;
+    } catch {
+      // 这个位置没命中，换下一个
+    }
+  }
+  return false;
+}

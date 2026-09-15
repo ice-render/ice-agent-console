@@ -1,0 +1,361 @@
+/**
+ * 事件归约器：把一串 AG-UI 事件折叠成一个 thread 状态。
+ *
+ * 三条设计约束，都是前面讨论定下来的：
+ *
+ * 1. **事件是"已发生的事实"，不是"服务端下发的命令"。**
+ *    所以这里是"把事实折叠成状态"，不是"执行命令"。白拿两样东西：
+ *    事件日志本身可以当回放素材（配合 ICETracePlayerModel），
+ *    以及遇到不认识的事件可以直接丢——不会崩，也不会污染状态。
+ *
+ * 2. **messages 是主结构，state 是卡片的局部状态。**
+ *    Thread 式对话里，时间线才是骨架；画布状态是挂在某张卡片上的。
+ *    这也决定了 `STATE_DELTA` 的作用对象是"最后一张图表卡片"，而不是某个全局画布。
+ *
+ * 3. **纯函数 + effects。**
+ *    reducer 不碰 DOM、不碰 canvas，需要命令式动作时吐一条 effect 描述出来，
+ *    由视图层执行。好处是归约器可以被穷举测试（连"边画边指"的顺序都能断言），
+ *    而 canvas 相关的脏活留在真正需要它的地方。
+ */
+import { EventType } from '@ag-ui/core';
+import { EVT_POINT_AT, EVT_POINT_CLEAR } from '../../../shared/contract';
+import { CHART_ROWS_PATH, applyJsonPatch, detectRowAppend, type JsonPatchOp } from './state-patch';
+
+// ---------------------------------------------------------------------------
+// 状态形状
+// ---------------------------------------------------------------------------
+
+export interface TextItem {
+  kind: 'text';
+  id: string;
+  role: string;
+  text: string;
+  done: boolean;
+}
+
+export interface ToolItem {
+  kind: 'tool';
+  id: string;
+  name: string;
+  /** 流式拼装中的参数原文。前端就是靠它显示"DSL 正在拼"。 */
+  argsRaw: string;
+  status: 'streaming' | 'args-done' | 'result';
+  /** 参数拼完并解析成功后的 DSL。解析失败则留在 argsRaw 里给用户看。 */
+  dsl?: any;
+  parseError?: string;
+  result?: string;
+}
+
+export type ThreadItem = TextItem | ToolItem;
+
+export interface ThreadState {
+  threadId: string;
+  runId: string | null;
+  status: 'idle' | 'running' | 'error';
+  items: ThreadItem[];
+  /**
+   * AG-UI 的共享状态文档。`STATE_SNAPSHOT` 整体写它，`STATE_DELTA` 打补丁。
+   *
+   * **存的是完整文档，不是拆出来的 chart。** 因为 JSON Patch 的 path 是相对根的
+   * （我们的约定是 `/chart/...`），把 `snapshot.chart` 单独拆出来存，
+   * 补丁路径就对不上了。协议里的 state 本来就是"一份两边都看得见的文档"，
+   * 我们只是往里放了一个 chart 字段而已。
+   */
+  sharedState: any | null;
+  /**
+   * 最近一次「指着讲」的目标。
+   * `seq` 递增是为了让视图能区分"同一个值再指一次"——高亮动画需要重新触发。
+   */
+  pointAt: { value: any; seq: number } | null;
+  /**
+   * 渲染端诊断。由视图层校验 DSL 后回写，下一次 run 会带上它去触发自修复。
+   * 这就是 AG-UI 双向语义的落点：协议的 `context` 字段。
+   */
+  diagnostics: string | null;
+  error: string | null;
+  /** 已折叠的事件数。标题栏显示，顺带给 e2e 一个稳定的锚点。 */
+  eventCount: number;
+}
+
+/** 视图层希望 reducer 帮忙做的事。reducer 只描述，不执行。 */
+export type Effect =
+  | { type: 'mount-chart'; toolCallId: string; dsl: any }
+  | { type: 'append-rows'; toolCallId: string; rows: any[][] }
+  | { type: 'point-at'; value: any }
+  | { type: 'clear-point' };
+
+export interface Reduction {
+  state: ThreadState;
+  effects: Effect[];
+}
+
+// ---------------------------------------------------------------------------
+// 本地动作
+// ---------------------------------------------------------------------------
+
+/**
+ * 不是来自协议的动作。前缀 `@local/` 保证不会跟 `EventType` 的字面量撞名
+ * （`EventType` 全是 UPPER_SNAKE）。
+ */
+export type LocalAction =
+  | { type: '@local/user-message'; text: string }
+  | { type: '@local/diagnostics'; text: string | null }
+  | { type: '@local/reset' };
+
+export type Action = { type: string } & Record<string, any>;
+
+// ---------------------------------------------------------------------------
+// 初始化
+// ---------------------------------------------------------------------------
+
+export function initialState(threadId: string): ThreadState {
+  return {
+    threadId,
+    runId: null,
+    status: 'idle',
+    items: [],
+    sharedState: null,
+    pointAt: null,
+    diagnostics: null,
+    error: null,
+    eventCount: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 归约
+// ---------------------------------------------------------------------------
+
+/** 找到最后一张图表卡片——`STATE_DELTA` 的作用对象。 */
+function lastChartItem(items: ThreadItem[]): ToolItem | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === 'tool' && item.dsl !== undefined) return item;
+  }
+  return undefined;
+}
+
+function indexOfItem(items: ThreadItem[], id: string): number {
+  return items.findIndex((item) => item.id === id);
+}
+
+/**
+ * 把一个动作折叠进状态。
+ *
+ * 注意 `default` 分支：**不认识的事件直接丢弃**。
+ * 这不是偷懒，是协议要求的容错口径（业界共识的护栏是 `default: drop(ev)`）——
+ * 未来的协议版本会加新事件类型，客户端不能因为不认识就崩。
+ * 但丢弃只发生在"事件"上；`STATE_DELTA` 里不认识的 **patch 操作** 会抛异常，
+ * 因为那是"我认识这个事件、但内容超出我的实现"，静默忽略会让状态悄悄分叉。
+ */
+export function reduce(state: ThreadState, action: Action): Reduction {
+  const effects: Effect[] = [];
+  const next: ThreadState = { ...state, items: state.items.slice() };
+  const bump = () => {
+    next.eventCount = state.eventCount + 1;
+  };
+
+  switch (action.type) {
+    // ---------------------------------------------------------------- 本地
+    case '@local/user-message': {
+      next.items.push({
+        kind: 'text',
+        id: `local_user_${state.items.length}_${state.eventCount}`,
+        role: 'user',
+        text: action.text,
+        done: true,
+      });
+      return { state: next, effects };
+    }
+
+    case '@local/diagnostics': {
+      next.diagnostics = action.text ?? null;
+      // 诊断是某一轮渲染的结果。宣告新一轮开始时它就该清掉，
+      // 否则会一直挂在 context 上，让 agent 以为每轮都有错。
+      return { state: next, effects };
+    }
+
+    case '@local/reset': {
+      return { state: initialState(state.threadId), effects };
+    }
+
+    // ------------------------------------------------------------ 生命周期
+    case EventType.RUN_STARTED: {
+      bump();
+      next.runId = action.runId ?? null;
+      next.status = 'running';
+      next.error = null;
+      // 新一轮开始 = 上一轮的诊断已经用掉了。清掉，免得反复回灌同一份。
+      next.diagnostics = null;
+      return { state: next, effects };
+    }
+
+    case EventType.RUN_FINISHED: {
+      bump();
+      next.status = 'idle';
+      return { state: next, effects };
+    }
+
+    case EventType.RUN_ERROR: {
+      bump();
+      next.status = 'error';
+      next.error = action.message || 'run 失败';
+      return { state: next, effects };
+    }
+
+    // ---------------------------------------------------------------- 文本
+    case EventType.TEXT_MESSAGE_START: {
+      bump();
+      next.items.push({
+        kind: 'text',
+        id: action.messageId,
+        role: action.role || 'assistant',
+        text: '',
+        done: false,
+      });
+      return { state: next, effects };
+    }
+
+    case EventType.TEXT_MESSAGE_CONTENT: {
+      bump();
+      const index = indexOfItem(next.items, action.messageId);
+      if (index === -1) {
+        // 没收到 START 就来 CONTENT（中途接入、或服务端不守规矩）。
+        // 不丢——补一条出来，比让用户看不到内容强。
+        next.items.push({
+          kind: 'text',
+          id: action.messageId,
+          role: 'assistant',
+          text: '',
+          done: false,
+        });
+      }
+      const at = index === -1 ? next.items.length - 1 : index;
+      const item = next.items[at] as TextItem;
+      next.items[at] = { ...item, text: item.text + (action.delta ?? '') };
+      return { state: next, effects };
+    }
+
+    case EventType.TEXT_MESSAGE_END: {
+      bump();
+      const index = indexOfItem(next.items, action.messageId);
+      if (index !== -1) {
+        const item = next.items[index] as TextItem;
+        next.items[index] = { ...item, done: true };
+      }
+      return { state: next, effects };
+    }
+
+    // ------------------------------------------------------------ 工具调用
+    case EventType.TOOL_CALL_START: {
+      bump();
+      next.items.push({
+        kind: 'tool',
+        id: action.toolCallId,
+        name: action.toolCallName,
+        argsRaw: '',
+        status: 'streaming',
+      });
+      return { state: next, effects };
+    }
+
+    case EventType.TOOL_CALL_ARGS: {
+      bump();
+      const index = indexOfItem(next.items, action.toolCallId);
+      if (index === -1) return { state: next, effects };
+      const item = next.items[index] as ToolItem;
+      const argsRaw = item.argsRaw + (action.delta ?? '');
+      next.items[index] = { ...item, argsRaw };
+      return { state: next, effects };
+    }
+
+    case EventType.TOOL_CALL_END: {
+      bump();
+      const index = indexOfItem(next.items, action.toolCallId);
+      if (index === -1) return { state: next, effects };
+      const item = next.items[index] as ToolItem;
+      // 参数拼完了：这时才尝试解析。解析失败不抛——把原文留在卡片上给用户看，
+      // 比让整条流挂掉有用得多（模型吐半截 JSON 是很常见的情况）。
+      let dsl: any;
+      let parseError: string | undefined;
+      try {
+        dsl = JSON.parse(item.argsRaw);
+      } catch (err) {
+        parseError = (err as Error).message;
+      }
+      next.items[index] = { ...item, status: 'args-done', dsl, parseError };
+      if (dsl !== undefined) {
+        effects.push({ type: 'mount-chart', toolCallId: item.id, dsl });
+      }
+      return { state: next, effects };
+    }
+
+    case EventType.TOOL_CALL_RESULT: {
+      bump();
+      const index = indexOfItem(next.items, action.toolCallId);
+      if (index !== -1) {
+        const item = next.items[index] as ToolItem;
+        next.items[index] = { ...item, status: 'result', result: action.content };
+      }
+      return { state: next, effects };
+    }
+
+    // ------------------------------------------------------------ 状态同步
+    case EventType.STATE_SNAPSHOT: {
+      bump();
+      // 快照语义是**替换**而不是合并（协议明确规定），所以直接赋值。
+      next.sharedState = action.snapshot ?? null;
+      return { state: next, effects };
+    }
+
+    case EventType.STATE_DELTA: {
+      bump();
+      const ops = (action.delta ?? []) as JsonPatchOp[];
+      let patched: any;
+      try {
+        patched = applyJsonPatch(next.sharedState, ops);
+      } catch (err) {
+        // patch 应用不了 = 状态分叉，必须让用户看见，不能装作没事
+        next.status = 'error';
+        next.error = `STATE_DELTA 应用失败：${(err as Error).message}`;
+        return { state: next, effects };
+      }
+      next.sharedState = patched;
+
+      // 走快路径还是全量重建，由这条纯函数决定（见 state-patch.ts 的注释）
+      const append = detectRowAppend(ops, CHART_ROWS_PATH);
+      const target = lastChartItem(next.items);
+      if (append.isPlainAppend && target) {
+        effects.push({ type: 'append-rows', toolCallId: target.id, rows: append.rows });
+      } else if (target) {
+        effects.push({ type: 'mount-chart', toolCallId: target.id, dsl: patched });
+      }
+      return { state: next, effects };
+    }
+
+    // ---------------------------------------------------------- 自定义 / 叙事
+    case EventType.CUSTOM: {
+      bump();
+      if (action.name === EVT_POINT_AT) {
+        // seq 递增：同一个值连指两次也要重新触发高亮
+        next.pointAt = { value: action.value?.value, seq: (state.pointAt?.seq ?? 0) + 1 };
+        effects.push({ type: 'point-at', value: next.pointAt.value });
+      } else if (action.name === EVT_POINT_CLEAR) {
+        next.pointAt = null;
+        effects.push({ type: 'clear-point' });
+      }
+      // 其它 CUSTOM 事件（别的应用、别的扩展）保持沉默地路过
+      return { state: next, effects };
+    }
+
+    default:
+      // 协议词表之外的事件——直接丢。这是规范要求的容错口径，
+      // 也是"事件是事实、不是命令"的直接好处：不认识的事实不影响已知状态。
+      return { state, effects };
+  }
+}
+
+/** 把一串动作折叠到底，返回最终状态（不含 effects）。测试和回放都用它。 */
+export function reduceAll(state: ThreadState, actions: Action[]): ThreadState {
+  return actions.reduce((acc, action) => reduce(acc, action).state, state);
+}
