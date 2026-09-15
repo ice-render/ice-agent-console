@@ -158,7 +158,7 @@ async function openFormCard(page: import('@playwright/test').Page): Promise<void
 }
 
 /**
- * 表单要**撑满**卡片宽度。
+ * 表单要**排到内容宽度**：既不缩成左边一小块，也不被拉满整张卡片。
  *
  * 这一条是实测缺陷的回归：宿主容器 896 宽时，表单只在左边画了 229px，
  * **右边空掉 667px（74%）**。注意 `countInk` 抓不到这种缺陷 ——
@@ -168,9 +168,12 @@ async function openFormCard(page: import('@playwright/test').Page): Promise<void
  * 宽度在 ICE 里是每个组件自己的属性，没有"父级拉满"的自动传导 ——
  * `ICEForm` 的 `align:'stretch'` 只拉 `ICEFormItem`，**不拉控件**；
  * 于是每个控件落到各自的出厂默认（ICETextField 200、ICEInputNumber 140…），
- * 同一张表单里几个控件还互不相同。
+ * 同一张表单里几个控件还互不相同。修法是 DSL 按类型给意图级默认宽度 + 一个 `maxWidth`。
+ *
+ * 而 `maxWidth` 这一半同样重要：把 896 全铺满不是"排满了"，是难看 ——
+ * 一行 896 宽的输入框没人读得过来。
  */
-test('表单撑满卡片宽度，右侧不留大片空白', async ({ page }) => {
+test('表单排到内容宽度：不缩成一小块，也不拉满整张卡片', async ({ page }) => {
   await page.goto('/');
   await openFormCard(page);
 
@@ -184,46 +187,68 @@ test('表单撑满卡片宽度，右侧不留大片空白', async ({ page }) => 
   // backing store = 逻辑宽 × dpr（**不是**把逻辑宽取整后再乘）
   expect(canvas.backing).toBe(Math.round(canvas.css * canvas.dpr));
 
-  // ---- 内容要几乎铺满（修复前 widthRatio ≈ 0.26）----
+  // ---- 内容要**两边都判**：既不能缩成一小块，也不能拉满整张卡片 ----
+  //
+  // 只判下界是不够的：`countInk` / "占画布的 x%" 这类单边判据对
+  // "把 896 全铺满"照样成立 —— 那也不是"排满了"，是难看（一行文本没人读得过来）。
+  // 所以这里刻意**不写死 DSL 的 640**，只表达意图："比卡片明显窄，也比一小块明显宽"。
   const bounds = await inkBounds(page, FORM_CANVAS);
   expect(bounds, '表单画布上应当有内容').not.toBeNull();
   expect(
-    bounds!.widthRatio,
-    `着墨只占画布宽的 ${(bounds!.widthRatio * 100).toFixed(1)}%，右侧空 ${(canvas.css - bounds!.right).toFixed(0)}px`
-  ).toBeGreaterThan(0.9);
-  // 左边也不该反过来空一片
+    bounds!.right,
+    `着墨右沿只有 ${bounds!.right.toFixed(0)}px（画布 ${canvas.css.toFixed(0)}px）—— 缩成一小块了`
+  ).toBeGreaterThan(500);
+  expect(
+    bounds!.right,
+    `着墨右沿 ${bounds!.right.toFixed(0)}px 贴着画布右沿 ${canvas.css.toFixed(0)}px —— 表单被拉满了整张卡片`
+  ).toBeLessThan(canvas.css - 100);
+  // 左边不该空一片
   expect(bounds!.left, `左侧空了 ${bounds!.left.toFixed(0)}px`).toBeLessThan(canvas.css * 0.05);
 });
 
 /**
- * 窗口变窄时要**重新对齐内容**，不能只改画布尺寸。
+ * 容器变宽时表单要**跟着重新对齐**，不能只改画布尺寸。
  *
  * 这是 `setWidth()` 那条路径单独的回归：画布 `resize` 已经由引擎管了，
- * 但"表单内容多宽"是另一件事 —— 少了它，缩窗口之后画布窄了、表单还是原来那么宽，
- * 右边被裁掉；或者反过来，表单没跟着缩，右侧又空出来。
+ * 但"表单内容多宽"是另一件事 —— 少了它，画布宽了、表单还是原来那么宽，
+ * 右边照样空出一片。
+ *
+ * **为什么要从窄到宽，而不是从宽到窄**：缩窄时表单会被画布**裁掉**，
+ * 像素上"表单跟着缩了"和"表单没缩但被裁了"长得一模一样（都是着墨到右沿）——
+ * 那种用例看着在测，其实测不出来。放大的方向没有裁剪掩盖，才是可判的。
+ * （实测：1440 卡片 896 / 表单 640；820 卡片 736 / 表单 640；700 卡片 616 / 表单 616。）
  */
-test('窗口变窄后表单跟着重新对齐（不只是画布变窄）', async ({ page }) => {
+test('窗口变宽后表单跟着重新对齐（不只是画布变宽）', async ({ page }) => {
+  // 先在窄视口下打开并触发表单卡：这时容器只给得起 ~500px
+  await page.setViewportSize({ width: 600, height: 900 });
   await page.goto('/');
   await openFormCard(page);
 
-  const wide = await inkBounds(page, FORM_CANVAS);
-  expect(wide).not.toBeNull();
-  expect(wide!.widthRatio).toBeGreaterThan(0.9);
+  const narrow = await inkBounds(page, FORM_CANVAS);
+  expect(narrow).not.toBeNull();
+  // 窄的时候表单就排到容器宽度（没到 DSL 的 640 上限）
+  expect(narrow!.right, '窄视口下表单应当排到约 500px').toBeLessThan(600);
+  expect(narrow!.widthRatio).toBeGreaterThan(0.9);
 
-  await page.setViewportSize({ width: 820, height: 900 });
+  // 放大到卡片能给出 896 —— 表单要跟到内容上限 640，而不是停在那 500
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   // `window.resize` → `view.resizeAll()` 是同步的，但布局/重绘要等一帧，所以轮询而不是赌
   await expect
-    .poll(async () => (await inkBounds(page, FORM_CANVAS))?.right ?? Infinity, {
-      message: '缩窄之后表单没有跟着变窄',
+    .poll(async () => (await inkBounds(page, FORM_CANVAS))?.right ?? 0, {
+      message: '放大之后表单没有跟着变宽（少了 setWidth 就是这个症状）',
       timeout: 5000,
     })
-    .toBeLessThan(wide!.right - 100);
+    .toBeGreaterThan(narrow!.right + 100);
 
-  // 变窄之后仍然是"铺满新宽度"，而不是"缩了一点点然后右边又空出来"
-  const narrow = await inkBounds(page, FORM_CANVAS);
-  expect(
-    narrow!.widthRatio,
-    `缩窄后着墨只占 ${(narrow!.widthRatio * 100).toFixed(1)}%`
-  ).toBeGreaterThan(0.9);
+  const wide = await page.evaluate((sel) => {
+    const c = document.querySelector(sel) as HTMLCanvasElement;
+    return Math.round(c.getBoundingClientRect().width);
+  }, FORM_CANVAS);
+  const bounds = await inkBounds(page, FORM_CANVAS);
+
+  // 停在内容上限 640，不是铺满整张 896 的卡片
+  expect(wide).toBeGreaterThan(700);
+  expect(bounds!.right).toBeGreaterThan(Math.min(wide, 640) - 8);
+  expect(bounds!.right).toBeLessThanOrEqual(Math.min(wide, 640) + 8);
 });
