@@ -28,34 +28,42 @@
        * 从 `ice-web-components` 的主题 token 表写进来（`applyThemeToCss()`）。
        *
        * 为什么这么做：这个界面是"DOM 外壳 + canvas 内容"两半拼的，两边各抄一套颜色
-       * 必然漂 —— 第一版就是画布里的控件是 Bootstrap 深灰、外壳是另一套蓝，像两个应用。
+       * 必然漂 —— 试过一次：画布里的控件是 Bootstrap 深灰、外壳是另一套蓝，像两个应用。
        * 现在只有一份 token 表，两边都从它读。
        *
-       * 这几行只是**兜底**（JS 没跑起来时不至于白屏），值取自暗色主题。
+       * 这几行只是**兜底**（JS 没跑起来时不至于白屏），取值与默认主题一致（light）。
+       * 想换主题用 `?theme=dark`，别改这里 —— 改这里只影响"JS 没跑起来"那一瞬。
        */
       :root {
-        --bg: #212529;
-        --panel: #2b3035;
-        --elevated: #343a40;
-        --line: #495057;
-        --text: #dee2e6;
-        --muted: #adb5bd;
-        --hint: #8a9199;
+        --bg: #f8f9fa;
+        --panel: #ffffff;
+        --elevated: #ffffff;
+        --line: #dee2e6;
+        --text: #212529;
+        --muted: #6c757d;
+        --hint: #adb5bd;
         --ice: #61d9fb;
-        --ice-soft: #04222b;
-        --ice-line: #14657f;
+        --ice-ink: #0d7ea8;
+        --ice-soft: #cfe2ff;
+        --ice-line: #9ec5fe;
         --ok: #198754;
         --warn: #ffc107;
         --err: #dc3545;
-        --warn-bg: #332701;
-        --warn-line: #664d03;
-        --err-bg: #2c0b0e;
-        --err-line: #842029;
-        --bubble-user: #04222b;
-        --bubble-agent: #343a40;
+        --warn-bg: #fff3cd;
+        --warn-line: #ffe69c;
+        --warn-text: #664d03;
+        --err-bg: #f8d7da;
+        --err-line: #f1aeb5;
+        --err-text: #58151c;
+        --bubble-user: #cfe2ff;
+        --bubble-agent: #f8f9fa;
+        --code-bg: #0f172a;
+        --code-fg: #b6e3f5;
         --radius: 10px;
-        color-scheme: dark;
+        color-scheme: light;
       }
+      /* 主题名由 JS 写在 <html data-theme> 上；只用来切 color-scheme（滚动条、原生控件） */
+      html[data-theme='dark'] { color-scheme: dark; }
 
       * { box-sizing: border-box; }
 
@@ -92,7 +100,7 @@
         margin: 0;
         letter-spacing: 0.2px;
       }
-      header h1 span { color: var(--ice); }
+      header h1 span { color: var(--ice-ink); }
       header .meta {
         font-size: 12px;
         color: var(--muted);
@@ -216,9 +224,9 @@
       /* 流式拼装中的参数（半成品 DSL）——这是 AG-UI 相对"只转个圈"的差别所在 */
       .args {
         font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        /* 半成品 DSL 的代码块：比面板再深一档，跟"正文气泡"区分开 */
-        background: #101418;
-        color: #9fdcf2;
+        /* 半成品 DSL 的代码块：两种主题都用深底，跟"正文气泡"明确分开 */
+        background: var(--code-bg);
+        color: var(--code-fg);
         border-radius: 6px;
         padding: 10px 12px;
         max-height: 168px;
@@ -246,10 +254,10 @@
         border-radius: 6px;
         background: var(--err-bg);
         border: 1px solid var(--err-line);
-        color: #f1aeb5;
+        color: var(--err-text);
         margin-bottom: 6px;
       }
-      .diag li.warn { background: var(--warn-bg); border-color: var(--warn-line); color: #ffda6a; }
+      .diag li.warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-text); }
       .diag li code { color: inherit; opacity: 0.75; }
 
       .hint {
@@ -257,7 +265,7 @@
         color: var(--muted);
         margin-top: 8px;
       }
-      .hint b { color: var(--ice); font-weight: 600; }
+      .hint b { color: var(--ice-ink); font-weight: 600; }
 
       /* ---------- 输入区 ---------- */
       footer {
@@ -308,7 +316,7 @@
         color: var(--muted);
         cursor: pointer;
       }
-      .chip:hover { border-color: var(--ice); color: var(--ice); }
+      .chip:hover { border-color: var(--ice); color: var(--ice-ink); }
       /* 滚动条也跟着暗色，否则右边会亮一条 */
       #thread::-webkit-scrollbar, .args::-webkit-scrollbar { width: 10px; height: 10px; }
       #thread::-webkit-scrollbar-thumb, .args::-webkit-scrollbar-thumb {

@@ -11,6 +11,9 @@
  * 2. **不能只等 `status`**：上一轮结束时它就已经是 `idle`，等待会立刻返回，
  *    于是下一次点击落在 run 还没开始的时候 —— 而应用有 `if (running) return` 的护栏，
  *    那一次点击被静默吞掉，后面就永远等不到。判据必须是"状态对了 **且** 事件数涨过基线"。
+ * 3. **比视口高的元素不能直接截**：`#thread` 是滚动容器、页头页脚是固定的，
+ *    Playwright 对超高的元素会滚动拼接，结果是把固定的头尾糊进图中间。
+ *    所以拍一整张卡片（比如 10 个字段的控件原型页）之前，先把视口调够高。
  *
  * 用法：先起服务（`npm run dev`），再 `node scripts/shoot-docs.cjs`。
  */
@@ -35,6 +38,16 @@ const BASE = process.env.CONSOLE_URL || 'http://127.0.0.1:8100/';
   const shoot = async (name, locator = page.locator('#app')) => {
     await locator.screenshot({ path: path.join(OUT, `${name}.png`) });
     console.log('  →', `${name}.png`);
+  };
+
+  /** 拍卡片特写用：把视口调够高，免得超高元素被滚动拼接、固定的头尾糊进图中间。 */
+  const needTall = async (height = 1800) => {
+    await page.setViewportSize({ width: 1100, height });
+    await page.waitForTimeout(300);
+  };
+  const needWindow = async () => {
+    await page.setViewportSize({ width: 1100, height: 940 });
+    await page.waitForTimeout(300);
   };
 
   const toBottom = async () => {
@@ -77,16 +90,19 @@ const BASE = process.env.CONSOLE_URL || 'http://127.0.0.1:8100/';
   await shoot('streaming');
 
   // ---- 4. 人机回环：中断 → 表单卡（停在 waiting）----
+  // 后面三张是**卡片特写**，卡片比"一个窗口高"，所以先把视口调够高（见文件头第 3 条）
+  await needTall();
   await chip('要下发指令', 'waiting', 900);
   await shoot('form-card', lastCard());
 
-  // ---- 5. 新控件原型 ----
+  // ---- 5. 新控件原型（10 个字段，最高的一张）----
   await chip('看看新控件都能用吗');
   await shoot('showcase', lastCard());
 
   // ---- 6. 自修复：校验不通过的卡片 + 诊断 ----
   await chip('故意画错');
   await shoot('self-repair', lastCard());
+  await needWindow();
 
   console.log('错误 =', errs.length ? errs : '无');
   await browser.close();
