@@ -14,7 +14,7 @@ import {
   DSL_DIAGNOSTICS_CONTEXT_KEY,
   VIEW_INTERACTION_CONTEXT_KEY,
 } from '../../shared/contract';
-import { runAgent, apiUrl } from '../domain/agui/client';
+import { runAgent, apiUrl, type ResumeEntry } from '../domain/agui/client';
 import {
   initialState,
   reduce,
@@ -97,13 +97,39 @@ const view = new ThreadView(
     },
   },
   {
-    actions: WIDGET_ACTIONS,
-    // 上行第 3 种：**canvas 控件**上的点击。
-    // 前两种来自图表那张画布，这一种来自控件条那张 —— 两个 ICE 实例、两张画布，
-    // 走的是同一条协议通道。
-    onAction: (actionId) => {
-      void send(WIDGET_PROMPTS[actionId] ?? actionId, {
-        interaction: { kind: 'widget-action', action: actionId },
+    widgets: {
+      // 图表卡的控件条（第二块画布）
+      actions: WIDGET_ACTIONS,
+      // 上行第 3 种：**canvas 控件**上的点击。
+      // 前两种来自图表那张画布，这一种来自控件条那张 —— 两个 ICE 实例、两张画布，
+      // 走的是同一条协议通道。
+      onAction: (actionId) => {
+        void send(WIDGET_PROMPTS[actionId] ?? actionId, {
+          interaction: { kind: 'widget-action', action: actionId },
+        });
+      },
+    },
+
+    /**
+     * 表单卡提交 —— **这条就是 AG-UI 的人机回环**。
+     *
+     * 协议规定：恢复一个被中断的 run 的方式是**开一个新的 run**，并在 `resume` 里逐条应答
+     * 所有仍打开的中断。所以这里不是"接着跑"，而是带着答案发起新一轮。
+     */
+    onFormSubmit: (values, toolCallId) => {
+      const pending = state.interrupt;
+      dispatch({ type: '@local/form-submitted', toolCallId });
+      view.card(toolCallId)?.markFormSubmitted();
+
+      const summary = Object.entries(values)
+        .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join('/') : value}`)
+        .join(', ');
+      void send(`（已提交表单：${summary}）`, {
+        ...(pending
+          ? {
+              resume: [{ interruptId: pending.id, status: 'resolved' as const, payload: values }],
+            }
+          : {}),
       });
     },
   }
@@ -173,7 +199,13 @@ function applyEffects(effects: Effect[]): string | null {
 function updateMeta(): void {
   const charts = state.items.filter((i) => i.kind === 'tool' && i.status !== 'streaming').length;
   const status =
-    state.status === 'running' ? '运行中' : state.status === 'error' ? '出错' : '空闲';
+    state.status === 'running'
+      ? '运行中'
+      : state.status === 'waiting'
+        ? '等待作答'
+        : state.status === 'error'
+          ? '出错'
+          : '空闲';
   metaEl!.innerHTML =
     `thread <b>${state.threadId.slice(-6)}</b> · ` +
     `事件 <b>${state.eventCount}</b> · ` +
@@ -191,6 +223,8 @@ interface SendOptions {
   interaction?: Record<string, any>;
   /** 这是自修复的自动重试，不要再插一条用户气泡。 */
   auto?: boolean;
+  /** 对上一轮中断的答复。协议规定恢复中断 = 开新 run + 带上它。 */
+  resume?: ResumeEntry[];
 }
 
 async function send(text: string, options: SendOptions = {}): Promise<void> {
@@ -233,6 +267,7 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
         messages,
         state: state.sharedState ?? {},
         context,
+        ...(options.resume ? { resume: options.resume } : {}),
       },
       {
         onEvent: (event) => dispatch(event),
@@ -262,6 +297,7 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
 const CHIPS = [
   '看看各渠道的月度销量',
   '看一下实时吞吐量',
+  '要下发指令',
   '故意画错',
   '今天天气怎么样',
 ];
@@ -309,6 +345,10 @@ window.addEventListener('resize', () => view.resizeAll());
    * canvas 里没有 DOM 目标可定位，e2e 要点中某个按钮就得知道它画在哪。
    */
   widgetRects: () => view.lastCard()?.widgetRects() ?? [],
+  /** 表单卡提交按钮的页面坐标。canvas 里没有 DOM 目标，e2e 要靠它点中。 */
+  formSubmitPoint: () => view.lastFormCard()?.formSubmitPoint() ?? null,
+  /** 往最后一张表单卡里写值。canvas 表单没法用 DOM 填，测试与调试需要这个口。 */
+  fillForm: (values: Record<string, any>) => view.lastFormCard()?.fillForm(values) ?? false,
 };
 
 inputEl.focus();

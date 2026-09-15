@@ -18,6 +18,26 @@
 export const RENDER_CHART_TOOL = 'render_chart';
 
 /**
+ * 收集用户输入的工具名。参数是一份**表单 DSL**（`ice-web-components-dsl`）。
+ *
+ * 卡片按工具名分派：`render_chart` 出图表、`collect_input` 出表单。
+ * 这就是"一张卡片 = 一次 tool call"这个粒度的好处 —— 加一种卡片只是加一个工具名，
+ * 归约器与时间线完全不用动。
+ */
+export const COLLECT_INPUT_TOOL = 'collect_input';
+
+/**
+ * 图表 DSL 在共享状态里的键。
+ *
+ * AG-UI 的 `state` 是**一份两边都看得见的文档**，这里放"画布上现在是什么"。
+ * 与 `form` 分开命名而不是共用 `dsl`，是为了让 agent 一眼看出当前是什么内容。
+ */
+export const STATE_CHART_KEY = 'chart';
+
+/** 表单 DSL 在共享状态里的键。 */
+export const STATE_FORM_KEY = 'form';
+
+/**
  * 「指着讲」的画布指令。走 CUSTOM 事件。
  *
  * 不走 tool call：它不是一次工具执行，没有参数、没有结果。
@@ -53,3 +73,15 @@ export const DSL_DIAGNOSTICS_CONTEXT_KEY = 'ice-dsl-diagnostics';
  * 提示词里可以给"用户动作"一个明确的地位，也便于以后换成别的协议时原样搬走。
  */
 export const VIEW_INTERACTION_CONTEXT_KEY = 'ice-view-interaction';
+
+/**
+ * 用户提交表单后回传的上下文键。
+ *
+ * 与 `interrupt` 的 `resume.payload` 是**两回事**，别混：
+ * - `resume.payload` 是协议原生的"对这次中断的答复"，走 `RunAgentInput.resume`；
+ * - 这条 context 是应用层的补充说明（哪个卡片、什么场景），走 `context`。
+ *
+ * 之所以两者都发：`resume` 让协议层知道"这个中断被答复了"，
+ * `context` 让 agent 知道"这次答复来自哪张卡片"—— 后者协议不管，但提示词里有用。
+ */
+export const FORM_SUBMIT_CONTEXT_KEY = 'ice-form-submit';

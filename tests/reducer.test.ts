@@ -218,6 +218,100 @@ describe('自定义事件 / 叙事', () => {
   });
 });
 
+describe('人机回环（中断与 resume）', () => {
+  it('RUN_FINISHED 带 interrupt outcome → 状态是 waiting 而不是 idle', () => {
+    // 协议里中断**也是** RUN_FINISHED。如果一律记成 idle，
+    // 后续逻辑就会以为一切正常 —— 用户还没填表呢。
+    const { state } = run([
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: 't1',
+        runId: 'r1',
+        outcome: { type: 'interrupt', interrupts: [{ id: 'i1', reason: '需要参数', message: '请确认' }] },
+      },
+    ]);
+    expect(state.status).toBe('waiting');
+    expect(state.interrupt).toEqual({ id: 'i1', reason: '需要参数', message: '请确认' });
+  });
+
+  it('多中断时取第一个', () => {
+    const { state } = run([
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: 't1',
+        runId: 'r1',
+        outcome: {
+          type: 'interrupt',
+          interrupts: [
+            { id: 'i1', reason: 'r1' },
+            { id: 'i2', reason: 'r2' },
+          ],
+        },
+      },
+    ]);
+    expect(state.interrupt?.id).toBe('i1');
+  });
+
+  it('没有 outcome（普通结束）时不进入 waiting', () => {
+    const { state } = run([
+      { type: EventType.RUN_FINISHED, threadId: 't1', runId: 'r1' },
+    ]);
+    expect(state.status).toBe('idle');
+    expect(state.interrupt).toBeNull();
+  });
+
+  it('outcome 是 success 时也不进入 waiting', () => {
+    const { state } = run([
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: 't1',
+        runId: 'r1',
+        outcome: { type: 'success' },
+      },
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  it('开新一轮 run 就把中断清掉（协议规定的恢复方式就是开新 run）', () => {
+    const { state } = run([
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: 't1',
+        runId: 'r1',
+        outcome: { type: 'interrupt', interrupts: [{ id: 'i1', reason: 'r' }] },
+      },
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r2' },
+    ]);
+    expect(state.interrupt).toBeNull();
+    expect(state.status).toBe('running');
+  });
+
+  it('表单提交：标记卡片为已提交，并清掉中断', () => {
+    const { state } = run([
+      { type: EventType.TOOL_CALL_START, toolCallId: 'tc1', toolCallName: 'collect_input' },
+      { type: EventType.TOOL_CALL_ARGS, toolCallId: 'tc1', delta: '{"kind":"form"}' },
+      { type: EventType.TOOL_CALL_END, toolCallId: 'tc1' },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: 't1',
+        runId: 'r1',
+        outcome: { type: 'interrupt', interrupts: [{ id: 'i1', reason: 'r' }] },
+      },
+      { type: '@local/form-submitted', toolCallId: 'tc1' },
+    ]);
+
+    const item = state.items[0] as ToolItem;
+    expect(item.submitted).toBe(true);
+    expect(state.interrupt).toBeNull();
+  });
+
+  it('表单提交对不存在的 toolCallId 不报错', () => {
+    const { state } = run([{ type: '@local/form-submitted', toolCallId: '不存在' }]);
+    expect(state.items).toEqual([]);
+  });
+});
+
 describe('容错口径', () => {
   it('协议词表外的事件被丢弃，状态不变也不崩', () => {
     const before = initialState('t1');

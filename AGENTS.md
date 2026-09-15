@@ -17,12 +17,16 @@
    用 `validateChartDsl → compileChartDsl → createChart / setOption`，实例只建一次。
 4. **`appendData` 只能用在数值/时间轴。** 它不补 `xAxis.data`，类目轴追加新类目会错位。
    判不了就走全量 `setOption`（判断逻辑在 `src/domain/ice/option-mapping.ts`）。
-5. **一张卡片里是两块画布，别把它们混起来。**
-   `.chart-wrap` 是图表（`ice-chart` 自己 `new ICE()`）、`.widget-wrap` 是控件条
-   （`ice-web-components` 画在另一个 ICE 实例上）。写选择器时**必须指明是哪一块** ——
-   `.card canvas` 会命中第一块，那种"靠 DOM 顺序"的写法一旦有人调整顺序就会静默量错对象
-   （`e2e/helpers.ts` 里的 `CHART_CANVAS` / `WIDGET_CANVAS`）。
+5. **卡片按 tool 名分派，三种形态互斥。** `render_chart` → 图表卡（`.chart-wrap` +
+   `.widget-wrap` 两块画布）；`collect_input` → 表单卡（`.form-wrap` 一块）。
+   写选择器时**必须指明是哪一块**，并在断言"显示的是哪种形态"时用**可见性**而不是计数 ——
+   卡片骨架在构造时就一并建好了容器，`hidden` 的那些也在 DOM 里
+   （`e2e/helpers.ts` 的 `CHART_CANVAS` / `WIDGET_CANVAS` / `FORM_CANVAS`）。
    层之间是**并排**的，不需要 `linkViewport` / `setInputPassthrough`。
+6. **中断轮的结束状态是 `waiting`，不是 `idle`。** 协议里中断**也是** `RUN_FINISHED`。
+   所以 e2e 里不能用 `settleAfter`（它等 `idle`）去等一次中断 —— 永远等不到。
+7. **恢复中断 = 开新 run + 带 `resume`**，不是"接着跑"。
+   形状从 `@ag-ui/core` 的 schema 问出来的：`{ interruptId, status: 'resolved' | 'cancelled', payload? }`。
 6. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
    `__iceAgentConsole.widgetRects()`（应用挂出来的矩形查询），不要写死像素偏移 ——
    按钮宽度是按文案字数算的，改一个字就全错位。
@@ -41,8 +45,10 @@
 | 协议 → ICE 的纯翻译 | `src/domain/ice/option-mapping.ts` |
 | 层（canvas + ICE 实例）的尺寸与生命周期 | `src/domain/ice/layer.ts` |
 | 图表实例的建立与交互接线 | `src/view/chart-adapter.ts` |
-| 控件层（第二块画布，ice-web-components） | `src/view/widget-layer.ts` |
-| 卡片 DOM（两块画布的容器） | `src/view/card.ts` |
+| 控件层（图表卡的第二块画布，ice-web-components） | `src/view/widget-layer.ts` |
+| 表单层（表单卡的画布，ice-web-components-dsl） | `src/view/form-layer.ts` |
+| 卡片 DOM 与**按 tool 名分派** | `src/view/card.ts` |
+| 中断 / resume 的归约 | `src/domain/agui/reducer.ts` |
 | thread DOM 外壳 | `src/view/thread.ts` |
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |

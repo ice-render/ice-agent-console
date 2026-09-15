@@ -35,6 +35,22 @@ export interface RunRequest {
   state?: any;
   /** 应用扩展通道。自修复回路就是靠它把渲染端诊断带回去的。 */
   context?: Array<{ description: string; value: string }>;
+  /**
+   * 对上一轮中断的答复。
+   *
+   * 协议规定：恢复一个被中断的 run 的方式是**开一个新的 run**，并在 `resume` 里
+   * 逐条应答所有仍然打开的中断（`interruptId` + `status` + `payload`）。
+   * `status` 只有 `'resolved'` / `'cancelled'` 两个取值（这是 schema 里的枚举，不是自定的）。
+   */
+  resume?: ResumeEntry[];
+}
+
+/** 对应协议里的 `ResumeEntry`。 */
+export interface ResumeEntry {
+  interruptId: string;
+  status: 'resolved' | 'cancelled';
+  /** 用户的答复。表单场景就是 `getValues()` 的产物。 */
+  payload?: any;
 }
 
 export interface RunHandlers {
@@ -67,6 +83,8 @@ export async function runAgent(
         context: request.context ?? [],
         tools: [],
         forwardedProps: {},
+        // 只在真的有中断要回复时才带上：空数组在协议里是合法的，但语义上多余
+        ...(request.resume && request.resume.length > 0 ? { resume: request.resume } : {}),
       }),
       signal,
     });

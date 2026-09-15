@@ -178,6 +178,18 @@
       }
       .widget-wrap canvas { display: block; }
 
+      /*
+       * 表单层：与图表层**互斥**（一次 tool call 要么是图表要么是表单），
+       * 也是画在自己的 canvas 上、自己的 ICE 实例里。
+       * 用左侧一道实线跟"图"区分开 —— 让人一眼看出这不是图表卡片。
+       */
+      .form-wrap {
+        border-left: 3px solid var(--ice);
+        border-radius: 4px;
+        padding-left: 10px;
+      }
+      .form-wrap canvas { display: block; }
+
       /* 流式拼装中的参数（半成品 DSL）——这是 AG-UI 相对"只转个圈"的差别所在 */
       .args {
         font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -281,7 +293,7 @@
       <div id="thread">
         <div class="empty">
           问一句，Agent 会把图表<strong>内联成卡片</strong>画在对话里。<br />
-          试试 <code>看看各渠道的月度销量</code><br />
+          试试 <code>看看各渠道的月度销量</code>、<code>要下发指令</code><br />
           想看自修复回路，试试 <code>故意画错</code>
         </div>
       </div>

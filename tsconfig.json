@@ -29,7 +29,8 @@
       "ice-render": ["../ice-render"],
       "@damoqiongqiu/ice-chart": ["../ice-chart"],
       "@damoqiongqiu/ice-chart-dsl": ["../ice-chart-dsl"],
-      "ice-web-components": ["../ice-web-components"]
+      "ice-web-components": ["../ice-web-components"],
+      "ice-web-components-dsl": ["../ice-web-components-dsl"]
     }
   },
   "include": ["src", "shared", "tests", "e2e", "playwright.config.ts"]

@@ -13,7 +13,7 @@
  */
 import type { ThreadState, TextItem, ToolItem } from '../domain/agui/reducer';
 import type { InteractionHandlers } from './chart-adapter';
-import { CardView, type CardWidgets } from './card';
+import { CardView, type CardOptions } from './card';
 
 interface TextSlot {
   wrap: HTMLElement;
@@ -29,8 +29,8 @@ export class ThreadView {
     private readonly root: HTMLElement,
     /** 上行通道的回调。每张图表卡片创建时都会挂上它。 */
     private readonly handlers: InteractionHandlers = {},
-    /** 卡片底部的 canvas 控件条（第二块画布）。不传就不建。 */
-    private readonly widgets?: CardWidgets
+    /** 卡片选项：图表卡的控件条、表单卡的提交回调。 */
+    private readonly options: CardOptions = {}
   ) {
     this.emptyEl = root.querySelector('.empty');
   }
@@ -79,7 +79,7 @@ export class ThreadView {
   private renderTool(item: ToolItem): HTMLElement {
     let card = this.cards.get(item.id);
     if (!card) {
-      card = new CardView(item.id, this.handlers, this.widgets);
+      card = new CardView(item.id, this.handlers, this.options);
       this.cards.set(item.id, card);
     }
     card.update(item);
@@ -94,6 +94,19 @@ export class ThreadView {
       if (id) {
         const card = this.cards.get(id);
         if (card?.mounted) return card;
+      }
+    }
+    return undefined;
+  }
+
+  /** 最后一张表单卡 —— 表单提交按钮定位用。 */
+  lastFormCard(): CardView | undefined {
+    for (let i = this.root.children.length - 1; i >= 0; i--) {
+      const el = this.root.children[i] as HTMLElement;
+      const id = el.dataset?.toolCallId;
+      if (id) {
+        const card = this.cards.get(id);
+        if (card?.isForm) return card;
       }
     }
     return undefined;

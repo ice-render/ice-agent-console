@@ -20,6 +20,7 @@ const family = {
   '@damoqiongqiu/ice-chart': path.resolve(WORKSPACE, 'ice-chart'),
   '@damoqiongqiu/ice-chart-dsl': path.resolve(WORKSPACE, 'ice-chart-dsl'),
   'ice-web-components': path.resolve(WORKSPACE, 'ice-web-components'),
+  'ice-web-components-dsl': path.resolve(WORKSPACE, 'ice-web-components-dsl'),
 };
 
 module.exports = (env, argv) => {

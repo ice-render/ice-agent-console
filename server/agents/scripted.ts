@@ -100,11 +100,16 @@ export class ScriptedAgent implements AgentRun {
   constructor(private pace: Pace = DEFAULT_PACE) {}
 
   async *run(input: RunAgentInput, signal?: AbortSignal): AsyncIterable<AnyEvent> {
-    const message = lastUserMessage(input);
-    const diagnostics = readDiagnostics(input);
-    const interaction = readInteraction(input);
-    // state 一起传进去：agent 要能读到"现在画面上是什么"，才能做"换个画法"这类事
-    const plan = buildPlan(message, diagnostics !== null, interaction, input.state);
+    // 五样输入一起交给剧本层。其中 resume 是协议原生的"对中断的答复"——
+    // 有了它，这一轮就不是"用户又说了句话"，而是"上一轮那个口子被填上了"。
+    const plan = buildPlan({
+      message: lastUserMessage(input),
+      hasDiagnostics: readDiagnostics(input) !== null,
+      interaction: readInteraction(input),
+      // state 让 agent 能读到"现在画面上是什么"，才能做"换个画法"这类事
+      state: input.state,
+      resume: (input as any).resume ?? null,
+    });
 
     const events = planToEvents(plan, {
       threadId: input.threadId,

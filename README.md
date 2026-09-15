@@ -35,6 +35,7 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 | 按钮 | 演示什么 |
 |---|---|
 | 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 上画布 → **指着 3 月讲** |
+| 要下发指令 | **人机回环**：中断 → 出表单卡 → 填完提交 → 带 `resume` 开新 run |
 | 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 |
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 |
 | 今天天气怎么样 | 兜底：不画图，只回文字 |
@@ -90,7 +91,34 @@ npm run serve        # 只跑静态产物（仍需后端在跑）
 前者逐项说出当前图表的类型/列/编码，后者**只换 `kind`、数据一行不动**重新画一张。
 agent 不需要你复述"刚才画的是什么"。
 
-### 2.5 双向：诊断回灌的自修复
+### 2.5 双向：人机回环（中断 → 填表 → resume）
+
+Agent 缺参数时**不是反问一句**，而是走协议的中断：
+
+```
+RUN_FINISHED { outcome: { type: 'interrupt', interrupts: [{ id, reason, message }] } }
+```
+
+前端据此进入 `waiting`（不是 `idle` —— 用户还没答），并把 `collect_input` 那张 tool call
+渲染成**表单卡**。用户填完点提交：
+
+```
+新一轮 run 的 RunAgentInput.resume = [{ interruptId, status: 'resolved', payload: values }]
+```
+
+要点（这几条不是自定的，是从 `@ag-ui/core` 的 schema 问出来的）：
+
+| 协议事实 | 含义 |
+|---|---|
+| 中断**也是** `RUN_FINISHED` | "run 结束了"与"还留着一个待答复的口子"不矛盾 |
+| `interrupt` 形状 `{ id, reason, message? }` | `id` / `reason` 必填，数组非空 |
+| 恢复 = **开新 run** + `resume` | 不是"接着跑"，所以前端要带上答案重发 |
+| `status: 'resolved' \| 'cancelled'` | 只有两个取值 |
+
+表单本身由 `ice-web-components-dsl` 渲染 —— agent 只声明"要问什么"。
+**这是 M1 里唯一一处"Agent 不只是说话，而是要用户做一件事"的能力。**
+
+### 2.6 双向：诊断回灌的自修复
 
 `ice-chart-dsl` 的 `validateChartDsl` **任何输入都不抛异常**，它的设计目的就是
 "给 agent 做自修复用的反馈通道"——诊断里带可用列名、表达式字符位置。
@@ -123,14 +151,27 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 所以**DOM 管 thread 外壳（消息列表/滚动/输入框/卡片容器），canvas 管卡片内容**。
 这个工程不是纯 canvas 应用，这是有意为之。
 
-### 3.3 卡片里是**两块**画布
+### 3.3 卡片按 tool 名分派：一次 tool call 一种形态
+
+`CardView` 按工具名分派，**加一种卡片只是加一个工具名** —— 归约器与时间线完全不用动：
+
+| 工具名 | 卡片形态 | 画布 |
+|---|---|---|
+| `render_chart` | 图表卡 | `.chart-wrap` + `.widget-wrap`（两块，两个 ICE 实例） |
+| `collect_input` | **表单卡** | `.form-wrap`（一块，由 `ice-web-components-dsl` 渲染） |
+
+三者**互斥**（一次 tool call 只有一种形态），但卡片骨架在构造时就一并建好了容器，
+靠 `hidden` 切换。所以 e2e 要按**可见性**断言，不能数 canvas 的个数。
 
 一张图表卡片里有两个独立的 ICE 实例：
 
 ```
-┌─ 卡片 ─────────────────────────────────┐
+┌─ 图表卡 ───────────────────────────────┐
 │ .chart-wrap  <canvas>                   │  ← ICE 实例 ①（ice-chart 自己 new 的）
 │ .widget-wrap <canvas>                   │  ← ICE 实例 ②（ice-web-components 的控件条）
+└─────────────────────────────────────────┘
+┌─ 表单卡 ───────────────────────────────┐
+│ .form-wrap   <canvas>                   │  ← ICE 实例③（ice-web-components-dsl）
 └─────────────────────────────────────────┘
 ```
 
@@ -181,6 +222,8 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | 上行 `brush:end` | → 新 run，`context` 带选区 | 同上 |
 | 上行 控件按钮 click | → 新 run，`context` 带 `widget-action` | 来自**第二块画布** |
 | 下行 **读** `RunAgentInput.state` | agent 据此知道当前图表是什么 | 见 §2.4 |
+| `RUN_FINISHED` + `outcome.interrupt` | 状态进 `waiting`；卡片渲染成**表单** | 见 §2.5 |
+| 上行 `RunAgentInput.resume` | 用户提交表单 → 带答案开新 run | 协议原生通道 |
 
 ### 4.1 事件顺序：先画后讲
 
@@ -240,9 +283,9 @@ RUN_FINISHED
 4. **不做 thread 持久化。** 刷新即清空。`threadId` 已经按协议在用，但没存。
 5. **不做 reasoning / subagent / activity 事件。** 协议里有，本工程没用。
    归约器对未知事件是丢弃语义，所以它们不会导致崩溃，只是不显示。
-6. **不做完整的人机回环（interrupt / resume）。** `ice-web-components` 已经接进来了
-   （§3.3），但只用它画了卡片底部的控件条。`interrupt` 要用 `ICEFormModel` 收参数、
-   提交后开新 run 带 `resume` —— 那条路还没走。
+6. **不做多中断并发。** 协议允许 `RUN_FINISHED` 一次带多个 `interrupts`，
+   本工程一次只处理一个（取第一个）。多中断需要给每张表单卡各自绑定 interruptId ——
+   归约器已经按数组收了，缺的是卡片与 interruptId 的关联。
 
 ---
 
@@ -265,7 +308,8 @@ ice-agent-console/
 │   ├── view/                DOM 外壳 + canvas 层
 │   │   ├── chart-adapter.ts 图表层（ICE 实例 ①）
 │   │   ├── widget-layer.ts  控件层（ICE 实例 ②，ice-web-components 画）
-│   │   ├── card.ts          卡片 = 两块画布
+│   │   ├── form-layer.ts    表单层（表单卡唯一那块画布，ice-web-components-dsl 画）
+│   │   ├── card.ts          卡片：按 tool 名分派出图表 / 表单
 │   │   └── thread.ts        thread 外壳
 │   └── entries/boot.ts      接线：分发动作、执行 effects、触发 run
 ├── shared/contract.ts       自定义事件名 / context 键（server 与 web 的唯一出处）
@@ -331,10 +375,10 @@ npm run verify:full   # 上面 + playwright
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **97 passed** / 7 suites |
-| e2e | **16 passed** / 5 specs |
-| 源码 | 2721 行（`server` + `src` + `shared`，含注释） |
-| 测试 | 1830 行（`tests` + `e2e`） |
+| 单测 | **118 passed** / 7 suites |
+| e2e | **20 passed** / 6 specs |
+| 源码 | 3255 行（`server` + `src` + `shared`，含注释） |
+| 测试 | 2278 行（`tests` + `e2e`） |
 | 生产包 | 1113 KiB（引擎 283 + 图表 281 + 控件库 488 + DSL 19 + 应用 242，未压缩） |
 
 > 控件库（`ice-web-components`）一进来就占掉 488 KiB —— 是反着用的代价：
@@ -370,8 +414,11 @@ LLM:     用户消息 → (模型) ─┘
 方括号里那一段（`dsl-to-events.ts`）**两个实现共享**。M2 真正新增的只有
 "把自然语言变成 `ChartPlan`"，下游一行不动。
 
-`context`（用户做了什么）与 `state`（画面上是什么）两条输入通道都已经通了（§2.3 / §2.4），
-所以接模型时不用再动管道 —— 提示词里把这两条讲清楚就行。
+三条输入通道都已经通了：`context`（用户做了什么）、`state`（画面上是什么）、
+`resume`（用户对中断的答复）。所以接模型时不用再动管道 —— 提示词里把这三条讲清楚就行。
+
+对 M2 尤其重要的是 `resume`：模型要先决定"我还缺什么参数"，再产出一份表单 DSL，
+然后**停下来**（中断）。这三步里前两步是模型擅长的事，第三步是协议保证的。
 
 `server/index.ts` 里换实现只动一行：
 

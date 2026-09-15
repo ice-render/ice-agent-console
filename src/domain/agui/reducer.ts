@@ -44,6 +44,8 @@ export interface ToolItem {
   dsl?: any;
   parseError?: string;
   result?: string;
+  /** 表单卡：用户已经提交过（避免重复提交，也让卡片能显示终态）。 */
+  submitted?: boolean;
 }
 
 export type ThreadItem = TextItem | ToolItem;
@@ -51,7 +53,13 @@ export type ThreadItem = TextItem | ToolItem;
 export interface ThreadState {
   threadId: string;
   runId: string | null;
-  status: 'idle' | 'running' | 'error';
+  /**
+   * `waiting` = run 正常结束了，但**留了一个待答复的中断**。
+   *
+   * 协议里中断也是 `RUN_FINISHED`（带 `outcome.type === 'interrupt'`），
+   * 如果一律记成 idle，后续逻辑就会以为一切正常 —— 用户还没填表呢。
+   */
+  status: 'idle' | 'running' | 'waiting' | 'error';
   items: ThreadItem[];
   /**
    * AG-UI 的共享状态文档。`STATE_SNAPSHOT` 整体写它，`STATE_DELTA` 打补丁。
@@ -73,6 +81,11 @@ export interface ThreadState {
    */
   diagnostics: string | null;
   error: string | null;
+  /**
+   * 待答复的中断。协议规定恢复方式是**开一个新 run** 并在 `resume` 里逐条应答。
+   * M1 一次只处理一个（多中断时取第一个，其余的记在 items 里由卡片各自呈现）。
+   */
+  interrupt: { id: string; reason: string; message?: string; toolCallId?: string } | null;
   /** 已折叠的事件数。标题栏显示，顺带给 e2e 一个稳定的锚点。 */
   eventCount: number;
 }
@@ -99,6 +112,7 @@ export interface Reduction {
  */
 export type LocalAction =
   | { type: '@local/user-message'; text: string }
+  | { type: '@local/form-submitted'; toolCallId: string }
   | { type: '@local/diagnostics'; text: string | null }
   | { type: '@local/reset' };
 
@@ -117,6 +131,7 @@ export function initialState(threadId: string): ThreadState {
     sharedState: null,
     pointAt: null,
     diagnostics: null,
+    interrupt: null,
     error: null,
     eventCount: 0,
   };
@@ -168,6 +183,17 @@ export function reduce(state: ThreadState, action: Action): Reduction {
       return { state: next, effects };
     }
 
+    case '@local/form-submitted': {
+      const index = indexOfItem(next.items, action.toolCallId);
+      if (index !== -1) {
+        const item = next.items[index] as ToolItem;
+        if (item.kind === 'tool') next.items[index] = { ...item, submitted: true };
+      }
+      // 提交即意味着这次中断被答复了；`RUN_STARTED` 还会再清一次，两处都留着更稳
+      next.interrupt = null;
+      return { state: next, effects };
+    }
+
     case '@local/diagnostics': {
       next.diagnostics = action.text ?? null;
       // 诊断是某一轮渲染的结果。宣告新一轮开始时它就该清掉，
@@ -187,12 +213,22 @@ export function reduce(state: ThreadState, action: Action): Reduction {
       next.error = null;
       // 新一轮开始 = 上一轮的诊断已经用掉了。清掉，免得反复回灌同一份。
       next.diagnostics = null;
+      // 中断同理：开新 run 就是"这件事翻篇了"（协议规定恢复中断的方式正是开新 run）。
+      next.interrupt = null;
       return { state: next, effects };
     }
 
     case EventType.RUN_FINISHED: {
       bump();
-      next.status = 'idle';
+      const interrupts = action.outcome?.type === 'interrupt' ? action.outcome.interrupts : null;
+      if (Array.isArray(interrupts) && interrupts.length > 0) {
+        // 注意：中断**也是** RUN_FINISHED（协议如此），所以这里不改 RunFinished 的语义，
+        // 只是把状态推进到 waiting —— 用户还没答复，界面不该显示"空闲"。
+        next.interrupt = interrupts[0];
+        next.status = 'waiting';
+      } else {
+        next.status = 'idle';
+      }
       return { state: next, effects };
     }
 

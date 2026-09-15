@@ -1,13 +1,14 @@
 /**
- * 剧本：把用户一句话映射成一份"图表计划"。
+ * 剧本：把用户一句话（以及上下文）映射成一份"工具卡计划"。
  *
  * **这是 M2 会被替换掉的那一层。** 现在它是几个 if-else，将来这里会是一次模型调用，
- * 但产出的 `ChartPlan` 形状不变——所以它下面的一切（事件序列、前端归约、ICE 渲染）都不用动。
+ * 但产出的 `ToolCardPlan` 形状不变——所以它下面的一切都不用动。
  *
- * 之所以把它单独放一个文件而不是塞进 scripted.ts：等 M2 加 `llm.ts` 的时候，
+ * 之所以单独放一个文件而不是塞进 scripted.ts：等 M2 加 `llm.ts` 的时候，
  * 两个实现摆在一起，接口一致这件事一眼就能看出来。
  */
-import type { ChartPlan } from './dsl-to-events';
+import { COLLECT_INPUT_TOOL, RENDER_CHART_TOOL, STATE_CHART_KEY, STATE_FORM_KEY } from '../../shared/contract';
+import type { ToolCardPlan } from './dsl-to-events';
 
 /** 一张表 + encoding，这就是 ice-chart-dsl 想要的形态。 */
 const SALES_DSL = {
@@ -71,29 +72,79 @@ const TRAFFIC_DSL = {
   encoding: { x: '秒', y: '吞吐' },
 };
 
+/**
+ * 人机回环要收集的参数。
+ *
+ * 这一份是 `ice-web-components-dsl` 的文档 —— agent 只声明"要问什么"，
+ * 表单怎么排、控件怎么建、校验怎么跑，都由那个包负责。
+ */
+const CONFIRM_FORM_DSL = {
+  schemaVersion: 1,
+  kind: 'form',
+  title: '下发前确认',
+  description: '这三项确认后才会把控制指令发下去。',
+  fields: [
+    {
+      name: 'station',
+      type: 'select',
+      label: '泵站',
+      required: true,
+      options: [
+        { value: 'pump-1', label: '一号泵站' },
+        { value: 'pump-2', label: '二号泵站' },
+      ],
+    },
+    {
+      name: 'mode',
+      type: 'radio-group',
+      label: '运行模式',
+      default: 'auto',
+      options: [
+        { value: 'auto', label: '自动' },
+        { value: 'manual', label: '手动' },
+      ],
+    },
+    {
+      name: 'flow',
+      type: 'number',
+      label: '目标流量 (m³/h)',
+      required: true,
+      min: 0,
+      max: 5000,
+      step: 10,
+      default: 800,
+    },
+    { name: 'note', type: 'textarea', label: '备注', maxLength: 120, placeholder: '选填' },
+  ],
+  submitText: '确认下发',
+};
+
+/** 图表卡的公共部分。 */
+function chartCard(payload: unknown, rest: Omit<ToolCardPlan, 'tool' | 'payload' | 'stateKey'>): ToolCardPlan {
+  return { tool: RENDER_CHART_TOOL, payload, stateKey: STATE_CHART_KEY, ...rest };
+}
+
 /** 默认剧本：柱状图 + 画完之后指着 3 月讲。 */
-function salesPlan(): ChartPlan {
-  return {
-    dsl: SALES_DSL,
+function salesPlan(): ToolCardPlan {
+  return chartCard(SALES_DSL, {
     intro: '好的，我拉一下各渠道的月度销量，用分组柱状图看。',
     beats: [
       { text: '画好了。整体看线上一直压着线下，' },
       { text: '不过 3 月线上有个明显的尖峰 —— 就是这个点。', pointAt: '3月' },
     ],
-  };
+  });
 }
 
 /** 流式追加剧本：先画前 6 秒，然后一拍一拍往后补数据点（走 appendData 快路径）。 */
-function streamingPlan(): ChartPlan {
-  return {
-    dsl: TRAFFIC_DSL,
+function streamingPlan(): ToolCardPlan {
+  return chartCard(TRAFFIC_DSL, {
     intro: '先给你前 6 秒的吞吐量。',
     beats: [
       { text: '我接着往前推，第 7 秒上来了：', appendRows: [[7, 171]] },
       { text: '第 8 秒继续涨：', appendRows: [[8, 188]] },
       { text: '第 9 秒开始回落了，留意这个拐点：', appendRows: [[9, 154]] },
     ],
-  };
+  });
 }
 
 /**
@@ -105,23 +156,65 @@ function streamingPlan(): ChartPlan {
  *
  * 脚本化阶段就把这条回路走通，意义在于 M2 接真模型时，回路上的每一段都已经测过了。
  */
-function repairPlan(hasDiagnostics: boolean): ChartPlan {
+function repairPlan(hasDiagnostics: boolean): ToolCardPlan {
   if (!hasDiagnostics) {
-    return {
-      dsl: BROKEN_DSL,
+    return chartCard(BROKEN_DSL, {
       intro: '我先按「销售额」这个列名画一版，你看看。',
       beats: [{ text: '这一版是故意写错的 —— 用来演示诊断回灌的自修复回路。' }],
-    };
+    });
   }
-  return {
-    dsl: SALES_DSL,
+  return chartCard(SALES_DSL, {
     intro: '收到诊断了 —— 表里没有「销售额」这一列，可用的是「销量」。改过来了：',
     beats: [{ text: '还是 3 月线上最高的那个形态。', pointAt: '3月' }],
+  });
+}
+
+/**
+ * **人机回环：中断并要参数。**
+ *
+ * 事件序列是：说一句 → 流式吐表单 DSL（前端能看到它在拼）→ STATE_SNAPSHOT →
+ * 再补一句 → `RUN_FINISHED` **带 `outcome.type === 'interrupt'`**。
+ *
+ * 注意中断也是 `RUN_FINISHED`（协议如此）——"run 结束了"与"还留着一个待答复的口子"
+ * 并不矛盾，前端据此进入 `waiting` 而不是 `idle`。
+ */
+function confirmPlan(): ToolCardPlan {
+  return {
+    tool: COLLECT_INPUT_TOOL,
+    payload: CONFIRM_FORM_DSL,
+    stateKey: STATE_FORM_KEY,
+    intro: '要下发控制指令，我得先跟你确认几项。',
+    beats: [{ text: '填好点「确认下发」，我拿到参数就继续。' }],
+    interrupt: {
+      id: 'confirm-params',
+      reason: '需要用户确认泵站与运行参数后才能下发',
+      message: '请确认泵站、运行模式与目标流量',
+    },
+  };
+}
+
+/** 收到 resume 之后：读用户填的值并应答。 */
+function resumedPlan(values: any): ToolCardPlan {
+  const pairs = Object.entries(values || {})
+    .map(([key, value]) => `  · ${key}：${Array.isArray(value) ? value.join('、') : value}`)
+    .join('\n');
+  return {
+    beats: [
+      {
+        text:
+          '收到你的确认了：\n' +
+          (pairs || '  （没有带回任何值）') +
+          '\n\n' +
+          '这些值是走协议的 `resume` 通道回来的 —— 它不是一次新的提问，' +
+          '而是对上一轮那个中断的**答复**。所以我能确定它们对应的是哪一次中断。\n' +
+          '接上模型之后，这里就会是一次真正的"拿到参数 → 继续干活"。',
+      },
+    ],
   };
 }
 
 /** 兜底：不画图，只回文字。 */
-function textOnlyPlan(message: string): ChartPlan {
+function textOnlyPlan(message: string): ToolCardPlan {
   return {
     beats: [
       {
@@ -131,6 +224,7 @@ function textOnlyPlan(message: string): ChartPlan {
           `试试这些：\n` +
           `  · 看看各渠道的月度销量\n` +
           `  · 看一下实时吞吐量\n` +
+          `  · 要下发指令（走一遍中断 → 填表 → resume 的人机回环）\n` +
           `  · 故意画错（走一遍诊断回灌的自修复回路）`,
       },
     ],
@@ -143,14 +237,8 @@ function textOnlyPlan(message: string): ChartPlan {
  * 三种来源走同一条 `context` 通道，靠 `kind` 区分：
  * - `item-click` / `brush`：来自**图表**那张画布
  * - `widget-action`：来自**控件条**那张画布（`ice-web-components` 画的按钮）
- *
- * 后者的意义在于证明"第二块画布也是活的、能参与协议回路"。
- *
- * 其中 `explain` 与 `redraw` 会去读 `input.state.chart` —— 也就是 AG-UI 的 `state` 字段
- * 把**客户端当前的图表定义**同步回 agent。这是本工程第一次用上这个字段：
- * 单向的 context 只能告诉 agent"用户做了什么"，state 才能告诉它"现在画面上是什么"。
  */
-function interactionPlan(interaction: string, currentChart: any): ChartPlan | null {
+function interactionPlan(interaction: string, currentChart: any): ToolCardPlan | null {
   let parsed: any = null;
   try {
     parsed = JSON.parse(interaction);
@@ -205,7 +293,7 @@ function interactionPlan(interaction: string, currentChart: any): ChartPlan | nu
 }
 
 /** 「解释这张图」：**读 state** 里客户端回传的图表定义，逐项说出来。 */
-function explainPlan(current: any): ChartPlan {
+function explainPlan(current: any): ToolCardPlan {
   if (!current) {
     return { beats: [{ text: '卡片上现在还没有图 —— 先让我画一张，再来解释。' }] };
   }
@@ -238,49 +326,73 @@ function explainPlan(current: any): ChartPlan {
  *
  * 这是最能说明 `state` 用途的例子：agent 不需要你复述"刚才画的是什么"。
  */
-function redrawPlan(current: any): ChartPlan {
+function redrawPlan(current: any): ToolCardPlan {
   if (!current) return salesPlan();
 
   const nextKind = current.kind === 'line' ? 'bar' : 'line';
   const label = nextKind === 'line' ? '折线' : '柱状';
-  return {
-    dsl: {
-      ...current,
-      kind: nextKind,
-      title: `${current.title || '图表'}（改成${label}图）`,
-    },
-    intro: `好，同一份数据换成${label}图重画一版。`,
-    beats: [{ text: `数据一行没动，只换了呈现方式 —— 你看到的差异全部来自图表类型本身。` }],
-  };
+  return chartCard(
+    { ...current, kind: nextKind, title: `${current.title || '图表'}（改成${label}图）` },
+    {
+      intro: `好，同一份数据换成${label}图重画一版。`,
+      beats: [{ text: `数据一行没动，只换了呈现方式 —— 你看到的差异全部来自图表类型本身。` }],
+    }
+  );
+}
+
+/**
+ * 剧本选择的一次输入。
+ *
+ * 用选项对象而不是一串位置参数：这里已经有五样东西了（消息、诊断、交互、状态、resume），
+ * 位置参数会让调用点变成 `buildPlan('x', false, null, state, resume)` 这种没人读得懂的东西。
+ */
+export interface PlanInput {
+  /** 用户最后一句发言。 */
+  message: string;
+  /** 上一轮渲染端回灌的诊断（非空即"在修复轮里"）。 */
+  hasDiagnostics: boolean;
+  /** 用户在图上/控件条上做动作的 JSON 串。 */
+  interaction?: string | null;
+  /** AG-UI 的共享状态。客户端把"现在画面上是什么"放在这里。 */
+  state?: any;
+  /** 对上一轮中断的答复（协议原生通道）。 */
+  resume?: any[] | null;
+}
+
+/** 从 resume 里取出用户填的值。服务端只关心第一个（M1 一次只有一个中断）。 */
+export function resumeValues(resume: any[] | null | undefined): any | null {
+  const first = Array.isArray(resume) ? resume[0] : null;
+  if (!first) return null;
+  if (first.status === 'cancelled') return null;
+  return first.payload ?? {};
 }
 
 /**
  * 剧本选择。规则很土，但**必须是确定性的**——e2e 和单测都靠它。
- *
- * @param interaction 用户在图上/控件条上做动作的 JSON 串（应用塞进 context 送上来）
- * @param state       AG-UI 的共享状态。客户端把**当前图表定义**放在 `state.chart` 里，
- *                    所以 agent 能读到"现在画面上是什么"，不必让用户复述
  */
-export function buildPlan(
-  message: string,
-  hasDiagnostics: boolean,
-  interaction?: string | null,
-  state?: any
-): ChartPlan {
-  const text = (message || '').trim();
+export function buildPlan(input: PlanInput): ToolCardPlan {
+  const text = (input.message || '').trim();
+
+  // 收到了对中断的答复：优先于其他一切 —— 这正是"接着上一轮往下走"
+  const resumed = resumeValues(input.resume);
+  if (resumed !== null) return resumedPlan(resumed);
 
   // 已经在修复轮里：不管用户说了什么，都按修复走
-  if (hasDiagnostics) return repairPlan(true);
+  if (input.hasDiagnostics) return repairPlan(true);
 
   // 用户在图上做了动作：优先应答这件事，因为它比关键词更能说明意图
-  if (interaction) {
-    const plan = interactionPlan(interaction, state?.chart);
+  if (input.interaction) {
+    const plan = interactionPlan(input.interaction, input.state?.chart);
     if (plan) return plan;
   }
 
   if (/故意|画错|写错|坏|诊断|修复/.test(text)) return repairPlan(false);
+  if (/下发|确认参数|填表|参数确认|中断/.test(text)) return confirmPlan();
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
   if (/销量|渠道|柱|卖/.test(text)) return salesPlan();
 
   return textOnlyPlan(text);
 }
+
+/** 暴露给测试：几个 DSL 常量。 */
+export const SCENARIO_DSL = { SALES_DSL, BROKEN_DSL, TRAFFIC_DSL, CONFIRM_FORM_DSL };

@@ -1,22 +1,26 @@
 /**
  * **这个工程的中间那层，也是 M1 和 M2 真正共享的部分。**
  *
- * 输入是一份"图表计划"（要画什么 DSL + 分几拍解说），输出是一串 AG-UI 事件。
- * 它完全不知道 DSL 是谁产出的——脚本化的规则也好、真模型也好，进来都是这个东西。
+ * 输入是一份"工具卡计划"（哪个工具、流式参数是什么、分几拍解说），输出是一串 AG-UI 事件。
+ * 它完全不知道参数是谁产出的——脚本化的规则也好、真模型也好，进来都是这个东西。
  *
- * 所以 M2 接 LLM 时，唯一新增的代码是"把自然语言变成 ChartPlan"，
- * 下面这一整段（事件顺序、文本分片、tool call 参数分片、状态同步、叙事事件）原样复用。
+ * 所以 M2 接 LLM 时，唯一新增的代码是"把自然语言变成 ToolCardPlan"，
+ * 下面这一整段（事件顺序、文本分片、tool call 参数分片、状态同步、叙事事件、中断）
+ * 原样复用。
+ *
+ * **图表与表单共用这一份实现**：加一种卡片在服务端只是换个 `tool` 名与 `stateKey`，
+ * 事件序列的骨架完全一样。这也是"一张卡片 = 一次 tool call"在服务端的对应物。
  *
  * 它是**纯函数**：延迟、网络、SSE 都不在这里。这样事件序列本身可以被单测穷举断言，
  * 而"每两条事件之间停 40ms"这种播放节奏留给传输层。
  */
 import { EventType } from '@ag-ui/core';
-import { EVT_POINT_AT, RENDER_CHART_TOOL } from '../../shared/contract';
+import { EVT_POINT_AT } from '../../shared/contract';
 
 /** 事件在这里是"开放结构 + 必有 type"。字段名的正确性由 tests/ 里的官方 schema 校验兜底。 */
 export type AnyEvent = { type: EventType } & Record<string, any>;
 
-export { EVT_POINT_AT, RENDER_CHART_TOOL };
+export { EVT_POINT_AT };
 
 /** 一拍解说。文案播完之后可以顺带做一件事（指一个点 / 追加一批数据）。 */
 export interface ChartBeat {
@@ -28,17 +32,53 @@ export interface ChartBeat {
   appendRows?: any[][];
 }
 
-export interface ChartPlan {
-  /** ice-chart-dsl 文档。不给就是纯文字回复，不发 tool call。 */
-  dsl?: unknown;
+/** 一次中断：`RUN_FINISHED` 会带上它，前端据此进入"等用户答复"的状态。 */
+export interface PlanInterrupt {
+  id: string;
+  /** 为什么中断 —— 协议必填。 */
+  reason: string;
+  /** 给人看的一句话（可选）。 */
+  message?: string;
+}
+
+/** 两种计划共有的部分。 */
+interface PlanCommon {
   /** 开画之前说的一句。可以有。 */
   intro?: string;
   /** 画完之后的解说。这时画布已经在了，"指着讲"才有对象。 */
   beats: ChartBeat[];
+  /** 给了就以此**中断收尾**：`RUN_FINISHED` 带 `outcome.type === 'interrupt'`。 */
+  interrupt?: PlanInterrupt;
   /** 分片粒度。默认值是按"人眼能看出在拼"调的；测试里会调大。 */
   textChunk?: number;
   argsChunk?: number;
 }
+
+/** 一次 tool call 卡片。 */
+export interface ToolCallCardPlan extends PlanCommon {
+  /** 工具名。**前端按它决定渲染成哪种卡片**，服务端不管渲染。 */
+  tool: string;
+  /** 流式分片发出去的参数（会被 `JSON.stringify`）。 */
+  payload: unknown;
+  /** 把它同步进共享状态的哪个键 —— agent 下一轮靠 `state` 读回"画面上现在是什么"。 */
+  stateKey: string;
+}
+
+/**
+ * 纯文字回复：不发 tool call、不写共享状态。
+ *
+ * 单独一个成员而不是把上面三个字段设成可选，是为了让"有没有 tool call"这件事在类型上就是
+ * 穷尽的 —— `planToEvents` 里 `plan.payload !== undefined` 一收窄，
+ * TypeScript 就知道 `tool` 与 `stateKey` 一定在，不用写 `!`。
+ */
+export interface TextOnlyCardPlan extends PlanCommon {
+  tool?: undefined;
+  payload?: undefined;
+  stateKey?: undefined;
+}
+
+/** 一次 tool call 卡片的事件序列骨架。图表与表单共用。 */
+export type ToolCardPlan = ToolCallCardPlan | TextOnlyCardPlan;
 
 export interface PlanContext {
   threadId: string;
@@ -61,7 +101,7 @@ export function chunkString(input: string, size: number): string[] {
 }
 
 /**
- * ChartPlan → AG-UI 事件序列。
+ * ToolCardPlan → AG-UI 事件序列。
  *
  * 顺序是**先画后讲**，这一点是冒烟时改过来的：
  *
@@ -71,13 +111,13 @@ export function chunkString(input: string, size: number): string[] {
  *   TOOL_CALL_RESULT
  *   STATE_SNAPSHOT                        ← 画布真相（可序列化、可恢复）
  *   [beats]  画完之后的解说                ← 每拍之间可插 CUSTOM 指点 / STATE_DELTA 追加
- *   RUN_FINISHED
+ *   RUN_FINISHED                          ← 有 interrupt 时带 outcome
  *
  * 为什么不是"边说边画"：`CUSTOM` 指点的对象是画布，画布得先在。
  * 第一版把解说全排在 tool call 前面，结果指点事件到达时图上什么都没有——
  * 前端只能缓冲，而缓冲意味着"指着讲"和文字不再同步，整个演示效果就没了。
  */
-export function planToEvents(plan: ChartPlan, ctx: PlanContext): AnyEvent[] {
+export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
   const now = ctx.now ?? (() => Date.now());
   let seq = 0;
   // id 里必须带 runId。第一版是 `msg_${seq}`，每轮从 0 重新数——
@@ -103,12 +143,12 @@ export function planToEvents(plan: ChartPlan, ctx: PlanContext): AnyEvent[] {
 
   if (plan.intro) emitText(plan.intro);
 
-  if (plan.dsl !== undefined) {
+  if (plan.payload !== undefined) {
     const toolCallId = id('tc');
     // 工具调用的参数**分片流式**发。这是 AG-UI 相对"工具跑完直接给结果"的差别：
     // 前端在参数还在传的时候就能显示"正在拼什么"，而不是只能转个圈。
-    const payload = JSON.stringify(plan.dsl);
-    push({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: RENDER_CHART_TOOL });
+    const payload = JSON.stringify(plan.payload);
+    push({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: plan.tool });
     for (const delta of chunkString(payload, plan.argsChunk ?? 24)) {
       push({ type: EventType.TOOL_CALL_ARGS, toolCallId, delta });
     }
@@ -120,7 +160,7 @@ export function planToEvents(plan: ChartPlan, ctx: PlanContext): AnyEvent[] {
       role: 'tool',
       content: 'rendered',
     });
-    push({ type: EventType.STATE_SNAPSHOT, snapshot: { chart: plan.dsl } });
+    push({ type: EventType.STATE_SNAPSHOT, snapshot: { [plan.stateKey]: plan.payload } });
   }
 
   // ---------- 画完之后才解说：文字与"指着讲"在同一时间线上交错 ----------
@@ -154,6 +194,26 @@ export function planToEvents(plan: ChartPlan, ctx: PlanContext): AnyEvent[] {
     push({ type: EventType.TEXT_MESSAGE_END, messageId });
   }
 
-  push({ type: EventType.RUN_FINISHED, threadId: ctx.threadId, runId: ctx.runId });
+  // 中断：run 仍然是"结束"，只是留了一个待答复的口子。
+  // 协议规定恢复方式是**开一个新 run** 并在 `resume` 里逐条应答。
+  push({
+    type: EventType.RUN_FINISHED,
+    threadId: ctx.threadId,
+    runId: ctx.runId,
+    ...(plan.interrupt
+      ? {
+          outcome: {
+            type: 'interrupt',
+            interrupts: [
+              {
+                id: plan.interrupt.id,
+                reason: plan.interrupt.reason,
+                ...(plan.interrupt.message ? { message: plan.interrupt.message } : {}),
+              },
+            ],
+          },
+        }
+      : {}),
+  });
   return events;
 }

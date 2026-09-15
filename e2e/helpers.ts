@@ -12,9 +12,12 @@ export const WIDGET_CANVAS = '.card .widget-wrap canvas';
 export interface ConsoleState {
   threadId: string;
   runId: string | null;
-  status: 'idle' | 'running' | 'error';
+  /** `waiting` = run 结束了但留着一个待答复的中断。 */
+  status: 'idle' | 'running' | 'waiting' | 'error';
   items: Array<{ kind: 'text' | 'tool'; id: string; text?: string; argsRaw?: string; status?: string }>;
   sharedState: any;
+  /** 待答复的中断（协议：`RUN_FINISHED.outcome.type === 'interrupt'`）。 */
+  interrupt: { id: string; reason: string; message?: string } | null;
   pointAt: { value: any; seq: number } | null;
   diagnostics: string | null;
   error: string | null;
@@ -240,4 +243,25 @@ export async function cardCanvasStats(page: Page): Promise<{
       widget: size(card?.querySelector('.widget-wrap canvas') as HTMLCanvasElement | null),
     };
   });
+}
+
+/** 表单卡的画布。表单与图表**互斥**，同一次 tool call 只会出现其中之一。 */
+export const FORM_CANVAS = '.card .form-wrap canvas';
+
+/** 点击最后一张表单卡上的提交按钮（真实点击，不是 programmatic submit）。 */
+export async function clickFormSubmit(page: Page): Promise<void> {
+  const point = await page.evaluate(() => (window as any).__iceAgentConsole.formSubmitPoint());
+  if (!point) throw new Error('没有找到表单卡（或它没有提交按钮）');
+  await page.mouse.click(point.x, point.y);
+}
+
+/** 往最后一张表单卡里写值。canvas 表单没法用 DOM 填。 */
+export async function fillForm(page: Page, values: Record<string, any>): Promise<void> {
+  const ok = await page.evaluate((v) => (window as any).__iceAgentConsole.fillForm(v), values);
+  if (!ok) throw new Error('没有找到表单卡');
+}
+
+/** 读最后一张卡片的表单诊断（`#diag` 那个列表是 DOM，不是 canvas）。 */
+export async function formDiagnostics(page: Page): Promise<string[]> {
+  return page.locator('.card .diag li').allInnerTexts();
 }
