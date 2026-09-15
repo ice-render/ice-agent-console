@@ -35,6 +35,9 @@ export class FormLayer {
     this.canvas.className = 'form-canvas';
 
     this.result = renderFormDsl(this.canvas, dsl, {
+      // 把卡片能给的宽度传下去 —— 表单多宽取决于它被放哪儿，而 DSL 不知道这件事。
+      // 不传的话它会用 `dsl.width ?? 360`，在 896 宽的卡片里右边会空掉一大片（实测 74%）。
+      width: cssWidth,
       onSubmit: (values) => options.onSubmit(values),
     });
     this.layer = new Layer('form', this.canvas, this.result.ice);
@@ -56,6 +59,8 @@ export class FormLayer {
    */
   fit(cssWidth: number): void {
     const width = cssWidth > 0 ? cssWidth : this.cssWidth;
+    // 画布尺寸与"表单内容的对齐宽度"是两件事，两个都要调
+    this.result.setWidth(width);
     this.result.resize(width, PROBE_HEIGHT);
 
     const measured = this.result.measureContentHeight();

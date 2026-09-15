@@ -248,6 +248,59 @@ export async function cardCanvasStats(page: Page): Promise<{
 /** 表单卡的画布。表单与图表**互斥**，同一次 tool call 只会出现其中之一。 */
 export const FORM_CANVAS = '.card .form-wrap canvas';
 
+/**
+ * 画布上**着墨部分的包围盒**（CSS 像素），以及它占画布的比例。
+ *
+ * 为什么需要这个而不只是 `countInk`：`countInk` 只回答"画了没有"。
+ * 一个表单把 4 个控件画在左边 200px 里、右边空 700px，着墨量照样是几千 ——
+ * 那种"画出来了但排得难看"是最容易漏过回归的一类缺陷，得靠**排布**来判。
+ *
+ * 包围盒按非透明像素算，所以引擎的坐标（逻辑像素）与画布像素的换算要靠
+ * `canvas.width / getBoundingClientRect().width`。不能写死 dpr：e2e 里是 1，
+ * 但换个 profile 就不是了 —— 写死的话比例会静默错一倍。
+ */
+export async function inkBounds(
+  page: Page,
+  selector = CHART_CANVAS
+): Promise<{ left: number; top: number; right: number; bottom: number; widthRatio: number; heightRatio: number } | null> {
+  return page.evaluate((sel) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let minX = canvas.width;
+    let minY = canvas.height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < canvas.height; y++) {
+      const row = y * canvas.width * 4;
+      for (let x = 0; x < canvas.width; x++) {
+        if (data[row + x * 4 + 3] !== 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return null;
+
+    const box = canvas.getBoundingClientRect();
+    // 逻辑像素 = 画布像素 / (backing / css)
+    const scale = box.width > 0 ? canvas.width / box.width : 1;
+    return {
+      left: minX / scale,
+      top: minY / scale,
+      right: maxX / scale,
+      bottom: maxY / scale,
+      widthRatio: canvas.width > 0 ? (maxX - minX + 1) / canvas.width : 0,
+      heightRatio: canvas.height > 0 ? (maxY - minY + 1) / canvas.height : 0,
+    };
+  }, selector);
+}
+
 /** 点击最后一张表单卡上的提交按钮（真实点击，不是 programmatic submit）。 */
 export async function clickFormSubmit(page: Page): Promise<void> {
   const point = await page.evaluate(() => (window as any).__iceAgentConsole.formSubmitPoint());

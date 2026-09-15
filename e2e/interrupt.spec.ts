@@ -5,6 +5,7 @@ import {
   countInk,
   fillForm,
   FORM_CANVAS,
+  inkBounds,
   readState,
   settleAfter,
   useChip,
@@ -147,4 +148,82 @@ test('中断卡与图表卡能在同一条时间线里共存', async ({ page }) 
   const state = await readState(page);
   const names = (state.items.filter((i) => i.kind === 'tool') as any[]).map((i) => i.name);
   expect(names).toEqual(['render_chart', 'collect_input']);
+});
+
+/** 触发中断拿到表单卡，停在 `waiting`。 */
+async function openFormCard(page: import('@playwright/test').Page): Promise<void> {
+  const before = await readState(page);
+  await page.locator('.chip', { hasText: '要下发指令' }).first().click();
+  await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
+}
+
+/**
+ * 表单要**撑满**卡片宽度。
+ *
+ * 这一条是实测缺陷的回归：宿主容器 896 宽时，表单只在左边画了 229px，
+ * **右边空掉 667px（74%）**。注意 `countInk` 抓不到这种缺陷 ——
+ * 着墨量照样几千，"画出来了"是成立的；只有按**排布**判才看得见。
+ *
+ * 根因在 DSL 层，不在渲染器：
+ * 宽度在 ICE 里是每个组件自己的属性，没有"父级拉满"的自动传导 ——
+ * `ICEForm` 的 `align:'stretch'` 只拉 `ICEFormItem`，**不拉控件**；
+ * 于是每个控件落到各自的出厂默认（ICETextField 200、ICEInputNumber 140…），
+ * 同一张表单里几个控件还互不相同。
+ */
+test('表单撑满卡片宽度，右侧不留大片空白', async ({ page }) => {
+  await page.goto('/');
+  await openFormCard(page);
+
+  // ---- 画布本身先是"容器多宽就是多宽"（走引擎的 fitCanvasToDisplaySize）----
+  const canvas = await page.evaluate((sel) => {
+    const c = document.querySelector(sel) as HTMLCanvasElement;
+    const box = c.getBoundingClientRect();
+    return { backing: c.width, css: box.width, dpr: window.devicePixelRatio };
+  }, FORM_CANVAS);
+  expect(canvas.css).toBeGreaterThan(700);
+  // backing store = 逻辑宽 × dpr（**不是**把逻辑宽取整后再乘）
+  expect(canvas.backing).toBe(Math.round(canvas.css * canvas.dpr));
+
+  // ---- 内容要几乎铺满（修复前 widthRatio ≈ 0.26）----
+  const bounds = await inkBounds(page, FORM_CANVAS);
+  expect(bounds, '表单画布上应当有内容').not.toBeNull();
+  expect(
+    bounds!.widthRatio,
+    `着墨只占画布宽的 ${(bounds!.widthRatio * 100).toFixed(1)}%，右侧空 ${(canvas.css - bounds!.right).toFixed(0)}px`
+  ).toBeGreaterThan(0.9);
+  // 左边也不该反过来空一片
+  expect(bounds!.left, `左侧空了 ${bounds!.left.toFixed(0)}px`).toBeLessThan(canvas.css * 0.05);
+});
+
+/**
+ * 窗口变窄时要**重新对齐内容**，不能只改画布尺寸。
+ *
+ * 这是 `setWidth()` 那条路径单独的回归：画布 `resize` 已经由引擎管了，
+ * 但"表单内容多宽"是另一件事 —— 少了它，缩窗口之后画布窄了、表单还是原来那么宽，
+ * 右边被裁掉；或者反过来，表单没跟着缩，右侧又空出来。
+ */
+test('窗口变窄后表单跟着重新对齐（不只是画布变窄）', async ({ page }) => {
+  await page.goto('/');
+  await openFormCard(page);
+
+  const wide = await inkBounds(page, FORM_CANVAS);
+  expect(wide).not.toBeNull();
+  expect(wide!.widthRatio).toBeGreaterThan(0.9);
+
+  await page.setViewportSize({ width: 820, height: 900 });
+
+  // `window.resize` → `view.resizeAll()` 是同步的，但布局/重绘要等一帧，所以轮询而不是赌
+  await expect
+    .poll(async () => (await inkBounds(page, FORM_CANVAS))?.right ?? Infinity, {
+      message: '缩窄之后表单没有跟着变窄',
+      timeout: 5000,
+    })
+    .toBeLessThan(wide!.right - 100);
+
+  // 变窄之后仍然是"铺满新宽度"，而不是"缩了一点点然后右边又空出来"
+  const narrow = await inkBounds(page, FORM_CANVAS);
+  expect(
+    narrow!.widthRatio,
+    `缩窄后着墨只占 ${(narrow!.widthRatio * 100).toFixed(1)}%`
+  ).toBeGreaterThan(0.9);
 });

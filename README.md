@@ -244,7 +244,7 @@ RUN_FINISHED
 
 ---
 
-## 5. 两处必须知道的 ICE 侧约束
+## 5. 三处必须知道的 ICE 侧约束
 
 ### 5.1 不要用 `renderChartDsl`
 
@@ -267,6 +267,37 @@ RUN_FINISHED
 
 "实时吞吐量"那个剧本因此用数值轴（秒）而不是类目轴（月份）。
 这不是为了演示好看，是 `appendData` 的注释里写明的"实时数据流专用"场景。
+
+### 5.3 宽度要自己传、自己再传下去
+
+**画布尺寸**用引擎的 `ICE.fitCanvasToDisplaySize(cssW, cssH)`（`2.12.0` 起），
+它就是"backing store = 逻辑尺寸 × dpr、CSS 尺寸固定为逻辑尺寸、顺手同步命中矩形与内容盒"
+这一份契约的唯一实现。本工程的 `Layer.fit()` 是它的一行包装。
+
+**内容宽度是另一件事**，引擎管不了：宽度在 ICE 里是每个组件自己的属性，
+**没有"父级拉满"的自动传导**（细节见 `ice-web-components-dsl/README.md` §8.1）。
+所以卡片要把自己的可用宽度一路传下去，并且容器尺寸变了要**再传一次**：
+
+```ts
+// 建的时候
+this.result = renderFormDsl(canvas, dsl, { width: cssWidth });
+// 尺寸变了：resize 管画布，setWidth 管内容，两个都要调
+fit(cssWidth: number) {
+  this.result.setWidth(cssWidth);
+  this.result.resize(cssWidth, height);
+}
+```
+
+漏掉 `setWidth` 的症状是"窗口变窄了、画布也窄了，但表单还是原来那么宽"——
+不会报错，只是难看得莫名其妙。
+
+> 这条是本工程实测逼出来的：修复前宿主 896 宽时表单只在左边画了 229px，
+> **右边空掉 667px（74%）**；而且 `countInk` 那类"画了没有"的断言抓不到它 ——
+> 着墨量照样几千。所以 e2e 里加了按**着墨包围盒**判排布的用例（见 §9）。
+
+> 顺带在这个过程里逼出一个**真缺陷**并已修（`ice-render` 2.12.1）：
+> `fitCanvasToDisplaySize()` 改完尺寸不置脏，空闲停帧状态下 resize 会**静默白屏**。
+> 见 `docs/upstream-gaps.md` 第 9 条。
 
 ---
 
@@ -376,10 +407,10 @@ npm run verify:full   # 上面 + playwright
 | 项 | 数字 |
 |---|---|
 | 单测 | **118 passed** / 7 suites |
-| e2e | **20 passed** / 6 specs |
-| 源码 | 3255 行（`server` + `src` + `shared`，含注释） |
-| 测试 | 2278 行（`tests` + `e2e`） |
-| 生产包 | 1113 KiB（引擎 283 + 图表 281 + 控件库 488 + DSL 19 + 应用 242，未压缩） |
+| e2e | **22 passed** / 6 specs |
+| 源码 | 3260 行（`server` + `src` + `shared`，含注释） |
+| 测试 | 2410 行（`tests` + `e2e`） |
+| 生产包 | 1132 KiB（引擎 290 + 图表 281 + 控件库 488 + DSL 16 + 应用 257，未压缩） |
 
 > 控件库（`ice-web-components`）一进来就占掉 488 KiB —— 是反着用的代价：
 > 它是个 84 个组件的完整工具集，这里只用到了 `ICEButton`。
@@ -387,6 +418,10 @@ npm run verify:full   # 上面 + playwright
 
 e2e 的判据**不是"DOM 里有没有 canvas"**——canvas 元素存在但全白是很典型的一种失败。
 用例一律数**非透明像素**，并断言画布内容在某些事件前后**确实变了**（比如"指着讲"）。
+
+但"有墨"还不够：`countInk > 3000` 对"表单只占左边一小块、右边空 74%"照样成立。
+所以表单那两例量的是**着墨包围盒**（`inkBounds()`）—— 按**排布**判，而不是按"画了没有"判。
+这一组是被实测缺陷逼出来的，见 §5.3。
 
 另外每条用例都收集 console / pageerror / 网络错误，要求为空。
 
