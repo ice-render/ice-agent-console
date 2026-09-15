@@ -119,6 +119,98 @@ const CONFIRM_FORM_DSL = {
   submitText: '确认下发',
 };
 
+/**
+ * **第二批控件的演示表单。**
+ *
+ * 0.3.0 起 `ice-web-components-dsl` 的字段类型从 11 个扩到 20 个，这张表把新接的 9 个
+ * 各放一个，加上一个多选 `select`（它顺便证明了"数组默认值"那个 bug 已经修好）。
+ *
+ * 全部 10 个字段都**没有写宽度** —— 那是宿主 + DSL 的事（见该包 README §8.1）。
+ * `options` 也一律用**裸字符串**写法（除了需要 label 的），因为不同控件对选项形状的
+ * 要求不一样（`colors: string[]` / `options: string[]` / `nodes: {key,label}` /
+ * `dataSource`），那些差别由编译期归一化 —— agent 不该知道。
+ */
+const SHOWCASE_FORM_DSL = {
+  schemaVersion: 1,
+  kind: 'form',
+  title: '第二批控件',
+  description: '0.3.0 新接的 9 个字段类型，各来一个。',
+  fields: [
+    {
+      name: 'themeColor',
+      type: 'color',
+      label: '主题色',
+      default: '#61D9FB',
+      options: ['#61D9FB', '#0F172A', '#16A34A', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'],
+    },
+    {
+      name: 'priority',
+      type: 'segmented',
+      label: '优先级',
+      default: 'normal',
+      options: [
+        { value: 'low', label: '低' },
+        { value: 'normal', label: '中' },
+        { value: 'high', label: '高' },
+      ],
+    },
+    { name: 'triggerAt', type: 'time', label: '触发时间', format: 'HH:mm', default: '08:30' },
+    {
+      name: 'window',
+      type: 'date-range',
+      label: '维护窗口',
+      required: true,
+      default: ['2026-09-01', '2026-09-07'],
+    },
+    {
+      name: 'region',
+      type: 'cascader',
+      label: '区域',
+      placeholder: '选省 / 市',
+      separator: ' / ',
+      options: [
+        { value: 'zj', label: '浙江', children: [{ value: 'hz', label: '杭州' }, { value: 'nb', label: '宁波' }] },
+        { value: 'js', label: '江苏', children: [{ value: 'nj', label: '南京' }, { value: 'sz', label: '苏州' }] },
+      ],
+    },
+    {
+      name: 'station',
+      type: 'tree-select',
+      label: '泵站',
+      placeholder: '按分组选',
+      showSearch: true,
+      options: [
+        { value: 'group-a', label: 'A 组', children: [{ value: 'pump-1', label: '一号泵站' }, { value: 'pump-2', label: '二号泵站' }] },
+        { value: 'group-b', label: 'B 组', children: [{ value: 'pump-3', label: '三号泵站' }] },
+      ],
+    },
+    {
+      name: 'tags',
+      type: 'transfer',
+      label: '标签',
+      default: ['例检'],
+      options: ['例检', '抢修', '节能', '扩容', '试运行'],
+    },
+    { name: 'risk', type: 'rate', label: '风险等级', max: 5, default: 3 },
+    {
+      name: 'keyword',
+      type: 'autocomplete',
+      label: '关键词',
+      placeholder: '输入以筛选',
+      options: ['泵站', '阀门', '管道', '变频器', '液位计', '流量计'],
+    },
+    {
+      name: 'devices',
+      type: 'select',
+      mode: 'multiple',
+      label: '关联设备',
+      default: ['V-101'],
+      options: ['V-101', 'V-102', 'P-201', 'P-202'],
+    },
+  ],
+  submitText: '提交看看',
+};
+
 /** 图表卡的公共部分。 */
 function chartCard(payload: unknown, rest: Omit<ToolCardPlan, 'tool' | 'payload' | 'stateKey'>): ToolCardPlan {
   return { tool: RENDER_CHART_TOOL, payload, stateKey: STATE_CHART_KEY, ...rest };
@@ -190,6 +282,25 @@ function confirmPlan(): ToolCardPlan {
       reason: '需要用户确认泵站与运行参数后才能下发',
       message: '请确认泵站、运行模式与目标流量',
     },
+  };
+}
+
+/**
+ * 第二批控件的演示。
+ *
+ * 这一份**故意不做中断** —— 它是一条"直接给你看"的剧本：一次 run 里把表单卡片推出来，
+ * 你在浏览器里点一遍就完成它的使命了。要看人机回环走「要下发指令」那条。
+ */
+function showcasePlan(): ToolCardPlan {
+  return {
+    tool: COLLECT_INPUT_TOOL,
+    payload: SHOWCASE_FORM_DSL,
+    stateKey: STATE_FORM_KEY,
+    intro: '这是 0.3.0 新接的 9 个字段类型，我在一张表单里各放了一个。',
+    beats: [
+      { text: '从上往下：颜色、分段、时间、区间、级联、树选择、穿梭框、评分、自动完成。' },
+      { text: '点一遍看看哪些顺手、哪些别扭 —— 这一版的目的是让你能判断后面接什么。' },
+    ],
   };
 }
 
@@ -388,6 +499,7 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
 
   if (/故意|画错|写错|坏|诊断|修复/.test(text)) return repairPlan(false);
   if (/下发|确认参数|填表|参数确认|中断/.test(text)) return confirmPlan();
+  if (/控件|组件|演示|第二批|字段类型|都能用/.test(text)) return showcasePlan();
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
   if (/销量|渠道|柱|卖/.test(text)) return salesPlan();
 
@@ -395,4 +507,4 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
 }
 
 /** 暴露给测试：几个 DSL 常量。 */
-export const SCENARIO_DSL = { SALES_DSL, BROKEN_DSL, TRAFFIC_DSL, CONFIRM_FORM_DSL };
+export const SCENARIO_DSL = { SALES_DSL, BROKEN_DSL, TRAFFIC_DSL, CONFIRM_FORM_DSL, SHOWCASE_FORM_DSL };

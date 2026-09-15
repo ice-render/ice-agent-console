@@ -306,6 +306,16 @@ export class CardView {
     return { x: box.left + rect.left + rect.width / 2, y: box.top + rect.top + rect.height / 2 };
   }
 
+  /** 表单卡：各字段当前画出来的文字（调试 / e2e 用）。 */
+  formFieldTexts(): Array<{ name: string; text: string | null }> {
+    return this.formLayer?.fieldTexts() ?? [];
+  }
+
+  /** 表单卡：当前各字段的值（调试 / e2e 用）。 */
+  formValues(): Record<string, any> {
+    return this.formLayer?.values() ?? {};
+  }
+
   /** 表单卡：批量写入字段值。返回是否确实是一张表单卡。 */
   fillForm(values: Record<string, any>): boolean {
     if (!this.formLayer) return false;

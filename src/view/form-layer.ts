@@ -82,6 +82,37 @@ export class FormLayer {
     return { left: origin[0], top: origin[1], width: button.state.width, height: button.state.height };
   }
 
+  /**
+   * 各字段当前**画出来的文字**（调试 / e2e 用）。
+   *
+   * 为什么需要它："占位文案到底有没有画出来"这件事在 canvas 上没法用 DOM 断言，
+   * 用像素也说不清（浅灰的抗锯齿会被误判）。而 `getFieldText()` 正是组件用来画字段的
+   * 那个值，所以问它最直接。
+   *
+   * 取值器**有两个名字**，按组件而异（库里没有统一）：
+   * - `getFieldText()` —— 文本类与自动完成；
+   * - `getFieldLabel()` —— 浮层类（`select` / `cascader` / `tree-select` / 日期 / 时间）。
+   * 两个都试，都没有才返回 `null`。`null` 是"问不到"，不是"空字符串"，别混。
+   */
+  fieldTexts(): Array<{ name: string; text: string | null }> {
+    const items = (this.result.compiled.form as any).getItems() as any[];
+    return items.map((item) => {
+      const control = item.getControl?.();
+      const text =
+        typeof control?.getFieldText === 'function'
+          ? control.getFieldText()
+          : typeof control?.getFieldLabel === 'function'
+            ? control.getFieldLabel()
+            : null;
+      return { name: item.getName?.() ?? '', text };
+    });
+  }
+
+  /** 当前各字段的值（调试 / e2e 用）。用来证明"值真的进了表单模型"。 */
+  values(): Record<string, any> {
+    return this.result.compiled.getValues();
+  }
+
   /** 批量写入字段值（调试 / e2e 用：canvas 表单没法用 DOM 填）。 */
   setValues(values: Record<string, any>): void {
     this.result.compiled.setValues(values);

@@ -298,6 +298,7 @@ const CHIPS = [
   '看看各渠道的月度销量',
   '看一下实时吞吐量',
   '要下发指令',
+  '看看新控件都能用吗',
   '故意画错',
   '今天天气怎么样',
 ];
@@ -349,6 +350,10 @@ window.addEventListener('resize', () => view.resizeAll());
   formSubmitPoint: () => view.lastFormCard()?.formSubmitPoint() ?? null,
   /** 往最后一张表单卡里写值。canvas 表单没法用 DOM 填，测试与调试需要这个口。 */
   fillForm: (values: Record<string, any>) => view.lastFormCard()?.fillForm(values) ?? false,
+  /** 最后一张表单卡里各字段**画出来的文字**。用来断言占位文案真的落到了画布上。 */
+  formFieldTexts: () => view.lastFormCard()?.formFieldTexts() ?? [],
+  /** 最后一张表单卡里各字段的**值**。用来断言新类型真的进了取值回路。 */
+  formValues: () => view.lastFormCard()?.formValues() ?? {},
 };
 
 inputEl.focus();

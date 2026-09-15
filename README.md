@@ -36,6 +36,7 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 |---|---|
 | 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 上画布 → **指着 3 月讲** |
 | 要下发指令 | **人机回环**：中断 → 出表单卡 → 填完提交 → 带 `resume` 开新 run |
+| 看看新控件都能用吗 | **控件原型页**：一张表单里放 10 个字段，覆盖 `ice-web-components-dsl` 0.3.0 新接的 9 个类型 |
 | 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 |
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 |
 | 今天天气怎么样 | 兜底：不画图，只回文字 |
@@ -158,7 +159,7 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | 工具名 | 卡片形态 | 画布 |
 |---|---|---|
 | `render_chart` | 图表卡 | `.chart-wrap` + `.widget-wrap`（两块，两个 ICE 实例） |
-| `collect_input` | **表单卡** | `.form-wrap`（一块，由 `ice-web-components-dsl` 渲染） |
+| `collect_input` | **表单卡** | `.form-wrap`（一块，由 `ice-web-components-dsl` 渲染）。DSL 0.3.0 起支持 **20 个字段类型** |
 
 三者**互斥**（一次 tool call 只有一种形态），但卡片骨架在构造时就一并建好了容器，
 靠 `hidden` 切换。所以 e2e 要按**可见性**断言，不能数 canvas 的个数。
@@ -411,7 +412,7 @@ npm run verify:full   # 上面 + playwright
 | 项 | 数字 |
 |---|---|
 | 单测 | **118 passed** / 7 suites |
-| e2e | **22 passed** / 6 specs |
+| e2e | **24 passed** / 7 specs |
 | 源码 | 3260 行（`server` + `src` + `shared`，含注释） |
 | 测试 | 2410 行（`tests` + `e2e`） |
 | 生产包 | 1132 KiB（引擎 290 + 图表 281 + 控件库 488 + DSL 16 + 应用 257，未压缩） |
