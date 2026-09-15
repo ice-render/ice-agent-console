@@ -30,7 +30,8 @@
       "@damoqiongqiu/ice-chart": ["../ice-chart"],
       "@damoqiongqiu/ice-chart-dsl": ["../ice-chart-dsl"],
       "ice-web-components": ["../ice-web-components"],
-      "ice-web-components-dsl": ["../ice-web-components-dsl"]
+      "ice-web-components-dsl": ["../ice-web-components-dsl"],
+      "ice-entity-designer": ["../ice-entity-designer"]
     }
   },
   "include": ["src", "shared", "tests", "e2e", "playwright.config.ts"]

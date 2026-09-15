@@ -7,7 +7,15 @@
  * 之所以单独放一个文件而不是塞进 scripted.ts：等 M2 加 `llm.ts` 的时候，
  * 两个实现摆在一起，接口一致这件事一眼就能看出来。
  */
-import { COLLECT_INPUT_TOOL, RENDER_CHART_TOOL, STATE_CHART_KEY, STATE_FORM_KEY } from '../../shared/contract';
+import {
+  COLLECT_INPUT_TOOL,
+  RENDER_CHART_TOOL,
+  RENDER_DIAGRAM_TOOL,
+  STATE_CHART_KEY,
+  STATE_DIAGRAM_KEY,
+  STATE_FORM_KEY,
+} from '../../shared/contract';
+import { WATER_PROCESS_DSL } from './water-process-case';
 import type { ToolCardPlan } from './dsl-to-events';
 
 /** 一张表 + encoding，这就是 ice-chart-dsl 想要的形态。 */
@@ -40,6 +48,22 @@ const BROKEN_DSL = {
   ...SALES_DSL,
   title: '各渠道月度销量（第一版，写错了列名）',
   encoding: { x: '月份', y: '销售额', series: '渠道' },
+};
+
+/**
+ * 故意写错的图 DSL：加了一个「隔油池」。
+ *
+ * 为什么挑这个错：它**看起来完全合理** —— 隔油池是真实存在的构筑物，
+ * 只是不在这套 31 种符号的记号集里（那套是 AAO 工艺线的记号）。
+ * 这正是要演示的那类错误：不是拼写错误，而是"用了一套记号里没有的东西"。
+ * 校验器会指出未知种类并**列出合法值**，agent 据此就能修。
+ */
+const BROKEN_DIAGRAM_DSL = {
+  ...WATER_PROCESS_DSL,
+  units: [
+    ...WATER_PROCESS_DSL.units,
+    { id: 'greaseTrap', kind: 'greaseTrap', name: '隔油池', tag: 'GT-101', left: 240, top: 240 },
+  ],
 };
 
 /**
@@ -216,6 +240,53 @@ function chartCard(payload: unknown, rest: Omit<ToolCardPlan, 'tool' | 'payload'
   return { tool: RENDER_CHART_TOOL, payload, stateKey: STATE_CHART_KEY, ...rest };
 }
 
+/** 图卡的公共部分（与 `chartCard` 同构，只是工具名与 stateKey 不同）。 */
+function diagramCard(payload: unknown, rest: Omit<ToolCardPlan, 'tool' | 'payload' | 'stateKey'>): ToolCardPlan {
+  return { tool: RENDER_DIAGRAM_TOOL, payload, stateKey: STATE_DIAGRAM_KEY, ...rest };
+}
+
+/**
+ * 判断这句话是不是在问水务工艺图。
+ *
+ * 抽成函数是因为它要用在**两个**地方：选剧本，以及"故意画错"时决定画错哪种图。
+ * 两处各写一份正则迟早会漂。
+ */
+function isWaterAsk(text: string): boolean {
+  return /污水|水厂|给排水|水处理|工艺图|工艺流程|工艺流程|AAO|污泥|格栅|生化池|二沉池|厌氧|缺氧|好氧/.test(text);
+}
+
+/**
+ * **内置案例：污水处理工艺流程图**（`ice-entity-designer` 画的图卡）。
+ *
+ * 为什么这是最合适的第一个例子：这份数据把给排水工艺图的记号系统整个跑了一遍 ——
+ * 34 个单元 / 37 段管线，用满 `ice-entity-designer` 的 **31 种符号、9 种介质**。
+ * 不是挑几个符号摆一摆，而是真的一张图。
+ *
+ * 节拍里的 `pointAt` 除了高亮还会**把该单元移到视野中央** ——
+ * 图比卡片宽得多，镜头不跟过去的话，高亮发生在看不见的地方，等于没讲。
+ */
+function waterProcessPlan(): ToolCardPlan {
+  return diagramCard(WATER_PROCESS_DSL, {
+    intro:
+      '这是某 10 万 m³/d 市政污水厂的全流程：AAO + 混凝沉淀 + 滤布滤池 + 消毒。' +
+      '34 个单元、37 段管线，用满了 31 种工艺符号与 9 种介质线型。',
+    beats: [
+      { text: '先看全貌。主流程在最上面一行，从最左边的进水一路往右走：' },
+      { text: '预处理段：进水泵 → 止回阀 → 细格栅 → 曝气沉砂池 → 初沉池，把大颗粒和漂浮物先拿掉。', pointAt: 'grit' },
+      { text: '进生化段。厌氧池是释磷的地方 —— 聚磷菌在这里把磷放出来：', pointAt: 'ana' },
+      { text: '缺氧池靠内回流把硝态氮还原成氮气，这是脱氮的主战场：', pointAt: 'anx' },
+      { text: '好氧池完成硝化与有机物降解，鼓风机通过空气管给它供氧：', pointAt: 'aer' },
+      { text: '二沉池做泥水分离。上清液去深度处理，污泥一路回流、一路去浓缩脱水：', pointAt: 'sec' },
+      { text: '深度处理把关：混凝沉淀除磷 → 滤布滤池控 SS → 消毒 → 在线监测计量后排放。', pointAt: 'disinfect' },
+      {
+        text:
+          '整张图是 `ice-entity-designer` 画的，不是图片。滚轮可以缩放、空白处拖拽可以平移 —— ' +
+          '图的世界尺寸约 1454×985，是拖着看而不是缩略图。',
+      },
+    ],
+  });
+}
+
 /** 默认剧本：柱状图 + 画完之后指着 3 月讲。 */
 function salesPlan(): ToolCardPlan {
   return chartCard(SALES_DSL, {
@@ -248,11 +319,30 @@ function streamingPlan(): ToolCardPlan {
  *
  * 脚本化阶段就把这条回路走通，意义在于 M2 接真模型时，回路上的每一段都已经测过了。
  */
-function repairPlan(hasDiagnostics: boolean): ToolCardPlan {
+function repairPlan(hasDiagnostics: boolean, failedTool?: string): ToolCardPlan {
+  // 修复轮必须吐回**同一种**卡片：失败的是图，就修图。
+  // 原先这里无条件吐柱状图 —— 图 DSL 写错时 agent 会"修"成一张销量图。
+  const isDiagram = failedTool === RENDER_DIAGRAM_TOOL;
+
   if (!hasDiagnostics) {
+    if (isDiagram) {
+      return diagramCard(BROKEN_DIAGRAM_DSL, {
+        intro: '我先加一个「隔油池」试试 —— 你看看画出来什么样。',
+        beats: [{ text: '这一版是故意写错的 —— 用来演示诊断回灌的自修复回路（图这一路）。' }],
+      });
+    }
     return chartCard(BROKEN_DSL, {
       intro: '我先按「销售额」这个列名画一版，你看看。',
       beats: [{ text: '这一版是故意写错的 —— 用来演示诊断回灌的自修复回路。' }],
+    });
+  }
+
+  if (isDiagram) {
+    return diagramCard(WATER_PROCESS_DSL, {
+      intro:
+        '收到诊断了 —— `ice-entity-designer` 里没有「隔油池」这种符号，' +
+        '这套 31 种符号是给排水工艺图的记号集，不含隔油池。去掉它重画：',
+      beats: [{ text: '主流程不受影响，还是从进水一路走到排放口。', pointAt: 'inlet' }],
     });
   }
   return chartCard(SALES_DSL, {
@@ -333,6 +423,7 @@ function textOnlyPlan(message: string): ToolCardPlan {
           `我还没接模型，现在只能按关键词走固定剧本。\n` +
           `你刚才说的是「${message}」。\n\n` +
           `试试这些：\n` +
+          `  · 看看污水处理工艺图（ice-entity-designer 画的工艺流程图，可缩放平移）\n` +
           `  · 看看各渠道的月度销量\n` +
           `  · 看一下实时吞吐量\n` +
           `  · 要下发指令（走一遍中断 → 填表 → resume 的人机回环）\n` +
@@ -462,6 +553,14 @@ export interface PlanInput {
   message: string;
   /** 上一轮渲染端回灌的诊断（非空即"在修复轮里"）。 */
   hasDiagnostics: boolean;
+  /**
+   * 上一轮**失败的是哪个工具**（`ice-dsl-tool` context）。
+   *
+   * 只影响修复轮吐回哪种卡片：不知道的话就只能猜 ——
+   * 而"图 DSL 写错了，于是给你重画一张柱状图"是这个猜测最糟的结果。
+   * 缺省（老客户端不发这条）按图表卡处理，行为与加这条之前一致。
+   */
+  diagnosticsTool?: string | null;
   /** 用户在图上/控件条上做动作的 JSON 串。 */
   interaction?: string | null;
   /** AG-UI 的共享状态。客户端把"现在画面上是什么"放在这里。 */
@@ -488,8 +587,8 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
   const resumed = resumeValues(input.resume);
   if (resumed !== null) return resumedPlan(resumed);
 
-  // 已经在修复轮里：不管用户说了什么，都按修复走
-  if (input.hasDiagnostics) return repairPlan(true);
+  // 已经在修复轮里：不管用户说了什么，都按修复走（但要吐回**同一种**卡片）
+  if (input.hasDiagnostics) return repairPlan(true, input.diagnosticsTool ?? undefined);
 
   // 用户在图上做了动作：优先应答这件事，因为它比关键词更能说明意图
   if (input.interaction) {
@@ -497,9 +596,15 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
     if (plan) return plan;
   }
 
-  if (/故意|画错|写错|坏|诊断|修复/.test(text)) return repairPlan(false);
+  if (/故意|画错|写错|坏|诊断|修复/.test(text)) {
+    // "故意画错"要**配合内容**才知道画错哪种图
+    return repairPlan(false, isWaterAsk(text) ? RENDER_DIAGRAM_TOOL : undefined);
+  }
   if (/下发|确认参数|填表|参数确认|中断/.test(text)) return confirmPlan();
   if (/控件|组件|演示|第二批|字段类型|都能用/.test(text)) return showcasePlan();
+  // ⚠️ 水务这条必须排在「实时|趋势|流」之前：「工艺流程」里含「流」，
+  // 排在后面的话问工艺图会被流式剧本抢走（这个坑踩过一次）
+  if (isWaterAsk(text)) return waterProcessPlan();
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
   if (/销量|渠道|柱|卖/.test(text)) return salesPlan();
 
@@ -507,4 +612,12 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
 }
 
 /** 暴露给测试：几个 DSL 常量。 */
-export const SCENARIO_DSL = { SALES_DSL, BROKEN_DSL, TRAFFIC_DSL, CONFIRM_FORM_DSL, SHOWCASE_FORM_DSL };
+export const SCENARIO_DSL = {
+  SALES_DSL,
+  BROKEN_DSL,
+  TRAFFIC_DSL,
+  CONFIRM_FORM_DSL,
+  SHOWCASE_FORM_DSL,
+  WATER_PROCESS_DSL,
+  BROKEN_DIAGRAM_DSL,
+};

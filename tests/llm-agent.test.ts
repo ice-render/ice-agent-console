@@ -153,6 +153,50 @@ describe('buildLlmPlan：模型的选择 → 计划（纯函数，不碰网络�
     expect(plan.beats[0].text).toContain('提交');
   });
 
+  it('★ 模型调 render_diagram → 产出图卡而不是图表卡（不能只有 isForm 二元判断）', () => {
+    const args = {
+      kind: 'water-process',
+      units: [
+        { id: 'inlet', kind: 'inlet', left: 30, top: 120 },
+        { id: 'outlet', kind: 'outlet', left: 1320, top: 400 },
+      ],
+      pipes: [{ id: 'p1', sourceId: 'inlet', targetId: 'outlet', medium: 'sewage' }],
+    };
+    const plan: any = buildLlmPlan(
+      { text: '这是全厂工艺流程。', toolCall: { name: 'render_diagram', args, id: 'd1' } },
+      { text: '主流程从进水一路走到排放口。', toolCall: null },
+      'r1'
+    );
+    expect(plan.tool).toBe('render_diagram');
+    expect(plan.stateKey).toBe('diagram');
+    // 载荷原样透传（编译与校验都在前端）
+    expect(plan.payload.kind).toBe('water-process');
+    // 图卡不是中断卡
+    expect(plan.interrupt).toBeUndefined();
+    expect(plan.intro).toBe('这是全厂工艺流程。');
+    expect(plan.beats[0].text).toContain('主流程');
+  });
+
+  it('图卡也能「指着讲」：point_at 的 xValue 可以是单元 id', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_diagram', args: { kind: 'water-process', units: [] }, id: 'd2' } },
+      { text: '厌氧池是释磷段。', toolCall: { name: 'point_at', args: { xValue: 'ana' }, id: 'p1' } },
+      'r1'
+    );
+    expect(plan.tool).toBe('render_diagram');
+    expect(plan.beats[0]).toMatchObject({ pointAt: 'ana' });
+  });
+
+  it('认不出来的工具名 → 退回图表卡（与加图卡之前的行为一致）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_pie_in_the_sky', args: { kind: 'bar' }, id: 'x1' } },
+      null,
+      'r1'
+    );
+    expect(plan.tool).toBe('render_chart');
+    expect(plan.stateKey).toBe('chart');
+  });
+
   it('参数不是合法 JSON → 如实说，不装作没事', () => {
     const plan: any = buildLlmPlan(
       { text: '', toolCall: { name: 'render_chart', args: null, id: 'c1', argsRaw: '{"kind":"bar"' } as any },

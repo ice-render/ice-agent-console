@@ -10,6 +10,9 @@ module.exports = {
     '^@damoqiongqiu/ice-chart$': '<rootDir>/../ice-chart/dist/index.cjs',
     '^ice-web-components$': '<rootDir>/../ice-web-components/dist/index.cjs',
     '^ice-render$': '<rootDir>/../ice-render/dist/index.cjs',
+    // 图 DSL 的校验器要从这个包取符号/介质的白名单（单一事实来源，不复制一张会漂移的表）。
+    // 它的 dist 只 `require("ice-render")`，上面那条映射已经覆盖。
+    '^ice-entity-designer$': '<rootDir>/../ice-entity-designer/dist/index.cjs',
   },
   transform: {
     '^.+\\.ts$': [

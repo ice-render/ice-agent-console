@@ -30,7 +30,10 @@
  */
 import type { RunAgentInput } from '@ag-ui/core';
 import type { LlmConfig } from '../config';
-import { DSL_DIAGNOSTICS_CONTEXT_KEY, VIEW_INTERACTION_CONTEXT_KEY, COLLECT_INPUT_TOOL, RENDER_CHART_TOOL, STATE_CHART_KEY, STATE_FORM_KEY } from '../../shared/contract';
+import { DSL_DIAGNOSTICS_CONTEXT_KEY, VIEW_INTERACTION_CONTEXT_KEY, COLLECT_INPUT_TOOL, RENDER_CHART_TOOL, STATE_CHART_KEY, STATE_FORM_KEY,
+  RENDER_DIAGRAM_TOOL,
+  STATE_DIAGRAM_KEY,
+} from '../../shared/contract';
 import { planToEvents, type AnyEvent, type ToolCardPlan } from './dsl-to-events';
 import { chat, type ChatMessage } from './llm-client';
 import { REPAIR_HINT, SYSTEM_PROMPT, TOOL_DEFINITIONS } from './tools';
@@ -119,8 +122,18 @@ export function buildLlmPlan(
   }
 
   const isForm = call.name === COLLECT_INPUT_TOOL;
-  const tool = isForm ? COLLECT_INPUT_TOOL : RENDER_CHART_TOOL;
-  const stateKey = isForm ? STATE_FORM_KEY : STATE_CHART_KEY;
+  // 名字 → {工具, stateKey} 的映射表，**不是**二元分支。
+  // 写成 `isForm ? 表单 : 图表` 的话，模型调 `render_diagram` 会被当成图表卡渲染
+  // —— 卡片类型错了、stateKey 也错，而两次都"看起来成功了"，最难查的那种。
+  const TOOL_ROUTES: Record<string, { tool: string; stateKey: string }> = {
+    [COLLECT_INPUT_TOOL]: { tool: COLLECT_INPUT_TOOL, stateKey: STATE_FORM_KEY },
+    [RENDER_DIAGRAM_TOOL]: { tool: RENDER_DIAGRAM_TOOL, stateKey: STATE_DIAGRAM_KEY },
+    [RENDER_CHART_TOOL]: { tool: RENDER_CHART_TOOL, stateKey: STATE_CHART_KEY },
+  };
+  // 认不出来的工具名按图表卡兜底：与加图卡之前的行为一致（模型偶尔会编工具名）
+  const route = TOOL_ROUTES[call.name] ?? TOOL_ROUTES[RENDER_CHART_TOOL];
+  const tool = route.tool;
+  const stateKey = route.stateKey;
 
   // ---- 第二次调用的产出：结论（可能顺带指着某个点）----
   const beats: ToolCardPlan['beats'] = [];

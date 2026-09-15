@@ -5,23 +5,26 @@
  * 卡片的三个形态，正好对应协议里 tool call 的三个阶段：
  *
  *   流式中   TOOL_CALL_ARGS 在来   →  显示正在拼装的参数原文（带光标）
- *   完成     TOOL_CALL_END         →  按**工具名**分派：图表 / 表单 → 校验 → 上画布
+ *   完成     TOOL_CALL_END         →  按**工具名**分派：图表 / 表单 / 图 → 校验 → 上画布
  *   失败     校验不通过            →  保留原文 + 列出结构化诊断，并把诊断交出去回灌
  *
  * ## 按工具名分派
  *
- * `render_chart` 出图表卡、`collect_input` 出表单卡。**加一种卡片只是加一个工具名** ——
- * 归约器与时间线完全不用动，这正是"一张卡片 = 一次 tool call"这个粒度的好处。
+ * `render_chart` 出图表卡、`collect_input` 出表单卡、`render_diagram` 出图卡。
+ * **加一种卡片只是加一个工具名** —— 归约器与时间线完全不用动，
+ * 这正是"一张卡片 = 一次 tool call"这个粒度的好处。
  * （在此之前 CardView 硬编码 `ChartAdapter`，卡片承载不了非图表内容。）
  *
- * 两个形态都是"卡片内容"，都画在自己的 canvas 上、各自一个 ICE 实例；
+ * 三个形态都是"卡片内容"，都画在自己的 canvas 上、各自一个 ICE 实例；
  * 而卡片外壳（标题、状态、诊断、参数原文）始终是真 DOM。
  */
-import { COLLECT_INPUT_TOOL } from '../../shared/contract';
+import { COLLECT_INPUT_TOOL, RENDER_DIAGRAM_TOOL } from '../../shared/contract';
 import type { ToolItem } from '../domain/agui/reducer';
 import { ChartAdapter, type InteractionHandlers } from './chart-adapter';
+import { DiagramLayer } from './diagram-layer';
 import { FormLayer } from './form-layer';
 import { WidgetLayer, type WidgetAction } from './widget-layer';
+import { formatDiagramDiagnostics, validateDiagramDsl } from '../domain/diagram/validate';
 
 const STATUS_TEXT: Record<ToolItem['status'], string> = {
   streaming: '参数流式传输中…',
@@ -51,6 +54,7 @@ export class CardView {
   private readonly argsWrap: HTMLElement;
   private readonly chartWrap: HTMLElement;
   private readonly formWrap: HTMLElement;
+  private readonly diagramWrap: HTMLElement;
   private readonly diagEl: HTMLElement;
   private readonly hintEl: HTMLElement;
   private readonly adapter: ChartAdapter;
@@ -65,6 +69,9 @@ export class CardView {
 
   /** 表单层，同样惰性创建。与控件层互斥（图表卡才有控件条）。 */
   private formLayer: FormLayer | null = null;
+
+  /** 图层，同样惰性创建。与图表 / 表单三者互斥：一次 tool call 只有一个形态。 */
+  private diagramLayer: DiagramLayer | null = null;
 
   /** 当前这次 tool call 的工具名 —— `mount()` 靠它决定渲染成哪种卡片。 */
   private toolName = '';
@@ -126,6 +133,11 @@ export class CardView {
     this.formWrap.className = 'form-wrap';
     this.formWrap.hidden = true;
 
+    // 图层：与前两者**互斥**——第三种卡片形态（`render_diagram`）。
+    this.diagramWrap = document.createElement('div');
+    this.diagramWrap.className = 'diagram-wrap';
+    this.diagramWrap.hidden = true;
+
     // 控件层：图表卡底部的控件条，跟图表**并排**的另一块画布。
     this.widgetWrap = document.createElement('div');
     this.widgetWrap.className = 'widget-wrap';
@@ -139,7 +151,15 @@ export class CardView {
     this.hintEl.className = 'hint';
     this.hintEl.hidden = true;
 
-    body.append(this.argsWrap, this.chartWrap, this.formWrap, this.widgetWrap, this.diagEl, this.hintEl);
+    body.append(
+      this.argsWrap,
+      this.chartWrap,
+      this.formWrap,
+      this.diagramWrap,
+      this.widgetWrap,
+      this.diagEl,
+      this.hintEl
+    );
     this.el.append(head, body);
 
     this.adapter = new ChartAdapter(canvas, handlers);
@@ -181,7 +201,9 @@ export class CardView {
 
   /** 上画布。校验失败时保留原文并列出诊断，把诊断文本返回给调用方回灌。 */
   mount(dsl: unknown): { ok: boolean; diagnostics: string | null } {
-    return this.toolName === COLLECT_INPUT_TOOL ? this.mountForm(dsl) : this.mountChart(dsl);
+    if (this.toolName === COLLECT_INPUT_TOOL) return this.mountForm(dsl);
+    if (this.toolName === RENDER_DIAGRAM_TOOL) return this.mountDiagram(dsl);
+    return this.mountChart(dsl);
   }
 
   private mountChart(dsl: unknown): { ok: boolean; diagnostics: string | null } {
@@ -262,6 +284,75 @@ export class CardView {
   }
 
   /**
+   * 图卡：参数是一份**图 DSL**（kind-first），交给 `ice-entity-designer` 画。
+   *
+   * 与另两张卡片的差别：这个 DSL 的守卫是**自己**的（`src/domain/diagram/`），
+   * 因为上游的 `ice-entity-designer-dsl` 目前没有 water 编译器。
+   * 校验同样**永不抛**、同样给结构化诊断 —— 于是自修复回路那条路一行都不用改。
+   *
+   * 校验放在**建画布之前**：不通过就一块 canvas 都不建，只把诊断列出来。
+   * 这比"建了再拆"干净（拆不干净就是一张画布 + 一个 rAF 循环留着）。
+   */
+  private mountDiagram(dsl: unknown): { ok: boolean; diagnostics: string | null } {
+    const result = validateDiagramDsl(dsl);
+    if (!result.valid) {
+      this.failed = true;
+      this.el.dataset.status = 'error';
+      this.statusEl.textContent = '校验不通过';
+      const text = formatDiagramDiagnostics(result);
+      this.showDiagnostics(text);
+      return { ok: false, diagnostics: text };
+    }
+
+    let layer: DiagramLayer;
+    try {
+      layer = new DiagramLayer(dsl as any);
+      this.diagramWrap.append(layer.canvas);
+      // 同图表卡：先取消隐藏再量尺寸（display:none 时 clientWidth 是 0，
+      // 顺序反了会把画布量成 0 宽，表现为"canvas 存在但全白"）
+      this.diagramWrap.hidden = false;
+      // fit 必须在 try 里：它要动画布与视口，是最可能出问题的一步。
+      // 漏在外面的话异常会一路冒到事件处理里，变成整轮 RUN_ERROR ——
+      // 那样连诊断都回灌不了，用户只看到"出错了"。
+      layer.fit(this.diagramWrap.clientWidth, this.diagramWrap.clientHeight);
+    } catch (err) {
+      // 校验过了但视图层仍然抛（引擎 / 设计器 / 画布尺寸）：同样走诊断回灌。
+      // 先收干净再报错 —— 半建成的层留着就是一张画布 + 一个 rAF 循环。
+      try {
+        (layer as any)?.destroy();
+      } catch {
+        /* 收尾失败不掩盖原始错误 */
+      }
+      this.diagramLayer = null;
+      this.diagramWrap.hidden = true;
+      this.failed = true;
+      this.el.dataset.status = 'error';
+      this.statusEl.textContent = '渲染失败';
+      const text = `[错误] 建图失败：${(err as Error).message}`;
+      this.showDiagnostics(text);
+      return { ok: false, diagnostics: text };
+    }
+    this.diagramLayer = layer;
+
+    this.failed = false;
+    this.renderedDsl = dsl;
+
+    const counts = layer.counts();
+    this.argsWrap.hidden = true;
+    this.diagEl.hidden = true;
+    this.hintEl.hidden = false;
+    this.hintEl.innerHTML =
+      `参数共 <b>${JSON.stringify(dsl).length}</b> 字节，分片流式传完；` +
+      `已编译为 <b>${counts.symbols}</b> 个符号 + <b>${counts.pipes}</b> 段管线（第三个 ICE 实例，` +
+      `由 <code>ice-entity-designer</code> 绘制）。滚轮缩放、空白处拖拽平移。`;
+    const warnings = formatDiagramDiagnostics({ valid: true, errors: [], warnings: result.warnings });
+    if (warnings) {
+      this.showDiagnostics(warnings, true);
+    }
+    return { ok: true, diagnostics: warnings };
+  }
+
+  /**
    * 建控件层并摆好。只在第一次上画布成功时建。
    *
    * 顺序跟图表一样是"**先取消隐藏、再 fit**"：`display:none` 时父容器 `clientWidth` 为 0，
@@ -334,15 +425,26 @@ export class CardView {
   }
 
   pointAt(value: any): boolean {
+    // 图卡走自己的高亮（引擎没有通用的高亮原语，见 diagram-layer 的注释）
+    if (this.diagramLayer) return this.diagramLayer.pointAt(value);
     return this.adapter.pointAt(value);
   }
 
   clearPoint(): void {
+    if (this.diagramLayer) {
+      this.diagramLayer.clearPoint();
+      return;
+    }
     this.adapter.clearPoint();
   }
 
   resize(): void {
     if (this.renderedDsl === null) return;
+    if (this.diagramLayer) {
+      // 只重排画布，**不重设视口** —— 那会把用户辛苦拖到的位置冲掉
+      this.diagramLayer.fit(this.diagramWrap.clientWidth, this.diagramWrap.clientHeight);
+      return;
+    }
     if (this.formLayer) {
       this.formLayer.fit(this.formWrap.clientWidth || 420);
       return;
@@ -354,11 +456,35 @@ export class CardView {
   }
 
   get mounted(): boolean {
-    return this.adapter.mounted || this.formLayer !== null;
+    // 图卡也要算进来：`ThreadView.lastCard()` 按这个标志往回找，
+    // 漏了它会让 `point-at` 落到**上一张图表卡**上（静默错目标）
+    return this.adapter.mounted || this.formLayer !== null || this.diagramLayer !== null;
   }
 
   get isForm(): boolean {
     return this.formLayer !== null;
+  }
+
+  /** 这次 tool call 的工具名。自修复回路要知道"是哪张卡失败了"。 */
+  get tool(): string {
+    return this.toolName;
+  }
+
+  /** 图卡：符号 / 管线条数与工艺校验结果（调试 / e2e 用）。不是图卡就返回 null。 */
+  diagramStats(): { symbols: number; pipes: number; issues: Array<{ level: string; code: string; message: string; id?: string }> } | null {
+    if (!this.diagramLayer) return null;
+    const counts = this.diagramLayer.counts();
+    return { symbols: counts.symbols, pipes: counts.pipes, issues: this.diagramLayer.issues() };
+  }
+
+  /** 图卡：当前被「指着讲」高亮的单元 id。 */
+  diagramPointedId(): string | null {
+    return this.diagramLayer ? this.diagramLayer.pointedId : null;
+  }
+
+  /** 图卡：视口与内容屏幕范围（调试 / e2e 用；断言"fit 生效且没被裁"）。 */
+  diagramViewport(): ReturnType<DiagramLayer['viewportInfo']> | null {
+    return this.diagramLayer ? this.diagramLayer.viewportInfo() : null;
   }
 
   private showDiagnostics(text: string | null, asWarning = false): void {
@@ -374,7 +500,9 @@ export class CardView {
   }
 
   destroy(): void {
-    // 两张画布、两个 ICE 实例都要收：漏掉控件层/表单层就是一张画布 + 一个 rAF 循环留着
+    // 三张画布、三个 ICE 实例都要收：漏掉图层/表单层/控件层就是一张画布 + 一个 rAF 循环留着
+    this.diagramLayer?.destroy();
+    this.diagramLayer = null;
     this.formLayer?.destroy();
     this.formLayer = null;
     this.widgetLayer?.destroy();

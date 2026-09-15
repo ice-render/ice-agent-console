@@ -221,6 +221,24 @@
       }
       .form-wrap canvas { display: block; }
 
+      /*
+       * 图层：第三种形态（`render_diagram`），同样与前两者互斥。
+       *
+       * **高度必须由 CSS 定死**（不能像图表那样靠内容撑）：这一层是个可缩放平移的
+       * 视口，画布要一个确定的尺寸，初始视口才能按它居中算。也正因为是视口，
+       * 它比图表(300)高得多 —— 图的世界尺寸约 1454×985，卡片只有 872 宽，
+       * 高度给足才看得清一段主流程。
+       *
+       * 用**上边框**而不是表单那种左边框：四种形态一眼能分清
+       * （图表无装饰 / 控件条虚线 / 表单左侧实线 / 图上方实线）。
+       */
+      .diagram-wrap {
+        height: 520px;
+        border-top: 3px solid var(--ice);
+        border-radius: 4px;
+      }
+      .diagram-wrap canvas { display: block; }
+
       /* 流式拼装中的参数（半成品 DSL）——这是 AG-UI 相对"只转个圈"的差别所在 */
       .args {
         font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

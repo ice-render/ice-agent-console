@@ -85,6 +85,13 @@ const BASE = process.env.CONSOLE_URL || 'http://127.0.0.1:8100/';
   await chip('看看各渠道的月度销量');
   await shoot('hero');
 
+  // ---- 2b. 图卡片（工艺流程图）：第三种卡片形态，也是现在最大的一张图 ----
+  // 卡片比一个窗口高（画布 520 + 页头页脚），所以先调高视口再拍特写（见文件头第 3 条）。
+  await needTall();
+  await chip('看看污水处理工艺图');
+  await shoot('water-process', lastCard());
+  await needWindow();
+
   // ---- 3. 流式追加：走 appendData 快路径的卡片 ----
   await chip('看一下实时吞吐量');
   await shoot('streaming');
@@ -99,7 +106,7 @@ const BASE = process.env.CONSOLE_URL || 'http://127.0.0.1:8100/';
   await chip('看看新控件都能用吗');
   await shoot('showcase', lastCard());
 
-  // ---- 6. 自修复：校验不通过的卡片 + 诊断 ----
+  // ---- 6. 自修复：校验不通过的卡片 + 诊断（第一张坏卡）----
   await chip('故意画错');
   await shoot('self-repair', lastCard());
   await needWindow();

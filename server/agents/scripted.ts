@@ -11,7 +11,9 @@
  */
 import type { RunAgentInput } from '@ag-ui/core';
 import { EventType } from '@ag-ui/core';
-import { DSL_DIAGNOSTICS_CONTEXT_KEY, VIEW_INTERACTION_CONTEXT_KEY } from '../../shared/contract';
+import { DSL_DIAGNOSTICS_CONTEXT_KEY, VIEW_INTERACTION_CONTEXT_KEY,
+  DSL_TOOL_CONTEXT_KEY,
+} from '../../shared/contract';
 import { planToEvents, type AnyEvent } from './dsl-to-events';
 import { buildPlan } from './scenarios';
 import type { AgentRun } from './types';
@@ -63,6 +65,20 @@ export function readDiagnostics(input: RunAgentInput): string | null {
 }
 
 /**
+ * 上一轮**失败的是哪个工具**。
+ *
+ * 与 `readDiagnostics` 配套：诊断说"哪里错了"，这条说"是什么东西错了"，
+ * 修复轮靠它吐回同一种卡片。
+ * 老客户端不发这条时返回 null，剧本层按图表卡处理（与加这条之前一致）。
+ */
+export function readDiagnosticsTool(input: RunAgentInput): string | null {
+  const context = (input.context ?? []) as any[];
+  const hit = context.find((c) => c?.description === DSL_TOOL_CONTEXT_KEY);
+  if (!hit) return null;
+  return typeof hit.value === 'string' ? hit.value : String(hit.value ?? '');
+}
+
+/**
  * 上一轮用户在图上做了什么（点了数据点 / 框选了一段）。
  *
  * 跟诊断走同一条 `context` 通道，但语义完全不同：诊断是**渲染端的错误反馈**，
@@ -105,6 +121,7 @@ export class ScriptedAgent implements AgentRun {
     const plan = buildPlan({
       message: lastUserMessage(input),
       hasDiagnostics: readDiagnostics(input) !== null,
+      diagnosticsTool: readDiagnosticsTool(input),
       interaction: readInteraction(input),
       // state 让 agent 能读到"现在画面上是什么"，才能做"换个画法"这类事
       state: input.state,

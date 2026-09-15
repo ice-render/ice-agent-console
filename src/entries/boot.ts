@@ -13,6 +13,7 @@
 import {
   DSL_DIAGNOSTICS_CONTEXT_KEY,
   VIEW_INTERACTION_CONTEXT_KEY,
+  DSL_TOOL_CONTEXT_KEY,
 } from '../../shared/contract';
 import { runAgent, apiUrl, type ResumeEntry } from '../domain/agui/client';
 import { installTheme } from '../domain/theme';
@@ -55,6 +56,14 @@ let running = false;
 
 /** 渲染端诊断。跨轮存活，所以要放在归约器外面。 */
 let pendingDiagnostics: string | null = null;
+
+/**
+ * 这一轮失败的是哪个工具（`render_chart` / `collect_input` / `render_diagram`）。
+ *
+ * 与 `pendingDiagnostics` 同生命周期：诊断说"哪里错了"，这个说"什么东西错了"。
+ * 修复轮据此吐回同一种卡片。
+ */
+let failedTool: string | null = null;
 /** 自修复只自动重试一次，避免"诊断永远修不好"时无限打转。 */
 let autoRepairUsed = false;
 
@@ -171,6 +180,9 @@ function applyEffects(effects: Effect[]): string | null {
         const result = card?.mount(effect.dsl);
         if (result && !result.ok) {
           diagnostics = result.diagnostics;
+          // 记下是哪种卡失败了：修复轮要吐回同一种形态（见 shared/contract.ts 的
+          // DSL_TOOL_CONTEXT_KEY）。不记的话「图 DSL 写错了」会被修成一张柱状图。
+          failedTool = card?.tool ?? null;
         }
         break;
       }
@@ -249,7 +261,11 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
   const context: Array<{ description: string; value: string }> = [];
   if (pendingDiagnostics) {
     context.push({ description: DSL_DIAGNOSTICS_CONTEXT_KEY, value: pendingDiagnostics });
+    if (failedTool) {
+      context.push({ description: DSL_TOOL_CONTEXT_KEY, value: failedTool });
+    }
     pendingDiagnostics = null;
+    failedTool = null;
   }
   if (options.interaction) {
     context.push({
@@ -300,11 +316,13 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const CHIPS = [
+  '看看污水处理工艺图',
   '看看各渠道的月度销量',
   '看一下实时吞吐量',
   '要下发指令',
   '看看新控件都能用吗',
   '故意画错',
+  '故意画错工艺图',
   '今天天气怎么样',
 ];
 
@@ -359,6 +377,20 @@ window.addEventListener('resize', () => view.resizeAll());
   formFieldTexts: () => view.lastFormCard()?.formFieldTexts() ?? [],
   /** 最后一张表单卡里各字段的**值**。用来断言新类型真的进了取值回路。 */
   formValues: () => view.lastFormCard()?.formValues() ?? {},
+  /**
+   * 最后一张图卡的模型层事实：符号数 / 管线数 / 工艺校验问题。
+   *
+   * 为什么 e2e 需要它：canvas 里没有 DOM 目标，而"图对不对"是**模型层**的事实
+   * （34 个符号、37 段管线、`validateWater()` 零问题）。只数像素证明不了数量对。
+   */
+  diagramStats: () => view.lastCard()?.diagramStats() ?? null,
+  /** 最后一张图卡里被「指着讲」高亮的单元 id。 */
+  diagramPointedId: () => view.lastCard()?.diagramPointedId() ?? null,
+  /**
+   * 最后一张图卡的视口与"内容画到屏幕哪儿了"。
+   * canvas 里没有 DOM 目标，"有没有被裁到框外"只能靠它算。
+   */
+  diagramViewport: () => view.lastCard()?.diagramViewport() ?? null,
 };
 
 inputEl.focus();

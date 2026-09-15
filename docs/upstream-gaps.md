@@ -260,6 +260,54 @@ setter 内部会 `FrameManager.wake()`）。这不是"顺手帮忙重绘"：清�
 
 ---
 
+## 12. 【观察】`EntityDesigner` / `WaterProcessDesigner` 没有程序化高亮原语
+
+**现象**：图卡要支持 agent「指着讲」（高亮某个单元并讲解），但 `ice-entity-designer`
+没有暴露"高亮某个图元"的接口。
+
+具体查证：
+
+| 看起来能用的 | 实际情况 |
+|---|---|
+| `chrome.selection` | 只被 `ICEControlPanelManager` 的变换面板消费，而那个面板**只由 mousedown 触发**（`ICEControlPanelManager.ts:78-101`），没有程序化入口 |
+| `designer.select(id)` | 只写 `selectedId` 字段并 `__emitChange()`（`FlowDesigner.ts:269-273`），**没有任何渲染消费者** —— 调用它画面上毫无变化 |
+| `ice.setSelection([node])` | 只写 `selectionList`（`ICE.ts:765-774`），被 a11y 与插件读，**不画** |
+| `setInteractionState('selected')` | `WaterSymbol` 没有 `states` 表，合并进去等于空操作 |
+
+**本工程的绕法**：给 `WaterSymbol` 打 style 补丁（`applyPatch({ style: { strokeStyle, lineWidth: 3 } })`
+—— 它的 `__shapeKeys` 含 `'style'`，会触发 `syncShape()` 重建内部图形），
+再叠一个半透明底块。两个坑：
+
+- `WaterSymbol.applyPatch` **不置 `dirty`**（与 `FlowNode.applyPatch` 不同），必须自己 `ice.dirty = true`，
+  否则改了样式要等下一次别的原因触发重绘才看得到；
+- 底块用 `ice.addTool()` 放进工具层（不序列化、不参与命中测试），并给 `zIndex: -1`
+  压在符号**下面** —— 盖在上面会把位号与名称糊掉，而那两个正是要读的。
+
+**是否建议上游改**：值得提供一个 `highlight(id)` / `setHighlight(ids[])` 之类的入口。
+现在这套绕法能用，但"改样式再自己置脏"属于从外面模拟内部状态，
+一旦 `WaterSymbol` 改了 `syncShape` 的触发条件就会静默失效。
+另外 `designer.select()` 不产生任何视觉反馈这件事本身也容易误导使用者
+（名字看起来像"选中并高亮"）。
+
+---
+
+## 13. 【观察】`fitViewport()` 与 `dpr > 1` 不兼容
+
+**现象**：`dpr > 1` 时 `fitViewport()` 会把内容放大到被裁掉。
+
+**原因**：`fitCanvasToDisplaySize()` 把 `canvasWidth` 设成 **backing store 尺寸**（= css × dpr），
+而 `fitViewport()` 拿这个值算 scale；可渲染时视口还会再乘一次 dpr。于是净效果是**多乘了一次**。
+
+**本工程的绕法**：图层刻意**不传 `dpr`**（保持引擎默认 1）。
+`ice-smart-water` 没遇到这个问题是因为它本来就用 1。
+`chart-adapter.ts` 传 `devicePixelRatio` 是图表的做法（图表走自己的 resize 路径，不调 `fitViewport`）——
+**不要把那个习惯抄到用 `fitViewport` 的地方**。
+
+**是否建议上游改**：值得。`fitViewport` 内部应该用 CSS 尺寸（`canvasWidth / dpr`）算 scale，
+与它给渲染用的那套口径对齐。目前的症状是"高分屏上图被放大并裁掉"，而且**不报错**。
+
+---
+
 ## 汇总
 
 | # | 类型 | 条目 | 阻塞本工程？ |
@@ -275,6 +323,8 @@ setter 内部会 `FrameManager.wake()`）。这不是"顺手帮忙重绘"：清�
 | 9 | 已修 | `fitCanvasToDisplaySize` 不置脏 → resize 静默白屏 | 否（`ice-render` 2.12.1 已修） |
 | 10 | 请求 | 控件宽度没有"父级拉满"的传导 | 否（DSL 层兜住） |
 | 11 | 观察 | 暗色主题层间明度差小 + 图表提示框仍是白底 | 否（默认改用 light，留 `?theme=dark`） |
+| 12 | 请求 | `EntityDesigner` 没有程序化高亮原语（`select()` 无视觉反馈） | 否（改样式 + 工具层底块绕开） |
+| 13 | 请求 | `fitViewport()` 与 `dpr > 1` 不兼容（内容被放大裁掉，不报错） | 否（图层保持 dpr=1） |
 
 **结论**：除了第 9 条（一个**引擎缺陷**，已在 2.12.1 修掉），其余都是"选择不那样用"
 或"换个做法"。作为一次对 ICE 家族对外接口的真实集成测试，结果是：接口够用。

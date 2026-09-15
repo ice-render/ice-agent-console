@@ -27,6 +27,21 @@ export interface ConsoleState {
 export interface ConsoleHandle {
   getState: () => ConsoleState;
   apiUrl: () => string;
+  /** 最后一张图卡的模型层事实（不是图卡时 null）。 */
+  diagramStats: () => { symbols: number; pipes: number; issues: any[] } | null;
+  /** 最后一张图卡里被「指着讲」高亮的单元 id。 */
+  diagramPointedId: () => string | null;
+  /** 最后一张图卡的视口与内容屏幕范围。 */
+  diagramViewport: () => {
+    scale: number;
+    tx: number;
+    ty: number;
+    cssWidth: number;
+    cssHeight: number;
+    screenBox: { left: number; top: number; right: number; bottom: number } | null;
+    contentBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
+    focusBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
+  } | null;
 }
 
 /** 读应用内部状态。比只看 DOM 强得多——协议层的东西在 DOM 里是看不全的。 */
@@ -247,6 +262,15 @@ export async function cardCanvasStats(page: Page): Promise<{
 
 /** 表单卡的画布。表单与图表**互斥**，同一次 tool call 只会出现其中之一。 */
 export const FORM_CANVAS = '.card .form-wrap canvas';
+
+/**
+ * 工艺图那块画布（第三块，`render_diagram` 卡片）。
+ *
+ * 与 `CHART_CANVAS` / `FORM_CANVAS` 并列：选择器指名具体层，
+ * **不要**用 `.card canvas` —— 卡片里现在有三块 canvas，靠 DOM 顺序命中
+ * 一旦有人调整顺序就会静默量错对象。
+ */
+export const DIAGRAM_CANVAS = '.card .diagram-wrap canvas';
 
 /**
  * 画布上**着墨部分的包围盒**（CSS 像素），以及它占画布的比例。

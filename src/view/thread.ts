@@ -86,7 +86,13 @@ export class ThreadView {
     return card.el;
   }
 
-  /** 最后一张图表卡片——`STATE_DELTA` 和「指着讲」的作用对象。 */
+  /**
+   * 最后一张**已上画布**的卡片 —— `STATE_DELTA` 与「指着讲」的作用对象。
+   *
+   * 注意它**不按类型过滤**：图表卡、表单卡、图卡都算。所以每种层都必须把自己的存在
+   * 反映到 `CardView.mounted` 上 —— 漏一种，这里就会往回找到上一张别的类型的卡片，
+   * 于是「指着讲」高亮到一张看不见的卡上（静默错目标，比什么都不做更难查）。
+   */
   lastCard(): CardView | undefined {
     for (let i = this.root.children.length - 1; i >= 0; i--) {
       const el = this.root.children[i] as HTMLElement;

@@ -21,6 +21,10 @@ const family = {
   '@damoqiongqiu/ice-chart-dsl': path.resolve(WORKSPACE, 'ice-chart-dsl'),
   'ice-web-components': path.resolve(WORKSPACE, 'ice-web-components'),
   'ice-web-components-dsl': path.resolve(WORKSPACE, 'ice-web-components-dsl'),
+  // 图卡片用：`ice-entity-designer` 把 `ice-render` 当 peer 依赖（它的 dist 里是
+  // `require("ice-render")`），必须让它解析到**同一个**引擎目录，否则会出现第二份内核
+  // —— 设计器建的图元在引擎眼里不是"同一个 ICE 的组件"。
+  'ice-entity-designer': path.resolve(WORKSPACE, 'ice-entity-designer'),
 };
 
 module.exports = (env, argv) => {

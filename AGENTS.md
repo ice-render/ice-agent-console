@@ -1,7 +1,8 @@
 # ice-agent-console — 给 Agent 的工作说明
 
-这个工程把 **ICE 家族**（`ice-render` / `@damoqiongqiu/ice-chart` / `@damoqiongqiu/ice-chart-dsl`）
-接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表以卡片形式内联在对话时间线里。
+这个工程把 **ICE 家族**（`ice-render` / `@damoqiongqiu/ice-chart` / `@damoqiongqiu/ice-chart-dsl` /
+`ice-web-components` / `ice-web-components-dsl` / `ice-entity-designer`）
+接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表 / 图 / 表单以卡片形式内联在对话时间线里。
 
 改之前请先读 `README.md`（架构与边界）和 `docs/upstream-gaps.md`（对上游的观察）。
 
@@ -18,11 +19,20 @@
 4. **`appendData` 只能用在数值/时间轴。** 它不补 `xAxis.data`，类目轴追加新类目会错位。
    判不了就走全量 `setOption`（判断逻辑在 `src/domain/ice/option-mapping.ts`）。
 5. **卡片按 tool 名分派，三种形态互斥。** `render_chart` → 图表卡（`.chart-wrap` +
-   `.widget-wrap` 两块画布）；`collect_input` → 表单卡（`.form-wrap` 一块）。
+   `.widget-wrap` 两块画布）；`collect_input` → 表单卡（`.form-wrap` 一块）；
+   `render_diagram` → 图卡（`.diagram-wrap` 一块，由 `ice-entity-designer` 绘制）。
    写选择器时**必须指明是哪一块**，并在断言"显示的是哪种形态"时用**可见性**而不是计数 ——
-   卡片骨架在构造时就一并建好了容器，`hidden` 的那些也在 DOM 里
-   （`e2e/helpers.ts` 的 `CHART_CANVAS` / `WIDGET_CANVAS` / `FORM_CANVAS`）。
+   卡片骨架在构造时就**把所有** wrapper 与 canvas 都建好了，`hidden` 的那些也在 DOM 里，
+   数元素个数会永远通过、等于没测
+   （`e2e/helpers.ts` 的 `CHART_CANVAS` / `WIDGET_CANVAS` / `FORM_CANVAS` / `DIAGRAM_CANVAS`）。
    层之间是**并排**的，不需要 `linkViewport` / `setInputPassthrough`。
+5b. **图卡的 DSL 守卫在本仓**（`src/domain/diagram/`）。上游 `ice-entity-designer-dsl`
+   **没有** water 编译器，所以那套 kind-first 的 DSL 定义在这里。
+   它的校验器与另两张卡同口径：**永不抛、只给结构化诊断** —— 自修复回路靠这个文本。
+   白名单（31 种符号 / 9 种介质）**从 `ice-entity-designer` 转发，不要在本仓复制**，
+   否则上游加一种符号就会两边不一致（agent 吐的合法载荷被自家校验器判成非法）。
+   另外：`server/` 那套 tsconfig 不加载 DOM，所以 `shared/` 里**只能放类型**，
+   运行时的白名单留在 `src/domain/diagram/`。
 6. **中断轮的结束状态是 `waiting`，不是 `idle`。** 协议里中断**也是** `RUN_FINISHED`。
    所以 e2e 里不能用 `settleAfter`（它等 `idle`）去等一次中断 —— 永远等不到。
 7. **恢复中断 = 开新 run + 带 `resume`**，不是"接着跑"。
@@ -43,6 +53,10 @@
 | JSON Patch / 追加识别 | `src/domain/agui/state-patch.ts` |
 | SSE 解析 | `src/domain/agui/sse.ts` |
 | 协议 → ICE 的纯翻译 | `src/domain/ice/option-mapping.ts` |
+| 图 DSL 的校验 / 编译（纯逻辑） | `src/domain/diagram/{types,validate,compile}.ts` |
+| 图 DSL 的结构类型（server 也要用） | `shared/diagram.ts` |
+| 图层（图卡的画布，ice-entity-designer） | `src/view/diagram-layer.ts` |
+| 内置案例：污水处理工艺图（34 单元 / 37 管线） | `server/agents/water-process-case.ts` |
 | 层（canvas + ICE 实例）的尺寸与生命周期 | `src/domain/ice/layer.ts` |
 | 图表实例的建立与交互接线 | `src/view/chart-adapter.ts` |
 | 控件层（图表卡的第二块画布，ice-web-components） | `src/view/widget-layer.ts` |

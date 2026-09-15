@@ -1,6 +1,6 @@
 # ice-agent-console
 
-把 **ICE 家族**接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表与表单以卡片形式**内联在对话时间线里**。
+把 **ICE 家族**接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表 / 图 / 表单以卡片形式**内联在对话时间线里**。
 
 ![主界面](docs/images/hero.png)
 
@@ -28,12 +28,14 @@
 
 ## 1. 快速开始
 
-前置：**四个**兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录）。
+前置：**五个**兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录：
+运行时靠 webpack `resolve.alias`、类型靠 tsconfig `paths`、测试靠 jest `moduleNameMapper`）。
 
 ```bash
 # 在 ice-render/ 目录下
 ls ice-render/dist/index.cjs ice-chart/dist/index.cjs ice-chart-dsl/dist/index.cjs \
-   ice-web-components/dist/index.cjs ice-web-components-dsl/dist/index.cjs   # 都应在
+   ice-web-components/dist/index.cjs ice-web-components-dsl/dist/index.cjs \
+   ice-entity-designer/dist/index.cjs   # 都应在（图卡用 ice-entity-designer）
 
 cd ice-agent-console
 npm install
@@ -46,11 +48,13 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 
 | 按钮 | 演示什么 | 截图 |
 |---|---|---|
+| **看看污水处理工艺图** | **图卡**（第三种卡片）：`ice-entity-designer` 画的 34 单元 / 37 管线工艺流程，可缩放平移、能被「指着讲」 | [工艺图](docs/images/water-process.png) |
 | 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 上画布 → **指着 3 月讲** | 头图 |
 | 要下发指令 | **人机回环**：中断 → 出表单卡 → 填完提交 → 带 `resume` 开新 run | [表单卡](docs/images/form-card.png) |
 | 看看新控件都能用吗 | **控件原型页**：一张表单里放 10 个字段，覆盖 DSL 0.3.0 的 20 个字段类型 | [新控件](docs/images/showcase.png) |
 | 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 | [流式追加](docs/images/streaming.png) |
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 | [自修复](docs/images/self-repair.png) |
+| 故意画错工艺图 | 同一条回路，但**吐回同一种卡片**：图 DSL 写错 → 修出来的还是图 | — |
 | 今天天气怎么样 | 兜底：不画图，只回文字 | — |
 
 **也可以在图上直接操作**：
@@ -145,9 +149,10 @@ ice-agent-console · 大模型配置自检
 
 | 工具 | 干什么 |
 |---|---|
-| `render_chart` | 把数据画成图表卡 |
+| `render_chart` | 把数据画成图表卡（`ice-chart`） |
+| `render_diagram` | 把**图**画成图卡：kind-first 的图 DSL，目前一种 kind = `water-process`（给排水工艺流程图，`ice-entity-designer`） |
 | `collect_input` | **渲染成可填的表单，并让这一轮停下来等提交** —— 在协议里这就是一次中断 |
-| `point_at` | 画完之后指着某个数据点讲（`xValue` 必须是刚画那张图的 x 刻度之一） |
+| `point_at` | 画完之后指着某个地方讲（图表：`xValue` 是 x 刻度；工艺图：`xValue` 是单元 id 或位号，如 `ana` / `AE-101`） |
 
 一次 run 里**调两次模型**：第一次让它选工具；把工具结果回灌之后再调第二次，拿"画完之后的那句话"。
 这是为了对齐剧本里的卡片形态（`先说一句 → 卡片 → 再讲一句`），也是真实 agent 循环的形状。
@@ -167,9 +172,42 @@ ice-agent-console · 大模型配置自检
 
 ## 2. 它演示了什么
 
-四条回路，都是这个工程存在的理由：
+五条回路，都是这个工程存在的理由：
 
 ![流式追加](docs/images/streaming.png)
+
+### 2.0 起点：一张真实的工艺图（不是示意图）
+
+第一个按钮画的是**某 10 万 m³/d 市政污水厂的全流程**：
+AAO + 混凝沉淀 + 滤布滤池 + 消毒，**34 个单元 / 37 段管线**。
+
+![工艺图](docs/images/water-process.png)
+
+它不是一张图片，也不是拿几个符号摆出来的示意图：
+
+| 事实 | 值 |
+|---|---|
+| 单元 / 管线 | 34 / 37 |
+| 用到的符号种类 | **31 / 31**（`ice-entity-designer` 的全部给排水记号） |
+| 用到的介质 | **9 / 9**（污水 / 出水 / 回流污泥 / 混合液回流 / 剩余污泥 / 空气 / 药剂 / 信号 / 动力） |
+| 引擎的工艺校验 | `validateWater()` **零问题**（位号唯一、进出线齐全、出水路径有在线监测、剩余污泥有出路、AAO 有内回流） |
+
+选它当第一个例子的原因就是这个覆盖率：它把给排水工艺图这套记号系统**整个跑了一遍**，
+而不是挑几个符号证明"能画"。
+
+**这张图能做的三件事**，也正好是 ICE 家族三层能力的叠加：
+
+1. **画** —— `ice-entity-designer` 的 `WaterProcessDesigner`，由 agent 吐出的一份
+   **kind-first 图 DSL** 驱动（`{ kind: 'water-process', units, pipes }`）。
+2. **看** —— 图的世界尺寸约 1460×936，而卡片只有 ~872 宽，所以它是**可缩放平移的视口**，
+   不是缩略图。初始视野按 DSL 里 `viewport.focus` 指定的主流程链适配。
+3. **讲** —— agent 讲解时能把某个单元**移到视野中央并高亮**（`point_at`），
+   与图表卡的「指着讲」走同一条通道（`ice/point-at` 自定义事件）。
+
+一处与"搬图"有关的细节值得点出：这份数据从 `ice-smart-water` 搬过来时，
+**管线端口大多没写**（37 段里有 28 段）。引擎 `createPipe` 的默认端口是 `B → T`（向下绕回），
+而图纸惯例是 `R → L`（从左往右）。兜底写在 `src/domain/diagram/compile.ts`，
+`tests/diagram-dsl.test.ts` 有一条专门钉它的回归——这条要是错了，整张图的走向都会变。
 
 ### 2.1 单向：事件流驱动画布
 
@@ -280,6 +318,7 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | 工具名 | 卡片形态 | 画布 |
 |---|---|---|
 | `render_chart` | 图表卡 | `.chart-wrap` + `.widget-wrap`（两块，两个 ICE 实例） |
+| `render_diagram` | **图卡** | `.diagram-wrap`（一块，由 `ice-entity-designer` 渲染）。**kind-first** 的图 DSL，目前一种 kind = `water-process` |
 | `collect_input` | **表单卡** | `.form-wrap`（一块，由 `ice-web-components-dsl` 渲染）。DSL 0.3.0 起支持 **20 个字段类型** |
 
 三者**互斥**（一次 tool call 只有一种形态），但卡片骨架在构造时就一并建好了容器，
@@ -293,9 +332,15 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 │ .widget-wrap <canvas>                   │  ← ICE 实例 ②（ice-web-components 的控件条）
 └─────────────────────────────────────────┘
 ┌─ 表单卡 ───────────────────────────────┐
-│ .form-wrap   <canvas>                   │  ← ICE 实例③（ice-web-components-dsl）
+│ .form-wrap   <canvas>                   │  ← ICE 实例 ③（ice-web-components-dsl）
+└─────────────────────────────────────────┘
+┌─ 图卡 ─────────────────────────────────┐
+│ .diagram-wrap <canvas>                  │  ← ICE 实例 ④（ice-entity-designer）
 └─────────────────────────────────────────┘
 ```
+
+四块画布、四个 ICE 实例，互相**不叠加**（并排/互斥），所以用不上
+`linkViewport` / `setInputPassthrough` 那些"层叠加"才需要的原语。
 
 为什么要两块而不是一块：**引擎的模型是「一层 = 一个 ICE 实例 + 一张 canvas」**，
 而 `ice-chart` 内部自己 `new ICE()`、不接受外部实例（见 `docs/upstream-gaps.md` 第 7 条）。
@@ -335,8 +380,9 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | 谁 | 怎么拿到颜色 |
 |---|---|
 | 画布里的**控件** | `iceUIManager.setTheme()` —— 库的主题是"组件构造时读一次"，所以在 boot 时定死 |
-| 画布里的**引擎外壳**（选中框 / 手柄 / 阴影色） | `applyThemeToEngine(ice)` —— 引擎主题是**实例级**的，卡片里那三块画布各调一次 |
+| 画布里的**引擎外壳**（选中框 / 手柄 / 阴影色） | `applyThemeToEngine(ice)` —— 引擎主题是**实例级**的，卡片里那几块画布各调一次 |
 | 画布里的**图表** | 不用单独调：`ICEChart` 的 `theme: 'auto'` 按**引擎主题背景色的亮度**判明暗 |
+| 画布里的**图**（选中框 / 对齐引导线 / 插槽） | `ice-entity-designer` 的构造里会 `applyDesignerChrome(ice)`，它**从当前引擎主题派生**。所以图层的构造顺序是 **先 `applyThemeToIce` 再 `new WaterProcessDesigner`** —— 反了派生的就是引擎内置默认蓝，而不是家族品牌色 |
 | **DOM 外壳** | `applyThemeToCss()` 把同一张表写进 CSS 变量，样式表里只引用 `var(--…)` |
 
 **默认 light，暗色是 `?theme=dark`。** 暗色那条路是通的 —— 实测过 select 的下拉面板、
@@ -496,20 +542,25 @@ ice-agent-console/
 │       ├── scenarios.ts     剧本模式：关键词 → 计划
 │       ├── llm.ts           模型模式：LlmAgent（自然语言 → 计划）
 │       ├── llm-client.ts    模型模式：/chat/completions 客户端（fetch，无 SDK）
-│       └── tools.ts         模型模式：tool 定义 + 系统提示词
+│       ├── tools.ts         模型模式：tool 定义 + 系统提示词
+│       └── water-process-case.ts  内置案例：污水处理工艺图（34 单元 / 37 管线）
 ├── src/
 │   ├── domain/              纯逻辑，无 DOM
 │   │   ├── agui/            SSE 解析 / 归约器 / JSON Patch
 │   │   ├── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
+│   │   ├── diagram/         图 DSL：白名单 / 校验 / 编译（纯逻辑，node 可测）
 │   │   └── theme.ts         主题：一份 token 分发给画布与 DOM
 │   ├── view/                DOM 外壳 + canvas 层
 │   │   ├── chart-adapter.ts 图表层（ICE 实例 ①）
 │   │   ├── widget-layer.ts  控件层（ICE 实例 ②，ice-web-components 画）
 │   │   ├── form-layer.ts    表单层（表单卡唯一那块画布，ice-web-components-dsl 画）
-│   │   ├── card.ts          卡片：按 tool 名分派出图表 / 表单
+│   │   ├── diagram-layer.ts 图层（图卡唯一那块画布，ice-entity-designer 画）
+│   │   ├── card.ts          卡片：按 tool 名分派出图表 / 图 / 表单
 │   │   └── thread.ts        thread 外壳
 │   └── entries/boot.ts      接线：分发动作、执行 effects、触发 run
-├── shared/contract.ts       自定义事件名 / context 键（server 与 web 的唯一出处）
+├── shared/
+│   ├── contract.ts          自定义事件名 / context 键（server 与 web 的唯一出处）
+│   └── diagram.ts           图 DSL 的结构类型（**只有类型** —— server 那套 tsconfig 不加载 DOM）
 ├── public/index.html        页面骨架 + 样式（颜色全走 CSS 变量，见 §3.5）
 ├── scripts/
 │   ├── dev.mjs              一条命令起两个进程
@@ -591,13 +642,14 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **140 passed** / 9 suites |
-| e2e | **24 passed** / 7 specs |
-| 生产包 | 约 1.1 MiB（引擎 / 图表 / 控件库 / DSL 四个兄弟仓的产物 + 应用自己那点） |
+| 单测 | **171 passed** / 10 suites |
+| e2e | **29 passed** / 8 specs |
+| 生产包 | 约 1.31 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
-> 控件库（`ice-web-components`）一进来就占掉 488 KiB —— 是反着用的代价：
-> 它是个 84 个组件的完整工具集，这里只用到了 `ICEButton`。
-> 真要瘦身得走 tree-shaking（它目前的产物是 UMD 单文件，摇不掉）。
+> 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，
+> 这里只用到了 `ICEButton`；设计器（`ice-entity-designer`）196 KiB —— 它带 9 个领域包的记号集，
+> 图卡只用了其中给排水那一个。两个都是"反着用"的代价，真要瘦身得走 tree-shaking
+> （它们目前的产物都是 UMD 单文件，摇不掉）。
 
 e2e 的判据**不是"DOM 里有没有 canvas"**——canvas 元素存在但全白是很典型的一种失败。
 用例一律数**非透明像素**，并断言画布内容在某些事件前后**确实变了**（比如"指着讲"）。

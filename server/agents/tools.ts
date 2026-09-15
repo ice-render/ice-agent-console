@@ -32,6 +32,32 @@ const FORM_FIELD_TYPES = [
 /** 图表类型，与 `ice-chart-dsl` 的 `kind` 对齐。 */
 const CHART_KINDS = ['bar', 'line', 'pie', 'area', 'scatter'];
 
+/** 图 DSL 的 kind，与 `shared/diagram.ts` 的 `DIAGRAM_KINDS` 对齐。 */
+const DIAGRAM_KINDS = ['water-process'];
+
+/**
+ * 给排水工艺图的符号种类，与 `ice-entity-designer` 的 `WATER_SYMBOL_KINDS` 对齐。
+ *
+ * 与 `FORM_FIELD_TYPES` 一样是**为了 schema 可读而抄的一份**：真正的白名单在上游包里，
+ * 客户端校验器（`src/domain/diagram/types.ts`）直接从那边转发。这里抄这一份的原因是
+ * 模型需要看到合法取值才不至于瞎编 —— 而 schema 里没法写"去 require 那个包"。
+ * 上游加种类时两边要一起动；漏了的表现是"模型不画新种类"，不是画错。
+ */
+const WATER_SYMBOL_KINDS = [
+  'barScreen', 'gritChamber', 'primaryClarifier', 'anaerobicTank', 'anoxicTank',
+  'aerobicTank', 'secondaryClarifier', 'coagulationTank', 'filterBed', 'disinfectionTank',
+  'storageTank', 'deodorizer',
+  'sludgeThickener', 'dewateringMachine', 'sludgeSilo',
+  'pump', 'submersiblePump', 'screwPump', 'blower', 'vfd', 'dosingUnit',
+  'valve', 'motorValve', 'checkValve', 'flowMeter', 'levelGauge', 'pressureGauge', 'analyzer',
+  'inlet', 'outlet', 'sludgeOut',
+];
+
+/** 介质，与 `ice-entity-designer` 的 `WATER_MEDIUM_STYLES` 对齐（决定颜色与线型）。 */
+const WATER_MEDIA = [
+  'sewage', 'effluent', 'returnSludge', 'recycle', 'sludge', 'air', 'chemical', 'signal', 'power',
+];
+
 /**
  * 工具定义（OpenAI 的 `tools` 形状）。
  *
@@ -140,15 +166,84 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function' as const,
     function: {
+      name: 'render_diagram',
+      description:
+        '把一张**图**内联成卡片画在对话里（kind-first 的图 DSL）。' +
+        '目前只有 `water-process` 一种 kind：给水排水工艺流程图（污水处理厂、给水厂）。' +
+        '它与 render_chart 的区别是"图" vs "图表"：图有带位号的构筑物符号、' +
+        '按介质着色的管线与流向，适合讲工艺流程；要展示数据用 render_chart。',
+      parameters: {
+        type: 'object',
+        required: ['kind', 'units'],
+        properties: {
+          kind: {
+            type: 'string',
+            enum: DIAGRAM_KINDS,
+            description: '图的种类。目前只有 water-process。',
+          },
+          title: { type: 'string', description: '可选标题' },
+          viewport: {
+            type: 'object',
+            description:
+              '初始视野提示。图比卡片宽得多，建议指定"先看哪几个单元"的 id。',
+            properties: {
+              focus: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '要框进初始视野的单元 id',
+              },
+            },
+          },
+          units: {
+            type: 'array',
+            description: '处理单元 / 设备 / 边界（画成带位号的符号）',
+            items: {
+              type: 'object',
+              required: ['id', 'kind', 'left', 'top'],
+              properties: {
+                id: { type: 'string', description: '唯一 id，管线的两端引用它' },
+                kind: { type: 'string', enum: WATER_SYMBOL_KINDS, description: '符号种类' },
+                name: { type: 'string', description: '中文名（画在符号下方）' },
+                tag: { type: 'string', description: '位号，如 AE-101（画在符号上方）' },
+                left: { type: 'number', description: '画布 x 坐标（绝对坐标）' },
+                top: { type: 'number', description: '画布 y 坐标（绝对坐标）' },
+              },
+            },
+          },
+          pipes: {
+            type: 'array',
+            description: '管线（画成按介质着色的连线）',
+            items: {
+              type: 'object',
+              required: ['id', 'sourceId', 'targetId', 'medium'],
+              properties: {
+                id: { type: 'string' },
+                sourceId: { type: 'string', description: '起点单元 id' },
+                targetId: { type: 'string', description: '终点单元 id' },
+                medium: { type: 'string', enum: WATER_MEDIA, description: '介质，决定颜色与线型' },
+                dn: { type: 'string', description: '管径标注，如 DN600；信号/动力线留空' },
+                sourcePort: { type: 'string', enum: ['T', 'R', 'B', 'L', 'C'], description: '起点槽位，默认 R' },
+                targetPort: { type: 'string', enum: ['T', 'R', 'B', 'L', 'C'], description: '终点槽位，默认 L' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
       name: 'point_at',
       description:
-        '**画完图之后**，如果你想指着某个数据点讲，用它把高亮落到那个点上。' +
-        'x 值必须是刚画那张图的 x 轴刻度之一。一次只指一个点。',
+        '**画完之后**，如果你想指着某个地方讲，用它把高亮落上去。' +
+        '图表：xValue 是 x 轴刻度之一；工艺图：xValue 是单元 id 或位号（如 ana / AE-101）——' +
+        '指图里的单元时还会把镜头移过去。一次只指一处。',
       parameters: {
         type: 'object',
         required: ['xValue'],
         properties: {
-          xValue: { type: 'string', description: '要指着的 x 值，例如 "3月"' },
+          xValue: { type: 'string', description: '要指的地方：图表的 x 值（如 "3月"）或图里的单元 id / 位号（如 ana / AE-101）' },
         },
       },
     },
@@ -165,10 +260,11 @@ export const TOOL_DEFINITIONS = [
  * 需要时可以把它读进来注入 —— 但对常见场景，schema + 诊断已经够用。
  */
 export const SYSTEM_PROMPT = `你是 ice-agent-console 里的 agent。你的回复会显示在一个对话界面里，
-你说的每句话都会以文字气泡出现；你调用的工具会把**图表或表单内联成一张卡片**画在对话里。
+你说的每句话都会以文字气泡出现；你调用的工具会把**图表、图或表单内联成一张卡片**画在对话里。
 
 工作方式：
-1. 先想清楚用户要什么。要看数据 → 调 render_chart；需要用户提供信息 → 调 collect_input。
+1. 先想清楚用户要什么。要看数据 → 调 render_chart；要讲工艺流程/画图 → 调 render_diagram；
+   需要用户提供信息 → 调 collect_input。
 2. 需要调工具时，**先说一句你要做什么**（这句话会排在卡片前面），然后调工具。
 3. 工具调完（或本轮不需要工具）之后，**再给一句结论**。有图的话，结论要针对图里的
    具体数字讲，别只复述"图画好了"。

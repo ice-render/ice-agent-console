@@ -27,6 +27,18 @@ export const RENDER_CHART_TOOL = 'render_chart';
 export const COLLECT_INPUT_TOOL = 'collect_input';
 
 /**
+ * 渲染图表的工具名（`ice-entity-designer`，kind-first）。
+ *
+ * 与 `render_chart` 并列的第三种卡片形态：参数是一份**图 DSL**，
+ * 由 `src/domain/diagram/` 校验、`src/view/diagram-layer.ts` 画到自己的 canvas 上。
+ *
+ * 为什么叫 diagram 而不是 water：DSL 是 **kind-first** 的（`kind` 字段决定谁来编译），
+ * 现在只落了 `water-process` 一个 kind，但工具名与卡片形态是通用的 ——
+ * 以后加流程图 / BPMN / UML 只是加一个 kind，不用再加一种卡片。
+ */
+export const RENDER_DIAGRAM_TOOL = 'render_diagram';
+
+/**
  * 图表 DSL 在共享状态里的键。
  *
  * AG-UI 的 `state` 是**一份两边都看得见的文档**，这里放"画布上现在是什么"。
@@ -36,6 +48,9 @@ export const STATE_CHART_KEY = 'chart';
 
 /** 表单 DSL 在共享状态里的键。 */
 export const STATE_FORM_KEY = 'form';
+
+/** 图 DSL 在共享状态里的键。同样是"画布上现在是什么"。 */
+export const STATE_DIAGRAM_KEY = 'diagram';
 
 /**
  * 「指着讲」的画布指令。走 CUSTOM 事件。
@@ -61,6 +76,20 @@ export const EVT_POINT_CLEAR = 'ice/point-clear';
  * 的原生通道，但 `context` 就是给这类东西准备的。
  */
 export const DSL_DIAGNOSTICS_CONTEXT_KEY = 'ice-dsl-diagnostics';
+
+/**
+ * 「这一次诊断是**哪个工具**失败的」的 context 键。
+ *
+ * 为什么诊断文本之外还要单独说这一件事：诊断文本只说了"哪里写错了"，
+ * 没说"是什么东西写错了"。而修复轮要**吐回同一种卡片** —— 不知道失败的是哪种卡，
+ * 就只能猜；猜错的后果是"图 DSL 写错了，agent 给你重画一张柱状图"（真发生过：
+ * 修复剧本原先无条件吐销量柱状图）。
+ *
+ * 单独一条 context 而不是把诊断包成 JSON：那条通道的既有形状（纯文本）已经被
+ * 自修复回路的单测与 e2e 钉住了，改成对象是破坏性的；加一条是增量的。
+ * 收到这条之前的老客户端行为不变（缺省按图表卡处理）。
+ */
+export const DSL_TOOL_CONTEXT_KEY = 'ice-dsl-tool';
 
 /**
  * 「用户在图上做了什么」的结构化上下文。

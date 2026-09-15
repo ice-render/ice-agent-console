@@ -13,10 +13,18 @@ import {
   ScriptedAgent,
   lastUserMessage,
   readDiagnostics,
+  readDiagnosticsTool,
 } from '../server/agents/scripted';
 import { buildPlan, resumeValues } from '../server/agents/scenarios';
 import { planToEvents, type ToolCallCardPlan } from '../server/agents/dsl-to-events';
-import { COLLECT_INPUT_TOOL, DSL_DIAGNOSTICS_CONTEXT_KEY, RENDER_CHART_TOOL } from '../shared/contract';
+import {
+  COLLECT_INPUT_TOOL,
+  DSL_DIAGNOSTICS_CONTEXT_KEY,
+  DSL_TOOL_CONTEXT_KEY,
+  RENDER_CHART_TOOL,
+  RENDER_DIAGRAM_TOOL,
+  STATE_DIAGRAM_KEY,
+} from '../shared/contract';
 
 function input(overrides: Partial<RunAgentInput> = {}): RunAgentInput {
   return {
@@ -135,6 +143,97 @@ describe('buildPlan 剧本选择', () => {
 
   it('兜底剧本不画图', () => {
     expect(buildPlan({ message: '今天天气怎么样', hasDiagnostics: false }).payload).toBeUndefined();
+  });
+});
+
+describe('图卡剧本（内置案例：污水处理工艺图）', () => {
+  it('水务问法 → 图卡，而不是图表卡', () => {
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false });
+    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+    expect((plan as ToolCallCardPlan).stateKey).toBe(STATE_DIAGRAM_KEY);
+  });
+
+  it('载荷是 34 个单元 / 37 段管线（与 ice-smart-water 的案例一致）', () => {
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    const payload = payloadOf(plan);
+    expect(payload.kind).toBe('water-process');
+    expect(payload.units).toHaveLength(34);
+    expect(payload.pipes).toHaveLength(37);
+  });
+
+  it('★ 含「流」的水务问法不会被流式剧本抢走', () => {
+    // 回归：水务分支必须排在 `/实时|趋势|流|…/` **之前**，
+    // 否则"工艺流程"里的"流"会把这条问法判成实时吞吐量
+    for (const text of ['看看工艺流程', '污水处理工艺流程', 'AAO 工艺流程图']) {
+      const plan = buildPlan({ message: text, hasDiagnostics: false });
+      expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+    }
+    // 反向：真的问吞吐量还是要走流式剧本
+    const streaming = buildPlan({ message: '看一下实时吞吐量', hasDiagnostics: false });
+    expect(toolOf(streaming)).toBe(RENDER_CHART_TOOL);
+  });
+
+  it('节拍里有指着讲的单元 id，且都能在图里找到', () => {
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    const ids = new Set(payloadOf(plan).units.map((u: any) => u.id));
+    const pointed = (plan.beats || []).map((b) => b.pointAt).filter(Boolean) as string[];
+    expect(pointed.length).toBeGreaterThan(0);
+    for (const id of pointed) {
+      expect(ids.has(id)).toBe(true);
+    }
+  });
+
+  it('「故意画错工艺图」吐的是**图**的坏 DSL（未知符号种类），不是图表的坏 DSL', () => {
+    const plan = buildPlan({ message: '故意画错工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+    const kinds = payloadOf(plan).units.map((u: any) => u.kind);
+    expect(kinds).toContain('greaseTrap'); // 隔油池：看着合理，但不在这套 31 种符号里
+  });
+
+  it('★ 修复轮按 diagnosticsTool 吐回同一种卡片（不然图 DSL 写错会被"修"成柱状图）', () => {
+    const fixedDiagram = buildPlan({
+      message: '',
+      hasDiagnostics: true,
+      diagnosticsTool: RENDER_DIAGRAM_TOOL,
+    }) as ToolCallCardPlan;
+    expect(toolOf(fixedDiagram)).toBe(RENDER_DIAGRAM_TOOL);
+    expect((fixedDiagram as any).payload.units.map((u: any) => u.kind)).not.toContain('greaseTrap');
+
+    // 老客户端不发这条 → 退回图表卡（与加这条之前的行为一致）
+    const fallback = buildPlan({ message: '', hasDiagnostics: true }) as ToolCallCardPlan;
+    expect(toolOf(fallback)).toBe(RENDER_CHART_TOOL);
+  });
+
+  it('readDiagnosticsTool 读出「哪个工具失败了」', () => {
+    const withTool = input({
+      context: [{ description: DSL_TOOL_CONTEXT_KEY, value: RENDER_DIAGRAM_TOOL }] as any,
+    });
+    expect(readDiagnosticsTool(withTool)).toBe(RENDER_DIAGRAM_TOOL);
+    expect(readDiagnosticsTool(input())).toBeNull();
+    // 只认自己的 key，别的 context 不会误判
+    const other = input({
+      context: [{ description: DSL_DIAGNOSTICS_CONTEXT_KEY, value: 'x' }] as any,
+    });
+    expect(readDiagnosticsTool(other)).toBeNull();
+  });
+
+  it('端到端：ScriptedAgent 拿到「图失败」的 context 时，产出的仍是图卡', async () => {
+    const agent = new ScriptedAgent(NO_PACE);
+    const events: any[] = [];
+    for await (const event of agent.run(
+      input({
+        context: [
+          { description: DSL_DIAGNOSTICS_CONTEXT_KEY, value: '[错误] units[34].kind：未知的符号种类' },
+          { description: DSL_TOOL_CONTEXT_KEY, value: RENDER_DIAGRAM_TOOL },
+        ] as any,
+      })
+    )) {
+      events.push(event);
+    }
+    const start = events.find((e) => e.type === EventType.TOOL_CALL_START);
+    expect(start?.toolCallName).toBe(RENDER_DIAGRAM_TOOL);
+    const snapshot = events.find((e) => e.type === EventType.STATE_SNAPSHOT);
+    expect(Object.keys(snapshot?.snapshot ?? {})).toEqual([STATE_DIAGRAM_KEY]);
   });
 });
 
