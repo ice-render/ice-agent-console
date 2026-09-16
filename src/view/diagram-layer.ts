@@ -250,7 +250,9 @@ export class DiagramLayer {
       // 这张图世界宽约 4900，在 1440 宽的窗口里"整图适配"大约是 0.21 ——
       // 所以下限必须低于它（原来 0.25 时，整图适配与按 focus 的初始视野**双双被夹住**，
       // 症状是"开页看不到完整的主流程，而且怎么缩都缩不出来"，还不报错）。
-      minScale: options.minScale ?? 0.12,
+      // ⚠️ 这个数**跟着图的世界尺寸走**：图铺开之后"整张图装进可视区"需要的倍率会更小，
+      //   夹住它的症状是"怎么缩都装不下整张图"，而且不报错（e2e 的「看整张图」那条会红）。
+      minScale: options.minScale ?? 0.085,
       maxScale: options.maxScale ?? 2.5,
       padding: options.padding ?? 16,
       maxInitialScale: options.maxInitialScale ?? 1,
@@ -300,6 +302,111 @@ export class DiagramLayer {
   /** 符号 / 管线条数（e2e 用它钉「图真的建出来了、数量对」）。 */
   counts(): { symbols: number; pipes: number } {
     return { symbols: this.compiled.symbols, pipes: this.compiled.pipes };
+  }
+
+  /**
+   * 每个单元的**真实落墨范围**（世界坐标，含标签）。
+   *
+   * ## 为什么不能只用 `getMinBoundingBox()`
+   *
+   * 引擎那个方法算的是**组件自己**的盒子（`__localBox()`），**不含子节点**。
+   * 而符号的位号与名称是**子节点**（`ICEText`，由 `syncShape()` 挂上去的），
+   * 而且刻意画在盒子**外面**：位号在顶边上方、名称在底边下方，
+   * 文字盒的宽度还是 `max(w + 24, 90)` —— 对 32 宽的阀门就是 90 宽，左右各溢出 29px。
+   *
+   * 所以"图元有没有叠"必须按 `节点 ∪ 全部子节点` 的并集算。用组件自己的盒子会得出
+   * "0 处重叠"这个**假结论**（我第一版就是这么量的，和肉眼看的结果正好相反）。
+   *
+   * ⚠️ 这个并集是**矩形并集**，比实际落墨略大（圆的四角、斜线的包围盒都算进去了）。
+   * 拿它当"重叠检测"用是偏严的一侧 —— 正是我们要的：宁可多报几处去人眼确认，
+   * 也不要漏掉真正压在一起的那种。
+   */
+  nodeBoxes(): Array<{ id: string; kind: string; minX: number; minY: number; maxX: number; maxY: number }> {
+    const nodes: any[] = this.designer.nodes || [];
+    const out: Array<{ id: string; kind: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
+    for (const node of nodes) {
+      const box = this.__inkBoxOf(node);
+      if (!box) continue;
+      out.push({
+        id: String(node.state?.id ?? ''),
+        kind: String(node.state?.kind ?? ''),
+        minX: box.minX,
+        minY: box.minY,
+        maxX: box.maxX,
+        maxY: box.maxY,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 每条管线的**标注盒**（世界坐标）。
+   *
+   * 用引擎公开的 `getLabelRenderInfo()` —— 它给的是 `{ text, x, y, halfW, halfH }`，
+   * 与 `drawLabel()` 同源（不是另算一遍）。标注默认画在折线**中点**上，
+   * 所以同一个走廊里的多条平行管线，中点容易撞在一起。
+   *
+   * ⚠️ **那两个 `x / y` 是局部坐标，不是世界坐标**（`getLabelPosition()` 内部做了
+   * `point - left/top`，而 `drawLabel` 是在组件自己的世界变换下画这两个数的）。
+   * 不补偏移的话量出来全是零点附近的值 —— 第一版就是拿局部坐标去比世界坐标的单元盒，
+   * 结果既漏报又乱报。按引擎自己的注释（`ICEPolyLine` 的 `left/top` 与 `startPoint` 重合），
+   * 正交折线没有旋转，所以补一层 `+ left/top` 就对了。
+   *
+   * ⚠️ 只取标注盒，**不取整条管线的包围盒**：管线本来就要连到单元上，
+   * 按整条线算的话每一根都"压着"两端的单元，全是假阳性。
+   */
+  edgeLabelBoxes(): Array<{ id: string; text: string; minX: number; minY: number; maxX: number; maxY: number }> {
+    const edges: any[] = this.designer.edges || [];
+    const out: Array<{ id: string; text: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
+    for (const edge of edges) {
+      if (typeof edge?.getLabelRenderInfo !== 'function') continue;
+      const info = edge.getLabelRenderInfo();
+      if (!info || !info.text) continue;
+      // 局部 → 世界
+      const left = Number(edge.state?.left) || 0;
+      const top = Number(edge.state?.top) || 0;
+      const cx = left + Number(info.x);
+      const cy = top + Number(info.y);
+      out.push({
+        id: String(edge.state?.id ?? ''),
+        text: String(info.text),
+        minX: cx - info.halfW,
+        minY: cy - info.halfH,
+        maxX: cx + info.halfW,
+        maxY: cy + info.halfH,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * 一个单元（含它画出来的所有部件）的并集包围盒。
+   *
+   * 递归下去是因为部件也可能有子节点（`__closedPoly` 拆成两段折线的写法就是）。深度很小，
+   * 但加个上限防止意外的环。
+   */
+  private __inkBoxOf(node: any, depth = 0): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    const own = this.__boxOf(node);
+    let acc = own;
+    const merge = (b: { minX: number; minY: number; maxX: number; maxY: number } | null) => {
+      if (!b) return;
+      acc = acc
+        ? {
+            minX: Math.min(acc.minX, b.minX),
+            minY: Math.min(acc.minY, b.minY),
+            maxX: Math.max(acc.maxX, b.maxX),
+            maxY: Math.max(acc.maxY, b.maxY),
+          }
+        : b;
+    };
+    if (depth < 8) {
+      const children: any[] = node?.children || node?.childNodes || [];
+      for (const child of children) {
+        if (!child || child === node) continue;
+        merge(this.__inkBoxOf(child, depth + 1));
+      }
+    }
+    return acc;
   }
 
   /**

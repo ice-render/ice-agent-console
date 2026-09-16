@@ -148,6 +148,22 @@
    开关是"构建期默认 + 运行期覆盖"两级，与 `?demo=` / `?theme=` 同一口径；
    构建期默认还额外要求 `RUN_MODE === 'demo'`（否则演示构建上 `?demo=0` 会自动弹错误卡）。
    ⚠️ 改 UI 之后跑 `npm run shoot`（第 12 条）时它已经带上 `?autoplay=0`，别去掉。
+15. **工艺图的布局不许"图元压住图元"，而且这件事是可断言的 —— 改坐标前后都跑那条用例。**
+   判据在 `src/domain/diagram/layout.ts`（纯函数）+ `tests/diagram-layout.test.ts`：
+   零重叠、两两间隙 ≥20px、每单元摊到的世界面积有下限（基础图与提标后的图各判一遍）。
+   ⚠️ **"占多大"必须按落墨盒算，不能用引擎的 `getMinBoundingBox()`**：
+   那个方法**不算子节点**，而位号/名称是子节点、还刻意画在盒子外面，
+   宽度是 `max(w + 24, 90)`（32 宽的阀门 → 90 宽的文字盒，左右各溢出 29px）。
+   用错会得出"0 处重叠"这个**假结论** —— 比量不出来更危险，第一版就是这么错的。
+   调坐标的流程：`scripts/layout-model.mjs`（离线模型，与单测同一套公式）
+   + `scripts/layout-sandbox.mjs`（试缩放系数），秒级迭代，别靠反复开浏览器。
+   ⚠️ **绝对像素/绝对倍率类的判据会随"图的世界尺寸"过期**：
+   放开间距（世界尺寸 ×1.75）之后，"开页有图"那条着墨判据从 >20000 掉到 12439 而变红。
+   现在改成**覆盖率**（着墨 ÷ 可视区面积）。同理 `minScale` 也得跟着图的大小走
+   （当前 0.085，判据是"要能把整张图缩进可视区"）。
+   还有一类**应用层解决不了**的：管线标注钉在折线顶点上、引擎没有偏移入口，
+   所以"标注压住符号文字"对间距是尺度不变的（放大到 2.2 倍数量一动不动）。
+   记在 `docs/upstream-gaps.md` 第 16 条，别再去试"放大间距"这条死路。
 
 ---
 
@@ -167,6 +183,8 @@
 | 「这批补丁是追加行 / 增删图元 / 其它」的识别（纯逻辑） | `src/domain/agui/state-patch.ts` |
 | 工艺图图层（ice-entity-designer 的画布） | `src/view/diagram-layer.ts` |
 | 内置案例：污水处理工艺图（68 单元 / 81 管线，会被剧本增删） | `shared/water-process-case.ts` |
+| **图元有没有压住 / 挤不挤**（落墨盒 + 重叠检测，纯逻辑） | `src/domain/diagram/layout.ts` |
+| 调坐标用的离线沙盘（试缩放系数、不启浏览器） | `scripts/layout-model.mjs` + `scripts/layout-sandbox.mjs` |
 | 层（canvas + ICE 实例）的尺寸与生命周期 | `src/domain/ice/layer.ts` |
 | 图表实例的建立与交互接线 | `src/view/chart-adapter.ts` |
 | 控件层（图表卡的第二块画布，ice-web-components） | `src/view/widget-layer.ts` |

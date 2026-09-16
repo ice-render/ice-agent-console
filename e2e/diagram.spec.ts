@@ -126,8 +126,18 @@ test('开页就是工艺图：无需任何对话、数量对、引擎校验无�
   expect(Math.abs(backing.h - box.height)).toBeLessThanOrEqual(1);
 
   // 着墨：不是"元素存在但全白"。工艺图的符号是**实底填充**（水线浅蓝 / 泥线浅黄），
-  // 所以墨量主要由填充贡献，阈值可以定得比细线条图高。
-  expect(await countInk(page, DIAGRAM_CANVAS)).toBeGreaterThan(20_000);
+  // 所以墨量主要由填充贡献。
+  //
+  // ⚠️ 判据用**覆盖率**（着墨 ÷ 可视区面积），不用绝对像素数。
+  // 这里原来写的是 `> 20_000`，是照当时的初始倍率（约 0.21）标定的 ——
+  // 后来把图元间距整体放开（世界尺寸 ×1.75），"按 focus 适配"算出的初始倍率变成 0.124。
+  // 画面看起来**一模一样**（符号的屏幕尺寸不变，因为世界尺寸与倍率同比例变），
+  // 但那块区域在屏幕上的像素少了 → 墨量掉到 12439，这条就红了。
+  // 绝对阈值绑在"图的世界尺寸 × 窗口大小"上，而这两样都会变；覆盖率才是这件事的本意。
+  const region = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport().region);
+  const ink = await countInk(page, DIAGRAM_CANVAS);
+  const coverage = ink / (region.width * region.height);
+  expect(coverage, `着墨 ${ink} / 可视区 ${region.width}×${region.height} = ${coverage.toFixed(4)}`).toBeGreaterThan(0.008);
 
   // ---- 2. 模型层：这才是"图对不对" ----
   const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());

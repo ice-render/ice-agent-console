@@ -450,6 +450,29 @@ export class StageView {
     return this.diagram()?.pointedId ?? null;
   }
 
+  /**
+   * 每个单元的**真实渲染包围盒**（世界坐标，含标签）。
+   *
+   * 为什么要这个口：`diagramStats()` 只回答"数量对不对"，`viewportInfo()` 只回答
+   * "整张图有没有被裁到框外" —— **没有一个回答"图元之间有没有叠"**。
+   * 而"叠"正是那种不会报错、校验也查不出（`validateWater()` 只管工艺语义）、
+   * 只有人眼看得见的问题。量它只能靠真实盒子，不能从 DSL 的 `left/top` 加预设尺寸推：
+   * `inline: false` 的符号把名字与位号画在盒子**外面**，实际占的比预设尺寸大一截。
+   */
+  diagramBoxes(): Array<{ id: string; kind: string; minX: number; minY: number; maxX: number; maxY: number }> | null {
+    return this.diagram()?.nodeBoxes() ?? null;
+  }
+
+  /**
+   * 每条管线的**标注盒**（`DN700 污水` 那类文字）。
+   *
+   * 单独一个口而不是并进 `diagramBoxes()`：单元的落墨盒与管线的标注盒是两类东西
+   * （一个含形状，一个只有文字），判重叠时要分别对"自己这一类"和"另一类"都查一遍。
+   */
+  diagramEdgeLabels(): ReturnType<DiagramLayer['edgeLabelBoxes']> | null {
+    return this.diagram()?.edgeLabelBoxes() ?? null;
+  }
+
   diagramViewport(): ReturnType<DiagramLayer['viewportInfo']> | null {
     return this.diagram()?.viewportInfo() ?? null;
   }

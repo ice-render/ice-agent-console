@@ -103,9 +103,9 @@ const TRAIN_2 = ['ana2', 'anx2', 'aer2', 'sec2'];
  * 它们插在 `filter`（滤布滤池）与 `disinfect`（消毒）之间。
  */
 export const UPGRADE_UNITS: WaterProcessUnit[] = [
-  { id: 'ozone', kind: 'storageTank', name: '臭氧接触池', tag: 'OT-301', left: 3200, top: 900 },
-  { id: 'carbon', kind: 'filterBed', name: '活性炭滤池', tag: 'AC-301', left: 3460, top: 900 },
-  { id: 'membrane', kind: 'filterBed', name: '膜池（超滤）', tag: 'UF-301', left: 3720, top: 900 },
+  { id: 'ozone', kind: 'storageTank', name: '臭氧接触池', tag: 'OT-301', left: 5600, top: 1575 },
+  { id: 'carbon', kind: 'filterBed', name: '活性炭滤池', tag: 'AC-301', left: 6055, top: 1575 },
+  { id: 'membrane', kind: 'filterBed', name: '膜池（超滤）', tag: 'UF-301', left: 6510, top: 1575 },
 ];
 
 /**
@@ -165,111 +165,111 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
   viewport: { focus: MAIN_FLOW_IDS },
   units: [
     // ================= 水线主线：预处理（y = 60，一路往右） =================
-    { id: 'inlet', kind: 'inlet', name: '厂外进水', tag: 'IN', left: 60, top: 60 },
-    { id: 'coarseScreen', kind: 'barScreen', name: '粗格栅', tag: 'GR-101', left: 240, top: 60 },
-    { id: 'inletPump', kind: 'pump', name: '进水泵', tag: 'P-101', left: 430, top: 64 },
-    { id: 'checkValve', kind: 'checkValve', name: '出水止回阀', tag: 'CV-101', left: 540, top: 70 },
-    { id: 'fineScreen', kind: 'barScreen', name: '细格栅', tag: 'GR-102', left: 650, top: 60 },
-    { id: 'grit', kind: 'gritChamber', name: '曝气沉砂池', tag: 'GC-101', left: 840, top: 60 },
+    { id: 'inlet', kind: 'inlet', name: '厂外进水', tag: 'IN', left: 105, top: 105 },
+    { id: 'coarseScreen', kind: 'barScreen', name: '粗格栅', tag: 'GR-101', left: 420, top: 105 },
+    { id: 'inletPump', kind: 'pump', name: '进水泵', tag: 'P-101', left: 755, top: 115 },
+    { id: 'checkValve', kind: 'checkValve', name: '出水止回阀', tag: 'CV-101', left: 945, top: 120 },
+    { id: 'fineScreen', kind: 'barScreen', name: '细格栅', tag: 'GR-102', left: 1140, top: 105 },
+    { id: 'grit', kind: 'gritChamber', name: '曝气沉砂池', tag: 'GC-101', left: 1470, top: 105 },
     // ⚠️ 初沉池在这一版里**会被拆掉** —— 见 UPGRADE_REMOVED_UNIT_IDS。
     //    提标改造剧本删它（AAO 前不设初沉池可以让更多碳源进生化段，是真实做法）。
-    { id: 'primary', kind: 'primaryClarifier', name: '初沉池', tag: 'PC-101', left: 1070, top: 60 },
+    { id: 'primary', kind: 'primaryClarifier', name: '初沉池', tag: 'PC-101', left: 1870, top: 105 },
     // 配水井：两组生化线的分水点。真实厂里必须有，否则两组配水不均
-    { id: 'distribution', kind: 'storageTank', name: '配水井', tag: 'DW-101', left: 1290, top: 60 },
+    { id: 'distribution', kind: 'storageTank', name: '配水井', tag: 'DW-101', left: 2255, top: 105 },
 
     // ================= ① 第一组生化线（y = 60） =================
-    { id: 'ana1', kind: 'anaerobicTank', name: '厌氧池 A', tag: 'AT-101', left: 1530, top: 60 },
-    { id: 'anx1', kind: 'anoxicTank', name: '缺氧池 A', tag: 'AX-101', left: 1740, top: 60 },
-    { id: 'aer1', kind: 'aerobicTank', name: '好氧池 A', tag: 'AE-101', left: 1970, top: 60 },
-    { id: 'sec1', kind: 'secondaryClarifier', name: '二沉池 A', tag: 'SC-101', left: 2250, top: 60 },
+    { id: 'ana1', kind: 'anaerobicTank', name: '厌氧池 A', tag: 'AT-101', left: 2680, top: 105 },
+    { id: 'anx1', kind: 'anoxicTank', name: '缺氧池 A', tag: 'AX-101', left: 3045, top: 105 },
+    { id: 'aer1', kind: 'aerobicTank', name: '好氧池 A', tag: 'AE-101', left: 3445, top: 105 },
+    { id: 'sec1', kind: 'secondaryClarifier', name: '二沉池 A', tag: 'SC-101', left: 3940, top: 105 },
 
     // ================= ② 第二组生化线（y = 300，与第一组并联） =================
-    { id: 'ana2', kind: 'anaerobicTank', name: '厌氧池 B', tag: 'AT-201', left: 1530, top: 300 },
-    { id: 'anx2', kind: 'anoxicTank', name: '缺氧池 B', tag: 'AX-201', left: 1740, top: 300 },
-    { id: 'aer2', kind: 'aerobicTank', name: '好氧池 B', tag: 'AE-201', left: 1970, top: 300 },
-    { id: 'sec2', kind: 'secondaryClarifier', name: '二沉池 B', tag: 'SC-201', left: 2250, top: 300 },
+    { id: 'ana2', kind: 'anaerobicTank', name: '厌氧池 B', tag: 'AT-201', left: 2680, top: 525 },
+    { id: 'anx2', kind: 'anoxicTank', name: '缺氧池 B', tag: 'AX-201', left: 3045, top: 525 },
+    { id: 'aer2', kind: 'aerobicTank', name: '好氧池 B', tag: 'AE-201', left: 3445, top: 525 },
+    { id: 'sec2', kind: 'secondaryClarifier', name: '二沉池 B', tag: 'SC-201', left: 3940, top: 525 },
 
     // ================= 回流 / 剩余污泥 / 超越（y = 560） =================
     // 两组各一台回流泵（各自回到自己那组厌氧池）+ 一台共用的剩余污泥泵
-    { id: 'returnPump1', kind: 'submersiblePump', name: '回流污泥泵 A', tag: 'P-SB-101', left: 1560, top: 560 },
-    { id: 'returnPump2', kind: 'submersiblePump', name: '回流污泥泵 B', tag: 'P-SB-201', left: 1790, top: 560 },
-    { id: 'wastePump', kind: 'submersiblePump', name: '剩余污泥泵', tag: 'P-SB-301', left: 2420, top: 560 },
-    { id: 'bypassValve', kind: 'valve', name: '初沉池超越阀', tag: 'V-102', left: 960, top: 570 },
+    { id: 'returnPump1', kind: 'submersiblePump', name: '回流污泥泵 A', tag: 'P-SB-101', left: 2730, top: 980 },
+    { id: 'returnPump2', kind: 'submersiblePump', name: '回流污泥泵 B', tag: 'P-SB-201', left: 3130, top: 980 },
+    { id: 'wastePump', kind: 'submersiblePump', name: '剩余污泥泵', tag: 'P-SB-301', left: 4235, top: 980 },
+    { id: 'bypassValve', kind: 'valve', name: '初沉池超越阀', tag: 'V-102', left: 1680, top: 995 },
 
     // ================= 深度处理 + 提标改造段（y = 900） =================
     // ⚠️ 位置在生化段**右侧**，图纸上是一条继续往右的线 —— 深度处理在二沉池之后，
     //    摆到左边会让出水线倒着走（第一版就是这么摆的，看起来很别扭）。
-    { id: 'coag', kind: 'coagulationTank', name: '混凝沉淀池', tag: 'CO-101', left: 2600, top: 900 },
-    { id: 'filter', kind: 'filterBed', name: '滤布滤池', tag: 'FL-101', left: 2900, top: 900 },
+    { id: 'coag', kind: 'coagulationTank', name: '混凝沉淀池', tag: 'CO-101', left: 4550, top: 1575 },
+    { id: 'filter', kind: 'filterBed', name: '滤布滤池', tag: 'FL-101', left: 5075, top: 1575 },
     // ⚠️ 提标改造把 ozone / carbon / membrane 插在这一格（见 UPGRADE_UNITS），
     //    并把 filter → disinfect 的直连管线换成绕经它们的四条。
     //    这段空白是**刻意留的**：改造要加的东西得先有位子。
     // ↓ ozone(3200) ↓ carbon(3460) ↓ membrane(3720)
-    { id: 'disinfect', kind: 'disinfectionTank', name: '消毒接触池', tag: 'DT-101', left: 3980, top: 900 },
-    { id: 'analyzer', kind: 'analyzer', name: '在线水质监测', tag: 'AIT-101', left: 4280, top: 910 },
-    { id: 'meter', kind: 'flowMeter', name: '出水计量', tag: 'FIT-101', left: 4430, top: 910 },
-    { id: 'outletValve', kind: 'valve', name: '出水阀', tag: 'V-101', left: 4560, top: 912 },
-    { id: 'outlet', kind: 'outlet', name: '排放口', tag: 'OUT', left: 4700, top: 900 },
+    { id: 'disinfect', kind: 'disinfectionTank', name: '消毒接触池', tag: 'DT-101', left: 6965, top: 1575 },
+    { id: 'analyzer', kind: 'analyzer', name: '在线水质监测', tag: 'AIT-101', left: 7490, top: 1595 },
+    { id: 'meter', kind: 'flowMeter', name: '出水计量', tag: 'FIT-101', left: 7755, top: 1595 },
+    { id: 'outletValve', kind: 'valve', name: '出水阀', tag: 'V-101', left: 7980, top: 1595 },
+    { id: 'outlet', kind: 'outlet', name: '排放口', tag: 'OUT', left: 8225, top: 1575 },
 
     // 出水四项在线监测：排污许可要求 COD / 氨氮 / 总磷 / 总氮 全部联网上传。
     // 四台并排挂在出水管下侧，真实图纸上就是这一簇。
-    { id: 'codAnalyzer', kind: 'analyzer', name: '出水 COD 在线', tag: 'AIT-106', left: 4400, top: 1030 },
-    { id: 'nh3Analyzer', kind: 'analyzer', name: '出水氨氮在线', tag: 'AIT-107', left: 4560, top: 1030 },
-    { id: 'tpAnalyzer', kind: 'analyzer', name: '出水总磷在线', tag: 'AIT-108', left: 4720, top: 1030 },
-    { id: 'tnAnalyzer', kind: 'analyzer', name: '出水总氮在线', tag: 'AIT-109', left: 4880, top: 1030 },
-    { id: 'turbidityGauge', kind: 'analyzer', name: '出水浊度仪', tag: 'AIT-104', left: 4120, top: 1030 },
+    { id: 'codAnalyzer', kind: 'analyzer', name: '出水 COD 在线', tag: 'AIT-106', left: 7700, top: 1805 },
+    { id: 'nh3Analyzer', kind: 'analyzer', name: '出水氨氮在线', tag: 'AIT-107', left: 7980, top: 1805 },
+    { id: 'tpAnalyzer', kind: 'analyzer', name: '出水总磷在线', tag: 'AIT-108', left: 8260, top: 1805 },
+    { id: 'tnAnalyzer', kind: 'analyzer', name: '出水总氮在线', tag: 'AIT-109', left: 8540, top: 1805 },
+    { id: 'turbidityGauge', kind: 'analyzer', name: '出水浊度仪', tag: 'AIT-104', left: 7210, top: 1805 },
 
     // ================= 再生水回用（y = 700，从出水计量后分出去） =================
-    { id: 'reclaimedPump', kind: 'pump', name: '再生水回用泵', tag: 'P-201', left: 4280, top: 700 },
-    { id: 'outletFlowMeterB', kind: 'flowMeter', name: '再生水计量', tag: 'FIT-105', left: 4300, top: 750 },
+    { id: 'reclaimedPump', kind: 'pump', name: '再生水回用泵', tag: 'P-201', left: 7490, top: 1225 },
+    { id: 'outletFlowMeterB', kind: 'flowMeter', name: '再生水计量', tag: 'FIT-105', left: 7750, top: 1225 },
 
     // ================= 事故水支路（y = 1300） =================
-    { id: 'accidentValve', kind: 'motorValve', name: '事故水回流阀', tag: 'MOV-101', left: 4080, top: 1300 },
-    { id: 'accidentTank', kind: 'storageTank', name: '事故池', tag: 'EQ-101', left: 4250, top: 1290 },
-    { id: 'accidentPump', kind: 'submersiblePump', name: '事故水回流泵', tag: 'P-SB-401', left: 4470, top: 1305 },
-    { id: 'levelGauge', kind: 'levelGauge', name: '事故池液位计', tag: 'LT-101', left: 4250, top: 1410 },
-    { id: 'accidentFlowMeter', kind: 'flowMeter', name: '事故水流量计', tag: 'FIT-104', left: 4600, top: 1290 },
+    { id: 'accidentValve', kind: 'motorValve', name: '事故水回流阀', tag: 'MOV-101', left: 7140, top: 2275 },
+    { id: 'accidentTank', kind: 'storageTank', name: '事故池', tag: 'EQ-101', left: 7440, top: 2255 },
+    { id: 'accidentPump', kind: 'submersiblePump', name: '事故水回流泵', tag: 'P-SB-401', left: 7820, top: 2280 },
+    { id: 'levelGauge', kind: 'levelGauge', name: '事故池液位计', tag: 'LT-101', left: 7440, top: 2470 },
+    { id: 'accidentFlowMeter', kind: 'flowMeter', name: '事故水流量计', tag: 'FIT-104', left: 8050, top: 2255 },
 
     // ================= 污泥线（y = 1580） =================
-    { id: 'thickener', kind: 'sludgeThickener', name: '污泥浓缩池', tag: 'ST-101', left: 1450, top: 1580 },
-    { id: 'dewater', kind: 'dewateringMachine', name: '污泥脱水机', tag: 'DW-201', left: 1730, top: 1580 },
-    { id: 'dryer', kind: 'dewateringMachine', name: '污泥干化机', tag: 'DR-101', left: 1990, top: 1580 },
-    { id: 'screwPump', kind: 'screwPump', name: '污泥输送螺杆泵', tag: 'P-SC-101', left: 2240, top: 1610 },
-    { id: 'sludgeSilo', kind: 'sludgeSilo', name: '污泥料仓', tag: 'SIL-101', left: 2420, top: 1570 },
-    { id: 'sludgeOut', kind: 'sludgeOut', name: '污泥外运', tag: 'SO-101', left: 2630, top: 1580 },
-    { id: 'sludgeFlowMeter', kind: 'flowMeter', name: '污泥流量计', tag: 'FIT-103', left: 1600, top: 1680 },
+    { id: 'thickener', kind: 'sludgeThickener', name: '污泥浓缩池', tag: 'ST-101', left: 2540, top: 2765 },
+    { id: 'dewater', kind: 'dewateringMachine', name: '污泥脱水机', tag: 'DW-201', left: 3030, top: 2765 },
+    { id: 'dryer', kind: 'dewateringMachine', name: '污泥干化机', tag: 'DR-101', left: 3480, top: 2765 },
+    { id: 'screwPump', kind: 'screwPump', name: '污泥输送螺杆泵', tag: 'P-SC-101', left: 3920, top: 2820 },
+    { id: 'sludgeSilo', kind: 'sludgeSilo', name: '污泥料仓', tag: 'SIL-101', left: 4235, top: 2745 },
+    { id: 'sludgeOut', kind: 'sludgeOut', name: '污泥外运', tag: 'SO-101', left: 4605, top: 2765 },
+    { id: 'sludgeFlowMeter', kind: 'flowMeter', name: '污泥流量计', tag: 'FIT-103', left: 2800, top: 2940 },
 
     // ================= 加药间（四个加药点，真实厂就是这四个系统） =================
-    { id: 'pacDosing', kind: 'dosingUnit', name: 'PAC 加药装置', tag: 'DU-101', left: 2600, top: 1250 },
-    { id: 'pamDosing', kind: 'dosingUnit', name: 'PAM 加药装置', tag: 'DU-102', left: 1730, top: 1900 },
-    { id: 'naoclDosing', kind: 'dosingUnit', name: '次氯酸钠加药', tag: 'DU-103', left: 3980, top: 1060 },
-    { id: 'carbonDosing', kind: 'dosingUnit', name: '碳源投加装置', tag: 'DU-104', left: 1530, top: 200 },
+    { id: 'pacDosing', kind: 'dosingUnit', name: 'PAC 加药装置', tag: 'DU-101', left: 4550, top: 2190 },
+    { id: 'pamDosing', kind: 'dosingUnit', name: 'PAM 加药装置', tag: 'DU-102', left: 3030, top: 3325 },
+    { id: 'naoclDosing', kind: 'dosingUnit', name: '次氯酸钠加药', tag: 'DU-103', left: 6965, top: 1855 },
+    { id: 'carbonDosing', kind: 'dosingUnit', name: '碳源投加装置', tag: 'DU-104', left: 2545, top: 315 },
 
     // ================= 除臭（两套：预处理区 / 污泥区） =================
-    { id: 'deodor1', kind: 'deodorizer', name: '除臭装置（预处理）', tag: 'OD-101', left: 840, top: 1200 },
-    { id: 'deodorFan1', kind: 'blower', name: '除臭风机 1#', tag: 'B-201', left: 680, top: 1290 },
-    { id: 'deodor2', kind: 'deodorizer', name: '除臭装置（污泥区）', tag: 'OD-201', left: 1990, top: 1780 },
-    { id: 'deodorFan2', kind: 'blower', name: '除臭风机 2#', tag: 'B-202', left: 1850, top: 1870 },
+    { id: 'deodor1', kind: 'deodorizer', name: '除臭装置（预处理）', tag: 'OD-101', left: 1470, top: 2100 },
+    { id: 'deodorFan1', kind: 'blower', name: '除臭风机 1#', tag: 'B-201', left: 1190, top: 2255 },
+    { id: 'deodor2', kind: 'deodorizer', name: '除臭装置（污泥区）', tag: 'OD-201', left: 3480, top: 3115 },
+    { id: 'deodorFan2', kind: 'blower', name: '除臭风机 2#', tag: 'B-202', left: 3240, top: 3270 },
 
     // ================= 鼓风机房 / 供配电（y = -430 / -300） =================
-    { id: 'transformer', kind: 'vfd', name: '变压器', tag: 'TR-101', left: 1850, top: -430 },
-    { id: 'vfdA', kind: 'vfd', name: '鼓风机变频器 A', tag: 'VFD-101', left: 2080, top: -430 },
-    { id: 'vfdB', kind: 'vfd', name: '鼓风机变频器 B', tag: 'VFD-201', left: 2280, top: -430 },
-    { id: 'blowerA', kind: 'blower', name: '鼓风机 A', tag: 'B-101', left: 2050, top: -300 },
-    { id: 'blowerB', kind: 'blower', name: '鼓风机 B', tag: 'B-102', left: 2200, top: -300 },
-    { id: 'blowerC', kind: 'blower', name: '鼓风机 C（备用）', tag: 'B-103', left: 2350, top: -300 },
-    { id: 'airGauge', kind: 'pressureGauge', name: '供气干管压力表', tag: 'PT-101', left: 1900, top: -300 },
-    { id: 'airFlowMeter', kind: 'flowMeter', name: '空气流量计', tag: 'FIT-102', left: 1990, top: -400 },
+    { id: 'transformer', kind: 'vfd', name: '变压器', tag: 'TR-101', left: 3240, top: -755 },
+    { id: 'vfdA', kind: 'vfd', name: '鼓风机变频器 A', tag: 'VFD-101', left: 3640, top: -755 },
+    { id: 'vfdB', kind: 'vfd', name: '鼓风机变频器 B', tag: 'VFD-201', left: 3990, top: -755 },
+    { id: 'blowerA', kind: 'blower', name: '鼓风机 A', tag: 'B-101', left: 3590, top: -525 },
+    { id: 'blowerB', kind: 'blower', name: '鼓风机 B', tag: 'B-102', left: 3850, top: -525 },
+    { id: 'blowerC', kind: 'blower', name: '鼓风机 C（备用）', tag: 'B-103', left: 4115, top: -525 },
+    { id: 'airGauge', kind: 'pressureGauge', name: '供气干管压力表', tag: 'PT-101', left: 3325, top: -525 },
+    { id: 'airFlowMeter', kind: 'flowMeter', name: '空气流量计', tag: 'FIT-102', left: 3480, top: -700 },
 
     // ================= 内回流阀（两组各一个，卡在好氧池上方） =================
-    { id: 'recycleValve1', kind: 'motorValve', name: '内回流调节阀 A', tag: 'MOV-102', left: 1870, top: -180 },
-    { id: 'recycleValve2', kind: 'motorValve', name: '内回流调节阀 B', tag: 'MOV-202', left: 1870, top: 240 },
+    { id: 'recycleValve1', kind: 'motorValve', name: '内回流调节阀 A', tag: 'MOV-102', left: 3060, top: -315 },
+    { id: 'recycleValve2', kind: 'motorValve', name: '内回流调节阀 B', tag: 'MOV-202', left: 3270, top: 350 },
 
     // ================= 过程在线仪表（每段一个） =================
-    { id: 'phInlet', kind: 'analyzer', name: '进水 pH 计', tag: 'AIT-105', left: 300, top: -60 },
-    { id: 'doAer1', kind: 'analyzer', name: '好氧池 A 溶解氧', tag: 'AIT-102', left: 2000, top: -60 },
-    { id: 'doAer2', kind: 'analyzer', name: '好氧池 B 溶解氧', tag: 'AIT-202', left: 2000, top: 180 },
-    { id: 'mlssGauge', kind: 'analyzer', name: '污泥浓度计', tag: 'AIT-103', left: 2460, top: 180 },
+    { id: 'phInlet', kind: 'analyzer', name: '进水 pH 计', tag: 'AIT-105', left: 525, top: -105 },
+    { id: 'doAer1', kind: 'analyzer', name: '好氧池 A 溶解氧', tag: 'AIT-102', left: 3500, top: -105 },
+    { id: 'doAer2', kind: 'analyzer', name: '好氧池 B 溶解氧', tag: 'AIT-202', left: 3500, top: 315 },
+    { id: 'mlssGauge', kind: 'analyzer', name: '污泥浓度计', tag: 'AIT-103', left: 4305, top: 315 },
   ],
   pipes: [
     // ---- 预处理：一路左到右 ----
@@ -374,7 +374,7 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     { id: 'pipe-aer2-do', sourceId: 'aer2', targetId: 'doAer2', medium: 'signal', dn: '', sourcePort: 'T', targetPort: 'T' },
     { id: 'pipe-sec2-mlss', sourceId: 'sec2', targetId: 'mlssGauge', medium: 'signal', dn: '', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-disinfect-turbidity', sourceId: 'disinfect', targetId: 'turbidityGauge', medium: 'signal', dn: '', sourcePort: 'B', targetPort: 'T' },
-    { id: 'pipe-meter-reclaimed', sourceId: 'meter', targetId: 'outletFlowMeterB', medium: 'signal', dn: '', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-meter-reclaimed', sourceId: 'meter', targetId: 'outletFlowMeterB', medium: 'signal', dn: '', sourcePort: 'T', targetPort: 'L' },
 
     // ---- 出水四项在线监测：四台各一根信号线，都从出水管上取 ----
     { id: 'pipe-meter-cod', sourceId: 'meter', targetId: 'codAnalyzer', medium: 'signal', dn: '', sourcePort: 'B', targetPort: 'L' },
@@ -383,7 +383,12 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     { id: 'pipe-meter-tn', sourceId: 'meter', targetId: 'tnAnalyzer', medium: 'signal', dn: '', sourcePort: 'B', targetPort: 'L' },
 
     // ---- 再生水回用：从出水计量后分出一路，加压送去回用 ----
-    { id: 'pipe-meter-reclaimedPump', sourceId: 'meter', targetId: 'reclaimedPump', medium: 'effluent', dn: 'DN300', sourcePort: 'B', targetPort: 'T' },
+    // ⚠️ 出口点必须和第二根一样是 `T`（表的**上边**）：再生水是从出水管上**往上**引出去的，
+    //    而泵与再生水计量都在 y=1015（表在 y=1320）。
+    //    原来写的是 `B`（表的下边）+ 泵的 `T`，而泵在表的**上方** ——
+    //    那根线会先从表底出来、绕一圈再回到上面的泵，而且穿过表体。
+    //    这是**早先就有的错**：原坐标里泵(4280,700)也在表(4430,910)上方，同样对不上。
+    { id: 'pipe-meter-reclaimedPump', sourceId: 'meter', targetId: 'reclaimedPump', medium: 'effluent', dn: 'DN300', sourcePort: 'T', targetPort: 'B' },
 
     // ---- 除臭风机：给两套除臭装置送风 ----
     { id: 'pipe-fan1-deodor1', sourceId: 'deodorFan1', targetId: 'deodor1', medium: 'air', dn: 'DN250', sourcePort: 'R', targetPort: 'L' },

@@ -740,6 +740,20 @@ inputEl.addEventListener('keydown', (event) => {
    * 这个是远看、那个是近看。截图脚本与"图有没有被裁掉"的断言都要它。
    */
   fitAll: () => stage.fitAll(),
+  /**
+   * 每个单元的**真实渲染包围盒**（世界坐标，含标签）。
+   *
+   * 用来量"图元之间有没有叠" —— 那是唯一一个既不会报错、`validateWater()` 也查不出
+   * （它只管工艺语义）、只有人眼看得见的问题。见 `StageView.diagramBoxes()`。
+   */
+  diagramBoxes: () => stage.diagramBoxes(),
+  /**
+   * 每条管线的**标注盒**（`DN700 污水` 那类文字，画在折线中点上）。
+   *
+   * 与 `diagramBoxes()` 分开：画面上"叠"有三种来路 —— 单元压单元、标注压标注、
+   * 单元压标注。前两种必须一起量，否则会像第一轮那样只解决了一半。
+   */
+  diagramEdgeLabels: () => stage.diagramEdgeLabels(),
   /** 这次开页会不会自动演一遍（e2e 断言"开关真的在起作用"，比只看画面强）。 */
   autoplayEnabled: () => AUTOPLAY,
 };
