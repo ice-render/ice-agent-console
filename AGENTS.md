@@ -189,6 +189,9 @@
     部署时**整份 dist/ 拷进 gh-pages** —— 别再往部署脚本里加文件白名单：
     漏一个的症状是线上 404、而构建日志全绿。改完跑 `npm run deploy:pages -- --dry`，
     第 2b 步会逐条验（含"og:image 指向的文件真的在产物里"）。
+    ⚠️ **发版之后再跑一次 `npm run seo:check`**：发版前那套自检看的是"这次构建的产物"，
+    这个看的是"线上现在是什么"。站点**不跟 main 走**、而且**每次部署都是整份覆盖** ——
+    源码推完以为上线了、或下一次部署把 TDK 覆盖回旧状态，只有它看得出来。
 
 ---
 
@@ -221,6 +224,8 @@
 | canvas 的文字替身（爬虫读到的正文） | `public/index.html` 末尾的 `#site-summary` |
 | 爬虫入口：规则 + 站点地图（站点根目录的文件） | `public/robots.txt` + `public/sitemap.xml` |
 | 静态文件怎么进 dist/（`public/` → `dist/`） | `webpack.config.js` 的 `CopyPublicFiles` |
+| **线上** TDK / 爬虫体检（发版后再跑一遍） | `npm run seo:check`（`scripts/seo-check.mjs`） |
+| TDK / 爬虫字段怎么读（两个脚本共用一份） | `scripts/lib/html-audit.mjs` |
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |
 | 自定义事件名 / context 键 | `shared/contract.ts` |

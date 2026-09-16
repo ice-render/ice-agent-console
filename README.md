@@ -1126,6 +1126,8 @@ npm run verify             # types:check(两个 tsconfig) + jest + build
 npm run verify:full        # 上面 + playwright
 npm run llm:check          # 模型配置自检（不懂模型也能跑：没配就报"当前是剧本模式"）
 npm run shoot              # 重拍 docs/images 里的截图（需先 npm run dev）
+npm run seo:check          # 线上 SEO / 爬虫可见性体检（见 §12.6）
+npm run seo:check -- --proxy   # 同上，所有请求走 ICE_HTTPS_PROXY（国内直连 github.io 抖）
 npm run deploy:pages -- --dry   # 演示产物构建 + 自检（不发；发就去掉 --dry，见 §1.0）
 ```
 
@@ -1332,6 +1334,47 @@ dist/*（整份）      →（deploy-pages.mjs 递归拷贝）→ gh-pages 分�
 （`?demo=` / `?autoplay=` / `?theme=` 是同一页的运行期开关，用 canonical 兜住，
 不给它们另开 sitemap 条目 —— 那才是"重复内容"的典型来源）。
 以后真加了多页（比如每个案例一个地址），sitemap 与 TDK 才需要按页各写一份。
+
+### 12.6 线上体检：`npm run seo:check`
+
+发版脚本的自检看的是**这一次构建出来的产物**；这个脚本看的是**线上现在是什么** ——
+两者之间隔着一条时间线，而这条线上有两件真实发生过的事：
+
+1. **站点不跟 `main` 走。** 改完源码、提交、推送，`gh-pages` 还是旧的那一份
+   （本仓踩过：源码推完以为上线了，其实线上是上一版）。
+2. **下一次部署会把站点整个覆盖**（`--force` 推一整份新产物）。哪天有人从另一台机器
+   发一次版，TDK 那三件套就可能悄悄回到旧状态，而构建日志是绿的。
+
+所以"改完就算了"不够，得有个随时能对着线上跑一遍的东西。它查 19 项：
+
+| 组 | 查什么 |
+|---|---|
+| 可达性与响应头 | 200、没有 `X-Robots-Tag` 阻断 |
+| TDK | title / description **的显示宽度**（中文一个字顶两个字符）/ keywords / `noindex` |
+| 地址一致 | canonical = og:url = sitemap 的 `<loc>` = robots 的 `Sitemap:` |
+| 结构化数据 | JSON-LD 能 parse、含 `WebSite` + `SoftwareApplication` |
+| 文字替身 | `#site-summary` ≥600 字符、**不跑 JS 能读到的正文总量**、`<noscript>` |
+| 出站链接 | 家族链接 ≥5 个、绝对地址、**逐条探活**（404 是硬错） |
+| 分享卡片 | og:image 可访问、`content-type` 是图片、声明了 1200×630 |
+| cloaking | Googlebot 与普通 UA 拿到**逐字节相同**的 HTML |
+
+两条使用要点：
+
+- **国内加 `--proxy`**：直连 github.io 的握手实测在 0.1s～19s 之间抖，走本机代理 0.32s。
+  不加时脚本直连、只在探外站链接时用代理；连不上会**立刻停**并给出这句提示，
+  而不是让你看 19 条级联红。
+- **`CONSOLE_URL` 是给本地产物用的**，但注意语义：HTML / TDK / 正文取自那个地址，
+  `robots.txt` 与 `sitemap.xml` 仍按页面里的 **canonical** 去取 —— 那是爬虫真正会去的地方
+  （实测：本地删掉 robots.txt，这一条照样绿）。
+
+退出码：有 `✗` 就是 1（能直接进 CI / cron），只有 `⚠️` 是 0。
+判据分两档是刻意的：**能硬判的硬判**（HTTP 码、标签在不在、地址对不对、链接 404），
+**拿不准的只告警**（超时 / 网络不通）—— 否则脚本会因为"今天网不好"变红，
+而红久了的脚本等于没有。
+
+⚠️ 这个脚本自己踩过两个"假绿"，都写进注释了：`curl -X HEAD` 会一直等一个不会来的
+响应体（导致所有读响应头的检查静默变瞎）、`.replace()` 时没判 `canonical` 是不是 null
+（首页一抖就崩在 TypeError 上）。**体检脚本的假绿比没有脚本更糟** —— 它让人以为检查过了。
 
 ---
 

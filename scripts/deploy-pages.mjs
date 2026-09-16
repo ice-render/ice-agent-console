@@ -40,6 +40,16 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { globSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// 读 TDK / 爬虫字段的那套判据抽在 scripts/lib/ 里 —— 线上体检脚本用的是同一份
+// （两份"我抄你一份"的解析会在改判据时静默漂：一个说通过、另一个说失败）。
+import {
+  canonical as readCanonical,
+  displayWidth,
+  jsonLdGraph,
+  meta as readMeta,
+  sectionText,
+  title as readTitle,
+} from './lib/html-audit.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
@@ -123,62 +133,51 @@ step('2b', '自检：TDK 与爬虫三件套（它们全是静态文件，只对�
  * 构建与环境都不报错。所以这里把那个 URL 反解成本地文件名，真的去 dist/ 里找一遍。
  */
 
-/** 从一段标签属性文本里取属性值（产物里引号可能被省掉，所以三种写法都认）。 */
-const attr = (raw, key) => {
-  const re = new RegExp(`(?:^|\\s)${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
-  const m = raw.match(re);
-  return m ? m[1] ?? m[2] ?? m[3] ?? null : null;
-};
-const metas = [...html.matchAll(/<meta\s[^>]*>/gi)].map((m) => m[0]);
-const meta = (kind, key) => {
-  const hit = metas.find((t) => (attr(t, kind) || '').toLowerCase() === key.toLowerCase());
-  return hit ? attr(hit, 'content') : null;
-};
-
 // title / description / keywords —— TDK 三件套本体
-const title = (html.match(/<title>([^<]+)<\/title>/) || [])[1];
+const title = readTitle(html);
 if (!title) die('index.html 里没有 <title>');
-if (title.length < 10 || title.length > 60) {
-  die(`title 长 ${title.length} 字（期望 10..60，太长会被搜索结果截断）：「${title}」`);
+if (title.length < 10 || displayWidth(title) > 70) {
+  die(`title 长 ${title.length} 字 / 显示宽 ${displayWidth(title)}（太长会被搜索结果截断）：「${title}」`);
 }
-const description = meta('name', 'description');
+const description = readMeta(html, 'name', 'description');
 if (!description || description.length < 40) {
   die(`description 缺失或过短（${description ? description.length : 0} 字符）—— 搜索结果里那两行摘要就是它`);
 }
-const keywords = meta('name', 'keywords');
+if (displayWidth(description) > 160) {
+  die(`description 的显示宽度 ${displayWidth(description)} 超了（中文一个字顶两个西文字符，会被截断）`);
+}
+const keywords = readMeta(html, 'name', 'keywords');
 const words = (keywords || '').split(',').filter((k) => k.trim());
 if (words.length < 5) die('keywords 缺失或少于 5 个词（Google 不看，百度 / 360 / 搜狗看）');
-if ((meta('name', 'robots') || '').includes('noindex')) die('robots meta 里写着 noindex');
+if ((readMeta(html, 'name', 'robots') || '').includes('noindex')) die('robots meta 里写着 noindex');
 ok(`title ${title.length} 字 / description ${description.length} 字 / keywords ${words.length} 词`);
 
 // canonical：**必须是绝对地址**（子路径部署时写 "/" 会指向域名根，那是另一个站点）
-const canonicalTag = html.match(/<link[^>]*rel=["']?canonical["']?[^>]*>/i);
-const canonical = canonicalTag ? attr(canonicalTag[0], 'href') : null;
+const canonical = readCanonical(html);
 if (!canonical || !/^https:\/\/[^/]+\/.+/.test(canonical)) {
   die(`canonical 缺失或不是绝对地址：${canonical}（要写全 https://<域>/<子路径>/）`);
 }
-if (meta('property', 'og:url') !== canonical) die('og:url 与 canonical 不一致（会被当成两个页面）');
+if (readMeta(html, 'property', 'og:url') !== canonical) {
+  die('og:url 与 canonical 不一致（会被当成两个页面）');
+}
 ok(`canonical = og:url = ${canonical}`);
 
-// JSON-LD：**必须真的能 JSON.parse**（多一个逗号就是"结构化数据静默失效"）
-const ld = html.match(/<script type=["']?application\/ld\+json["']?>([\s\S]*?)<\/script>/i);
-if (!ld) die('index.html 里没有 application/ld+json');
+// JSON-LD：**必须真的能 JSON.parse**（多一个逗号就是"结构化数据静默失效"）。
+// 压缩器一般不动它，多数是手改时多了个逗号 —— 所以这里把原因带进报错里。
 let graph;
 try {
-  graph = JSON.parse(ld[1])['@graph'];
+  graph = jsonLdGraph(html);
 } catch (e) {
-  die(`JSON-LD 不是合法 JSON：${e.message}（压缩器一般不动它，多数是手改时多了个逗号）`);
+  die(`JSON-LD 读不出来：${e.message}`);
 }
-const types = (graph || []).map((n) => n['@type']);
+const types = graph.map((n) => n['@type']);
 for (const t of ['WebSite', 'SoftwareApplication']) {
   if (!types.includes(t)) die(`JSON-LD 里少了 @type=${t}`);
 }
 ok(`JSON-LD 合法：${types.join(' + ')}`);
 
 // 文字替身：**canvas 页面的正文就靠它**
-const summary = html.match(/<section[^>]*id=["']?site-summary["']?[\s\S]*?<\/section>/);
-if (!summary) die('index.html 里没有 #site-summary（canvas 的文字替身）—— 爬虫将读不到任何正文');
-const summaryText = summary[0].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
+const summaryText = sectionText(html, 'site-summary');
 if (summaryText.length < 600) die(`#site-summary 只剩 ${summaryText.length} 字符可读文本（期望 ≥600）`);
 if (!/<noscript[\s>]/.test(html)) die('index.html 里没有 <noscript> 兜底（不跑 JS 的爬虫看到的是白屏）');
 ok(`文字替身 ${summaryText.length} 字符 + noscript 兜底`);
@@ -196,7 +195,7 @@ if (!readFileSync(join(DIST, 'sitemap.xml'), 'utf8').includes(`<loc>${canonical}
 ok(`robots.txt → ${sitemapUrl}，sitemap.xml → ${canonical}`);
 
 // og:image：卡片封面**必须真的部署上去了**（指向空气是这类标签最常见的坏法）
-const ogImage = meta('property', 'og:image');
+const ogImage = readMeta(html, 'property', 'og:image');
 if (!ogImage) die('没有 og:image');
 const ogFile = ogImage.split('/').pop();
 if (!ogImage.startsWith(canonical) || !existsSync(join(DIST, ogFile))) {

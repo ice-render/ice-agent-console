@@ -18,6 +18,7 @@
     "verify:full": "npm run verify && npm run test:e2e",
     "llm:check": "tsx scripts/llm-check.ts",
     "shoot": "node scripts/shoot-docs.cjs",
+    "seo:check": "node scripts/seo-check.mjs",
     "deploy:pages": "node scripts/deploy-pages.mjs"
   },
   "dependencies": {
