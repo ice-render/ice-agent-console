@@ -414,6 +414,24 @@
       }
       #send:disabled { opacity: 0.5; cursor: not-allowed; }
       .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+      /*
+       * 组名：占满一整行（`flex-basis: 100%` 配合父级的 `flex-wrap`），
+       * 于是"工艺图"那一组与"其他"那一组自然分成两块，不用另起容器。
+       *
+       * `margin-top` 给组间留一口气，但**第一组不要**（`first-child`）——
+       * 否则按钮区顶部会凭空多出一段空白。
+       */
+      .chips .chip-group {
+        flex: 1 0 100%;
+        font-size: 10.5px;
+        line-height: 1;
+        color: var(--hint);
+        letter-spacing: 0.4px;
+        padding-left: 6px;
+        border-left: 2px solid var(--line);
+        margin: 6px 0 1px;
+      }
+      .chips .chip-group:first-child { margin-top: 0; }
       .chip {
         font-size: 11.5px;
         padding: 3px 9px;
@@ -447,9 +465,10 @@
       <div id="thread">
         <div class="empty">
           绘图区上已经是那张工艺图了 —— 它是<strong>开页就画好的</strong>，不会重画。<br />
-          这里的每个动作都作用在它上面。试试 <code>把工艺图放大</code>、<code>让图元闪烁</code><br />
-          切别的界面：<code>看看各渠道的月度销量</code>、<code>要下发指令</code><br />
-          走自修复回路：<code>故意画错工艺图</code>
+          下面<strong>「工艺图」那一组</strong>的每个动作都作用在<strong>这一张</strong>图上：<br />
+          <code>看看污水处理工艺图</code> 会带你把全流程走一遍（镜头跟着推近 + 高亮），<br />
+          <code>把工艺图放大</code> / <code>让图元闪烁</code> 是查看动作，<br />
+          <code>提标改造</code> 则直接<strong>改图</strong>（拆一处、加三处，而画面不重画）。
         </div>
       </div>
       <footer>

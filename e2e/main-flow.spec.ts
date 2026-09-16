@@ -4,12 +4,14 @@ import {
   DIAGRAM_CANVAS,
   TOOL_ENTRY,
   canvasSignature,
+  chipLocator,
   collectErrors,
   countInk,
   readStage,
   readState,
   settleAfter,
   useChip,
+  waitDiagramReady,
   waitForState,
   waitSettled,
 } from './helpers';
@@ -36,7 +38,7 @@ test('主链路：文字流式 → 绘图区出图 → 指着讲', async ({ page
   await expect(page.locator(TOOL_ENTRY)).toHaveCount(0);
 
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '看看各渠道的月度销量' }).first().click();
+  await chipLocator(page, '看看各渠道的月度销量').click();
 
   // ---- 文字是流式的：跟着归约状态采样，长度应当出现过多个值 ----
   // 直接读状态而不是读第一个 `.bubble`——第一个气泡是本地插入的用户消息，
@@ -106,6 +108,97 @@ test('主链路：文字流式 → 绘图区出图 → 指着讲', async ({ page
   await expect(page.locator('.msg.assistant').last()).toContainText('尖峰');
 
   expect(errors, `页面不该有错误：\n${errors.join('\n')}`).toEqual([]);
+});
+
+/**
+ * ★ 快捷按钮**分组**：工艺图那组在最前，而且两组各自连续。
+ *
+ * 这条用例守的是"排布"而不是"有没有" —— 11 个按钮平铺也能用，但会有一个具体的坑：
+ * `故意画错` 与 `故意画错工艺图` 只差三个字、作用对象完全不同（一个改图表、一个改工艺图），
+ * 混在一起摆很容易点错。分组之后它们分别在两组的最后一位，中间隔着组名。
+ */
+test('★ 快捷按钮按"作用对象"分组：工艺图那组在最前且连续', async ({ page }) => {
+  await page.goto('/');
+  await waitDiagramReady(page);
+
+  const groups = await page.evaluate(() => {
+    const out: Array<{ label: string | null; chips: string[] }> = [];
+    for (const el of Array.from(document.querySelectorAll('#chips > *')) as HTMLElement[]) {
+      if (el.classList.contains('chip-group')) out.push({ label: el.textContent ?? '', chips: [] });
+      else if (out.length) out[out.length - 1].chips.push(el.textContent ?? '');
+      else out.push({ label: null, chips: [el.textContent ?? ''] });
+    }
+    return out;
+  });
+
+  // 两组，且**第一组是工艺图**（工艺图是整页主体，所以它排最前）
+  expect(groups.map((g) => g.label)).toEqual(['工艺图', '其他']);
+
+  const [diagram, others] = groups;
+  // 第一组全是且只是"作用在工艺图上"的那几条
+  expect(diagram.chips).toEqual([
+    '看看污水处理工艺图',
+    '把工艺图放大',
+    '让图元闪烁',
+    '提标改造',
+    '故意画错工艺图',
+  ]);
+  // ★ 两个"故意画错"分属两组（这是分组最实在的收益）
+  expect(others.chips).toContain('故意画错');
+  expect(diagram.chips).not.toContain('故意画错');
+  // 没有按钮落在任何组之外（漏了组名就会落到上一组里，这里兜一下）
+  expect(others.chips.length).toBeGreaterThan(0);
+});
+
+/**
+ * ★★ 文案相近的两个按钮**必须能被分开点到**，而且与排版顺序无关。
+ *
+ * 这一条是**实测踩响的雷**，值得单独一条：
+ *
+ * `故意画错` 与 `故意画错工艺图` 只差三个字，作用对象却完全不同
+ * （一个修**图表**、一个修**工艺图**）。原来的取法
+ * `locator('.chip', { hasText })` 是**子串**匹配 —— 它会同时命中这两个，
+ * 再 `.first()` 就等价于"按 DOM 顺序取第一个"。最初能过纯粹是因为
+ * "图表那个恰好排在工艺图那个前面"。
+ *
+ * 后来把按钮按作用对象分组（工艺图那组排最前），顺序一换就立刻踩响：
+ * 点 `故意画错` 变成了点 `故意画错工艺图`，报出来的错是
+ * "Cannot read properties of undefined (reading 'y')" —— 从这句根本看不出
+ * 是"点错了按钮"。所以这里**正面钉住**两件事：
+ * 精确匹配能选中正确的那一个，且两轮跑出来的计划类型不同。
+ */
+test('★ 两个「故意画错」能被分开点到（子串匹配会同时命中）', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+
+  // 精确匹配：每个文案只该命中唯一的按钮
+  for (const text of ['故意画错', '故意画错工艺图', '提标改造', '看看污水处理工艺图']) {
+    await expect(chipLocator(page, text), `「${text}」应当只命中一个按钮`).toHaveCount(1);
+  }
+
+  // `故意画错` → 修**图表**那一版坏 DSL（列名写错，不是隔油池）
+  await useChip(page, '故意画错');
+  await waitSettled(page, 1);
+  const chartRepair = await page.evaluate(() => {
+    const tools = (window as any).__iceAgentConsole.getState().items.filter((i: any) => i.kind === 'tool');
+    return { tool: tools[0]?.name, kind: tools[0]?.dsl?.kind };
+  });
+  expect(chartRepair.tool).toBe('render_chart');
+
+  // `故意画错工艺图` → 修**图**那一版（隔油池：看着合理但不在记号集里）
+  await page.reload();
+  await waitDiagramReady(page);
+  await useChip(page, '故意画错工艺图');
+  await waitSettled(page, 1);
+  const diagramRepair = await page.evaluate(() => {
+    const tools = (window as any).__iceAgentConsole.getState().items.filter((i: any) => i.kind === 'tool');
+    return { tool: tools[0]?.name, kind: tools[0]?.dsl?.kind };
+  });
+  expect(diagramRepair.tool).toBe('render_diagram');
+  expect(diagramRepair.kind).toBe('water-process');
+
+  expect(errors, errors.join('\n')).toEqual([]);
 });
 
 test('兜底剧本：不画图，只回文字（绘图区保持原样）', async ({ page }) => {

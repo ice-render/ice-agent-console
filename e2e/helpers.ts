@@ -157,9 +157,28 @@ export async function waitForState(
 }
 
 /** 点快捷按钮触发剧本（比打字稳，不受输入法影响），并等这一轮跑完。 */
+/**
+ * 点某个快捷按钮。**按精确文案匹配**，不是子串。
+ *
+ * ⚠️ 这条是踩出来的：`locator('.chip', { hasText })` 是**子串**匹配，
+ * 而按钮里有一对只差三个字的 —— `故意画错` 与 `故意画错工艺图`。
+ * 于是 `hasText: '故意画错'` 会同时命中两个，`.first()` 的结果就**取决于 DOM 顺序**。
+ *
+ * 它一直是颗雷：最初能过只是因为"图表那个恰好排在工艺图那个前面"。
+ * 后来把按钮按"作用对象"分组（工艺图那组排最前），顺序一换就立刻踩响 ——
+ * 点 `故意画错` 变成了点 `故意画错工艺图`，测试拿到的是图 DSL，报了个看不出所以然的错。
+ *
+ * 所以这里用 `exact`。**别改回 hasText** —— 那种写法把"测试点的是哪个按钮"
+ * 绑在了排版顺序上，而排版是会变的。
+ */
+export function chipLocator(page: Page, text: string) {
+  return page.getByRole('button', { name: text, exact: true });
+}
+
+/** 点一个快捷按钮（精确匹配，见 `chipLocator`），并等这一轮跑完。 */
 export async function useChip(page: Page, text: string): Promise<ConsoleState> {
   return settleAfter(page, async () => {
-    await page.locator('.chip', { hasText: text }).first().click();
+    await chipLocator(page, text).click();
   });
 }
 

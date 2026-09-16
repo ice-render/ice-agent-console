@@ -31,6 +31,31 @@
    chart / form 是按需图层，被顶掉即**销毁**（不叠着留）。
    断言"有没有重画"用 `__iceAgentConsole.stageInfo().builds`，那是这件事的直接读数。
    图层之间是**并排**的（同一时刻只显示一个），不需要 `linkViewport` / `setInputPassthrough`。
+5a. **画布命令走 CUSTOM，不走 tool call、不进 state。** 目前三条：`ice/point-at`
+   （指着讲，`{ value, blink? }`）、`ice/point-clear`、`ice/zoom`
+   （缩放视图，`{ direction: 'in'|'out'|'reset'|'to', factor?, steps?, scale? }`）。
+   判据是"瞬时的演示动作，不是需要恢复的状态"—— 刷新页面后"当时放大到 1.4 倍"没有意义。
+   **加一条命令 = 加一个事件名 + 一个 Effect + `applyEffects` 里一个 case**，
+   与"加一种卡片"是两条独立的扩展路径（卡片改 state，命令不改）。
+   ⚠️ 转交 effect 时**每个可选字段都要逐个带上** —— 漏一个的症状是"命令到了视图层却
+   被当成非法整条丢掉"（踩过：`scale` 漏了，讲稿里推镜头的那几拍画面纹丝不动，且不报错）。
+   三个已知的取舍：`in`/`out` 是**相对**语义（agent 不知道当前倍率）而讲稿用 `to`
+   绝对倍率（相对倍率在十几拍里会累积到不可预期）；`reset` 回的是**初始视野**
+   而不是 `scale = 1`；`blink` 与 `pointAt` 打在**同一条**事件上（拆两条会闪一帧）。
+5b. **图卡的 DSL 守卫在本仓**（`src/domain/diagram/`）。上游 `ice-entity-designer-dsl`
+   **没有** water 编译器，所以那套 kind-first 的 DSL 定义在这里。
+   它的校验器与另两张卡同口径：**永不抛、只给结构化诊断** —— 自修复回路靠这个文本。
+   白名单（31 种符号 / 9 种介质）**从 `ice-entity-designer` 转发，不要在本仓复制**，
+   否则上游加一种符号就会两边不一致（agent 吐的合法载荷被自家校验器判成非法）。
+   另外：`server/` 那套 tsconfig 不加载 DOM，所以 `shared/` 里**只能放类型**，
+   运行时的白名单留在 `src/domain/diagram/`。
+5c. **浮在画布上的 DOM 面板必须 `stopPropagation`。** 引擎在 `window` 上装了**全局**事件
+   拦截器（`DOMEventInterceptor`），把所有指针 / 滚轮事件**广播给每一个 ICE 实例**，
+   唯一的过滤是"事件目标是不是另一块 **canvas**"。对话面板是个 `<div>`，不在过滤范围内 ——
+   不额外拦一道的话，在面板上滚一下，画布那个实例照样当成一次滚轮缩放。
+   好在拦截器挂的是**冒泡阶段**，所以在面板根上拦一次就行（见 `src/view/chat.ts` 的
+   `SHIELDED_EVENTS`）。**别拦键盘** —— 输入框一直是这样工作的。
+   e2e 有一条正反两面的断言（面板上滚无效 / 画布上滚有效）。
 5d. **改图走 `STATE_DELTA` + JSON Patch，不要自造"图元增删事件"。**
    "state 变了"协议里已经有词（`STATE_DELTA` + RFC 6902）。补丁按**形状**分流
    （`src/domain/agui/state-patch.ts` 的两个纯函数）：只往 rows 追加 → `appendData`；
@@ -46,33 +71,17 @@
      前一批删完之后后一批的下标已经前移。所以编补丁要用 `scenarios.ts` 里的
      `IndexCursor`（维护 id 镜像、**降序删**）。用基准图的下标编第二批会静默删错管线。
    层里那个 `this.doc` 在 `applyPatch` 之后要换成**补丁后**那份（`__focusBox()` 读它）。
-5c. **浮在画布上的 DOM 面板必须 `stopPropagation`。** 引擎在 `window` 上装了**全局**事件
-   拦截器（`DOMEventInterceptor`），把所有指针 / 滚轮事件**广播给每一个 ICE 实例**，
-   唯一的过滤是"事件目标是不是另一块 **canvas**"。对话面板是个 `<div>`，不在过滤范围内 ——
-   不额外拦一道的话，在面板上滚一下，画布那个实例照样当成一次滚轮缩放。
-   好在拦截器挂的是**冒泡阶段**，所以在面板根上拦一次就行（见 `src/view/chat.ts` 的
-   `SHIELDED_EVENTS`）。**别拦键盘** —— 输入框一直是这样工作的。
-   e2e 有一条正反两面的断言（面板上滚无效 / 画布上滚有效）。
-5a. **画布命令走 CUSTOM，不走 tool call、不进 state。** 目前三条：`ice/point-at`
-   （指着讲，`{ value, blink? }`）、`ice/point-clear`、`ice/zoom`
-   （缩放视图，`{ direction: 'in'|'out'|'reset', factor?, steps? }`）。
-   判据是"瞬时的演示动作，不是需要恢复的状态"—— 刷新页面后"当时放大到 1.4 倍"没有意义。
-   **加一条命令 = 加一个事件名 + 一个 Effect + `applyEffects` 里一个 case**，
-   与"加一种卡片"是两条独立的扩展路径（卡片改 state，命令不改）。
-   两个已知的取舍：缩放是**相对**语义（agent 不知道当前倍率）、`reset` 回的是**初始视野**
-   而不是 `scale = 1`；`blink` 与 `pointAt` 打在**同一条**事件上（拆两条会闪一帧）。
-5b. **图卡的 DSL 守卫在本仓**（`src/domain/diagram/`）。上游 `ice-entity-designer-dsl`
-   **没有** water 编译器，所以那套 kind-first 的 DSL 定义在这里。
-   它的校验器与另两张卡同口径：**永不抛、只给结构化诊断** —— 自修复回路靠这个文本。
-   白名单（31 种符号 / 9 种介质）**从 `ice-entity-designer` 转发，不要在本仓复制**，
-   否则上游加一种符号就会两边不一致（agent 吐的合法载荷被自家校验器判成非法）。
-   另外：`server/` 那套 tsconfig 不加载 DOM，所以 `shared/` 里**只能放类型**，
-   运行时的白名单留在 `src/domain/diagram/`。
 6. **中断轮的结束状态是 `waiting`，不是 `idle`。** 协议里中断**也是** `RUN_FINISHED`。
    所以 e2e 里不能用 `settleAfter`（它等 `idle`）去等一次中断 —— 永远等不到。
 7. **恢复中断 = 开新 run + 带 `resume`**，不是"接着跑"。
    形状从 `@ag-ui/core` 的 schema 问出来的：`{ interruptId, status: 'resolved' | 'cancelled', payload? }`。
-6. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
+8. **e2e 点快捷按钮要用 `chipLocator()`（精确匹配），不要用 `.chip` + `hasText`。**
+   按钮里有一对只差三个字的（`故意画错` / `故意画错工艺图`），而 `hasText` 是**子串**
+   匹配 —— 它会同时命中两个，再 `.first()` 就等价于"按 DOM 顺序取第一个"。
+   这个写法把"测试点的是哪个按钮"绑在了**排版顺序**上（踩过：把工艺图那组调到最前之后
+   立刻响，报出来的却是 `Cannot read properties of undefined (reading 'y')`，
+   完全看不出是点错了按钮）。按钮的**分组与顺序**另有一条 e2e 钉着。
+9. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
    `__iceAgentConsole.widgetRects()`（应用挂出来的矩形查询），不要写死像素偏移 ——
    按钮宽度是按文案字数算的，改一个字就全错位。
 

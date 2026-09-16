@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { collectErrors, countInk, FORM_CANVAS, readStage, settleAfter } from './helpers';
+import {
+  FORM_CANVAS,
+  chipLocator,
+  collectErrors,
+  countInk,
+  readStage,
+  settleAfter,
+} from './helpers';
 
 /**
  * **第二批控件的原型页。**
@@ -22,7 +29,7 @@ const CHIP = '看看新控件都能用吗';
 async function openShowcase(page: import('@playwright/test').Page) {
   await page.goto('/');
   return settleAfter(page, async () => {
-    await page.locator('.chip', { hasText: CHIP }).first().click();
+    await chipLocator(page, CHIP).click();
   });
 }
 

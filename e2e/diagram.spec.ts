@@ -28,6 +28,7 @@ import {
   DIAGRAM_CANVAS,
   TOOL_ENTRY,
   canvasSignature,
+  chipLocator,
   collectErrors,
   countInk,
   panelGeometry,
@@ -392,7 +393,7 @@ test('切到图表再切回工艺图：图层换掉了，工艺图没有重画',
 
   // ---- 切到图表 ----
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '看看各渠道的月度销量' }).first().click();
+  await chipLocator(page, '看看各渠道的月度销量').click();
   await page.waitForFunction(
     (n) => {
       const s = (window as any).__iceAgentConsole.getState();
@@ -415,7 +416,7 @@ test('切到图表再切回工艺图：图层换掉了，工艺图没有重画',
 
   // ---- 切回工艺图（对话里说一句） ----
   const before2 = await readState(page);
-  await page.locator('.chip', { hasText: '看看污水处理工艺图' }).first().click();
+  await chipLocator(page, '看看污水处理工艺图').click();
   await page.waitForFunction(
     (n) => {
       const s = (window as any).__iceAgentConsole.getState();
@@ -674,7 +675,7 @@ test('连续闪烁不累积底块：闪三个单元之后工具层里只有一�
   const errors = collectErrors(page);
   await page.goto('/');
 
-  await page.locator('.chip', { hasText: '让图元闪烁' }).first().click();
+  await chipLocator(page, '让图元闪烁').click();
   await waitSettled(page, 1);
 
   const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());

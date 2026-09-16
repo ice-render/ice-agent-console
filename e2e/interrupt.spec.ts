@@ -4,6 +4,7 @@ import {
   FORM_CANVAS,
   TOOL_ENTRY,
   WIDGET_CANVAS,
+  chipLocator,
   clickFormSubmit,
   collectErrors,
   countInk,
@@ -37,7 +38,7 @@ test('「要下发指令」触发中断：绘图区切成表单、状态进 wait
   const before = await readState(page);
   // 注意：这里**不能用 settleAfter** —— 它等的是 `idle`，而中断轮结束在 `waiting`，
   // 永远等不到。中断要单独等一个状态。
-  await page.locator('.chip', { hasText: '要下发指令' }).first().click();
+  await chipLocator(page, '要下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
   const state = await readState(page);
 
@@ -79,7 +80,7 @@ test('必填没填时点提交被拦住：不进已提交、仍在 waiting', asy
   await page.goto('/');
 
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '要下发指令' }).first().click();
+  await chipLocator(page, '要下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 
   // 真实点中画布上的提交按钮（泵站是必填，还没填）
@@ -101,7 +102,7 @@ test('填全后真实点提交：带 resume 开新 run，agent 读得到值', as
   await page.goto('/');
 
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '要下发指令' }).first().click();
+  await chipLocator(page, '要下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 
   const during = await readState(page);
@@ -144,7 +145,7 @@ test('图表与表单能在同一条时间线里各留一条条目（绘图区�
   expect((await readStage(page)).builds.chart).toBe(1);
 
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '要下发指令' }).first().click();
+  await chipLocator(page, '要下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 
   // 时间线是追加的：**两条条目**都在，按顺序是图表在前、表单在后
@@ -171,7 +172,7 @@ test('图表与表单能在同一条时间线里各留一条条目（绘图区�
 /** 触发中断拿到表单，停在 `waiting`。 */
 async function openForm(page: import('@playwright/test').Page): Promise<void> {
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '要下发指令' }).first().click();
+  await chipLocator(page, '要下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 }
 

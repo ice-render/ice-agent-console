@@ -475,27 +475,56 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
 // 输入
 // ---------------------------------------------------------------------------
 
-const CHIPS = [
-  '看看污水处理工艺图',
-  '看看各渠道的月度销量',
-  '看一下实时吞吐量',
-  '要下发指令',
-  '看看新控件都能用吗',
-  '故意画错',
-  '故意画错工艺图',
-  '把工艺图放大',
-  '让图元闪烁',
-  '提标改造',
-  '今天天气怎么样',
+/**
+ * 快捷按钮：**按"作用在哪"分两组，工艺图那组在最前**。
+ *
+ * 为什么值得分组而不是平铺一张列表：这里 11 个按钮里**有 5 个是工艺图专用的**
+ * （那张图是整页主体，会话里的大多数动作都作用在它上面），另外 6 个才是
+ * "切到别的界面 / 走别的回路"。平铺的时候两组是混着的，而混着有个具体的坏处：
+ * `故意画错` 与 `故意画错工艺图` 只差三个字、作用对象完全不同，隔开摆很容易点错。
+ *
+ * 组内顺序按**从"看"到"改"**排，正好也是心智上的递进：
+ * 先看它 → 调镜头 → 标重点 → 改结构 → 出错了修回来。
+ */
+const CHIP_GROUPS: Array<{ label: string; chips: string[] }> = [
+  {
+    label: '工艺图',
+    chips: [
+      '看看污水处理工艺图',
+      '把工艺图放大',
+      '让图元闪烁',
+      '提标改造',
+      '故意画错工艺图',
+    ],
+  },
+  {
+    label: '其他',
+    chips: [
+      '看看各渠道的月度销量',
+      '看一下实时吞吐量',
+      '要下发指令',
+      '看看新控件都能用吗',
+      '故意画错',
+      '今天天气怎么样',
+    ],
+  },
 ];
 
-for (const text of CHIPS) {
-  const chip = document.createElement('button');
-  chip.type = 'button';
-  chip.className = 'chip';
-  chip.textContent = text;
-  chip.addEventListener('click', () => void send(text));
-  chipsEl.append(chip);
+for (const group of CHIP_GROUPS) {
+  // 组名占满一行（`flex-basis: 100%`）—— 靠 flex 换行实现，不用另起容器
+  const label = document.createElement('span');
+  label.className = 'chip-group';
+  label.textContent = group.label;
+  chipsEl.append(label);
+
+  for (const text of group.chips) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.textContent = text;
+    chip.addEventListener('click', () => void send(text));
+    chipsEl.append(chip);
+  }
 }
 
 formEl.addEventListener('submit', (event) => {

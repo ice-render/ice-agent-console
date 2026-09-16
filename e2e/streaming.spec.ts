@@ -3,6 +3,7 @@ import {
   CHART_CANVAS,
   TOOL_ENTRY,
   canvasSignature,
+  chipLocator,
   collectErrors,
   countInk,
   readStage,
@@ -27,7 +28,7 @@ test('数据一拍一拍追加进同一张图', async ({ page }) => {
   await page.goto('/');
 
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '看一下实时吞吐量' }).first().click();
+  await chipLocator(page, '看一下实时吞吐量').click();
 
   // 等第一次上画布：STATE_SNAPSHOT 在 TOOL_CALL_END **之后**到，
   // 所以"条目 done"不等于"状态已就绪"——要单独等一次。
@@ -70,7 +71,7 @@ test('追加之后图还能交互（快路径不该把监听弄丢）', async ({
   await page.goto('/');
 
   const before = await readState(page);
-  await page.locator('.chip', { hasText: '看一下实时吞吐量' }).first().click();
+  await chipLocator(page, '看一下实时吞吐量').click();
   await waitForState(
     page,
     (s, min) => s.status === 'idle' && s.eventCount > min,
