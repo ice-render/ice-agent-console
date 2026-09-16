@@ -4,11 +4,13 @@ import {
   DIAGRAM_CANVAS,
   TOOL_ENTRY,
   canvasSignature,
+  chatScroll,
   chipLocator,
   collectErrors,
   countInk,
   readStage,
   readState,
+  scrollChatTo,
   settleAfter,
   useChip,
   waitDiagramReady,
@@ -197,6 +199,61 @@ test('★ 两个「故意画错」能被分开点到（子串匹配会同时命�
   });
   expect(diagramRepair.tool).toBe('render_diagram');
   expect(diagramRepair.kind).toBe('water-process');
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/**
+ * ★ 新消息进来时**自动滚到底部**，但用户翻上去看历史时**不许把他拽回来**。
+ *
+ * ## 为什么必须是"有条件的跟随"
+ *
+ * 无条件滚到底会让面板没法往回读：你刚往上翻两屏看前面那段解释，
+ * 下一条流式文本就把你拽回底部 —— 而且流式文本每秒来十几次，根本翻不上去。
+ * 所以跟随的前提是"用户本来就在底部"，他一旦自己往上滚就松手。
+ *
+ * ## 为什么放在 e2e（而不是单测）
+ *
+ * 单测那套 jest 是 `testEnvironment: 'node'`，**没有真的滚动容器** ——
+ * `scrollHeight` / `scrollTop` / `clientHeight` 与 `scroll` 事件的派发时机
+ * 都是浏览器的行为，用假 DOM 测出来的只是"我调了这个属性"，证明不了"真的跟住了"。
+ */
+test('★ 新消息自动滚到底；用户翻上去之后不拽回来，滚回底部又接上', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+
+  // 先跑一条会产出大量内容的（工艺图走查：十几拍解说 + 一条工具条目），把面板撑满
+  await useChip(page, '看看污水处理工艺图');
+  await waitSettled(page, 1);
+
+  // ---- ① 跟到底部 ----
+  const afterRun = await chatScroll(page);
+  expect(afterRun.scrollHeight, '内容应当已经溢出，否则这条用例证明不了什么').toBeGreaterThan(
+    afterRun.clientHeight
+  );
+  expect(afterRun.fromBottom, '新消息进来之后应当贴在底部').toBeLessThanOrEqual(8);
+
+  // ---- ② 用户往上翻 → 再来一条新消息 → **不该**被拽回底部 ----
+  await scrollChatTo(page, 0);
+  const atTop = await chatScroll(page);
+  expect(atTop.scrollTop).toBe(0);
+
+  await useChip(page, '看一下实时吞吐量');
+  await waitSettled(page, 1);
+
+  const stillAtTop = await chatScroll(page);
+  expect(stillAtTop.scrollTop, '用户翻上去之后，新消息不该把他拽回底部').toBeLessThanOrEqual(4);
+  // 内容确实变多了（否则"没滚动"可能只是因为压根没新内容）
+  expect(stillAtTop.scrollHeight).toBeGreaterThan(atTop.scrollHeight);
+
+  // ---- ③ 滚回底部 → 再来的新消息**重新跟上** ----
+  await scrollChatTo(page, 'bottom');
+  await useChip(page, '看看各渠道的月度销量');
+  await waitSettled(page, 1);
+
+  const followedAgain = await chatScroll(page);
+  expect(followedAgain.fromBottom, '滚回底部之后应当重新跟随').toBeLessThanOrEqual(8);
 
   expect(errors, errors.join('\n')).toEqual([]);
 });

@@ -508,6 +508,39 @@ export async function yellowRatio(page: Page, selector = DIAGRAM_CANVAS): Promis
   }, selector);
 }
 
+/**
+ * 对话面板（`#thread`）的滚动读数。
+ *
+ * `fromBottom` 是**距底部还有多少像素** —— 判"有没有跟到底部"要用它而不是 `scrollTop`：
+ * 内容一长，`scrollTop` 的"底部值"就变了，拿绝对值判等于把断言绑在内容高度上。
+ */
+export async function chatScroll(page: Page): Promise<{
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  fromBottom: number;
+}> {
+  return page.evaluate(() => {
+    const el = document.getElementById('thread')!;
+    return {
+      scrollTop: Math.round(el.scrollTop),
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+      fromBottom: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight),
+    };
+  });
+}
+
+/** 把对话面板滚到某个位置（`0` = 最上面）。等一拍让 `scroll` 事件派发出去。 */
+export async function scrollChatTo(page: Page, top: number | 'bottom'): Promise<void> {
+  await page.evaluate((target) => {
+    const el = document.getElementById('thread')!;
+    el.scrollTop = target === 'bottom' ? el.scrollHeight : target;
+  }, top);
+  // `scroll` 事件是异步派发的，而"跟随/松手"的判断就发生在那个监听里
+  await page.waitForTimeout(80);
+}
+
 /** 折叠 / 展开对话面板，并等绘图区把尺寸与视野重新摆好。 */
 export async function togglePanel(page: Page, collapsed: boolean): Promise<void> {
   const before = await readStage(page);
