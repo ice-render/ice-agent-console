@@ -169,3 +169,40 @@ test('演示模式下消息流同样自动滚到底（与真环境一致）', as
 
   expect(errors, errors.join('\n')).toEqual([]);
 });
+
+test('★ 连不上后端时，对话流里要有一张说明卡片（不能只在顶栏留一行小字）', async ({ page }) => {
+  // 回归：这条路上原先**对话里一片空白** —— 用户看到的只是"我发了一句话，然后什么都没发生"，
+  // 像 AI 不理人。`state.error` 一直存在，但只被拼进了顶栏 meta 的那行小字
+  // （`… · 工具 0 · 出错 · Failed to fetch`），又小又挤。
+  // 实测场景：打开静态演示站点并加上 `?demo=0`（于是走后端那条 transport，而站点上没有后端），
+  // 点任意按钮都会停在这个状态。
+  //
+  // e2e 跑起来时后端是活的，所以**主动把 /agui 掐掉**来造这个失败 ——
+  // 这比依赖"某个端口恰好没起"确定得多，也让这条用例在本地与 CI 行为一致。
+  await page.route('**/agui', (route) => route.abort());
+
+  await page.goto('/?demo=0');
+  await waitDiagramReady(page);
+
+  await chipLocator(page, '看看各渠道的月度销量').click();
+  await waitForState(page, (s) => s.status === 'error');
+
+  // ① 提示必须落在**对话流里**（`#thread` 内），而且给得出下一步动作
+  const notice = page.locator('#thread .error-notice');
+  await expect(notice).toHaveCount(1);
+  await expect(notice.locator('.error-title')).toContainText('没能连上 agent');
+  await expect(notice.locator('.error-hint')).toContainText('?demo=1');
+  // ② 原始报错要留着（给开发者查原因用），不能只给一句人话
+  await expect(notice.locator('.error-detail')).not.toBeEmpty();
+
+  // ③ 顶栏那行也要在 —— 两处各有各的用处（顶栏常驻、对话流里能引导）
+  await expect(page.locator('#meta')).toContainText('出错');
+
+  // ④ 提示卡不该被算成"消息条目"：它是状态，不是 thread 里的一条消息
+  const state = await readState(page);
+  expect(state.error).toBeTruthy();
+  expect(
+    state.items.filter((i) => i.kind === 'text' && i.text?.includes('?demo=1')).length,
+    '提示卡不该伪装成一条消息塞进 items'
+  ).toBe(0);
+});

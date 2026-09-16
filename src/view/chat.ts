@@ -59,6 +59,11 @@ export class ChatView {
   private readonly entries = new Map<string, ToolEntryView>();
   private emptyEl: HTMLElement | null;
 
+  /** 「这一轮失败了」那张提示卡。有错误时在，没有时移除。 */
+  private errorEl: HTMLElement | null = null;
+  /** 上一次渲染的 error 值，用来避免每帧重写 DOM。 */
+  private lastError: string | null = null;
+
   /**
    * 是否**跟着底部**走。开页为 `true`（新会话就该盯着最新一条）。
    *
@@ -98,6 +103,18 @@ export class ChatView {
       const at = this.root.children[cursor] ?? null;
       if (at !== el) this.root.insertBefore(el, at);
       cursor++;
+    }
+
+    // 错误提示**挂在消息流末尾**（在 `__followIfSticking` 之前，这样跟随滚动会把它带进视野）。
+    // 成功之后要收掉：`state.error` 归约器只在 RUN_ERROR 时置位，下一轮成功不会自动清，
+    // 所以这里以"当前 error 值"为准，变了就重画、空了就移除。
+    if (state.error !== this.lastError) {
+      this.lastError = state.error;
+      if (state.error) this.__renderErrorNotice(state.error);
+      else if (this.errorEl) {
+        this.errorEl.remove();
+        this.errorEl = null;
+      }
     }
 
     // ⚠️ 必须在**写完 DOM 之后**才滚：上面那些 insertBefore / textContent 会改变内容高度，
@@ -148,6 +165,53 @@ export class ChatView {
     const text = item.text || (item.done ? '' : '…');
     if (slot.bubble.textContent !== text) slot.bubble.textContent = text;
     return slot.wrap;
+  }
+
+  /**
+   * 把"这一轮失败了"**画在对话流里**。
+   *
+   * ## 为什么不能只靠顶栏那行小字
+   *
+   * `state.error` 一直存在，原先只拼进顶栏的 meta（`… · 工具 0 · 出错 · Failed to fetch`）。
+   * 那行字又小又挤，而失败这件事是**用户发了一句话之后什么都没发生**：
+   * 面板里只有他自己那条消息，看上去就像"AI 不理我"。实测过 ——
+   * 打开静态站点加 `?demo=0`（于是走后端 transport，而那个站点上没有后端），
+   * 点任意一个按钮，画面就停在这个状态：图还在、顶栏角落写着 "Failed to fetch"、
+   * 对话里一片空白。
+   *
+   * ## 文案为什么带上 `?demo=1`
+   *
+   * 最常见的失败场景就是"演示站点上把开关关掉了"（或者分享了带 `?demo=0` 的链接）。
+   * 这时候真正有用的信息只有一句话：**改用纯前端**。
+   * 原始报错（`Failed to fetch` / CORS）照样显示在下面一行 —— 它是给开发者看的，
+   * 不能藏起来，不然本地真配错了就查不出原因。
+   */
+  private __renderErrorNotice(message: string): void {
+    if (!this.errorEl) {
+      const el = document.createElement('div');
+      el.className = 'error-notice';
+      el.setAttribute('role', 'alert');
+
+      const title = document.createElement('div');
+      title.className = 'error-title';
+      title.textContent = '这一轮没能连上 agent';
+
+      const hint = document.createElement('div');
+      hint.className = 'error-hint';
+      // 纯文本，不走 innerHTML —— 这句话里提到了查询参数，别让它有机会变成标记
+      hint.textContent =
+        '当前页面走的是「连后端」那条路，而这里没有后端在跑。' +
+        '如果这是静态演示站点，用 ?demo=1 改成纯前端（内置剧本，不需要后端）。';
+
+      const detail = document.createElement('div');
+      detail.className = 'error-detail';
+
+      el.append(title, hint, detail);
+      this.root.append(el);
+      this.errorEl = el;
+    }
+    const detail = this.errorEl.lastElementChild as HTMLElement;
+    if (detail.textContent !== message) detail.textContent = message;
   }
 
   private renderTool(item: ToolItem): HTMLElement {

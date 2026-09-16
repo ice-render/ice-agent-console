@@ -363,6 +363,41 @@
       .diag li.warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-text); }
       .diag li code { color: inherit; opacity: 0.75; }
 
+      /*
+       * 「这一轮失败了」那张提示卡。
+       *
+       * 为什么不只靠顶栏那行小字（`… · 出错 · Failed to fetch`）：失败时用户看到的是
+       * "我发了一句话，然后什么都没发生" —— 面板里只有他自己那条消息，
+       * 看上去像 AI 不理人。所以提示必须落在**对话流里**，而且要给出下一步动作。
+       *
+       * 用 `--err-*` 那三个 token（与 .diag 的诊断条目同色）：
+       * 亮色 / 暗色主题下都由 theme.ts 写进 CSS 变量，这里不写死颜色。
+       */
+      .error-notice {
+        margin: 4px 0 12px 34px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: var(--err-bg);
+        border: 1px solid var(--err-line);
+        color: var(--err-text);
+      }
+      .error-notice .error-title {
+        font-size: 12.5px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .error-notice .error-hint {
+        font-size: 11.5px;
+        line-height: 1.7;
+        opacity: 0.9;
+      }
+      .error-notice .error-detail {
+        margin-top: 6px;
+        font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        opacity: 0.7;
+        word-break: break-all;
+      }
+
       .hint {
         font-size: 11.5px;
         color: var(--muted);
