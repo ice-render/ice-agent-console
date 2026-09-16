@@ -29,7 +29,7 @@ import {
   type Effect,
   type TextItem,
 } from '../domain/agui/reducer';
-import { ChatView } from '../view/chat';
+import { ChatView, shieldFromCanvas } from '../view/chat';
 import { StageView, type StageMountResult } from '../view/stage';
 import type { WidgetAction } from '../view/widget-layer';
 
@@ -202,6 +202,15 @@ const stage = new StageView(stageEl, {
 });
 
 const view = new ChatView(threadEl);
+
+/**
+ * 面板对画布"透明化"：拦在我们**整个面板**（`#chat`）上，而不是消息区。
+ *
+ * 面板里现在有四块 DOM：顶栏、消息区、快捷按钮 + 输入框、底部那排家族链接。
+ * 拦在面板根上，这四块一次覆盖 —— 往面板里再加东西也不用回来改。
+ * 为什么这件事必须做、以及"为什么它今天看不出效果"（实测），见 `chat.ts` 顶部的注释。
+ */
+shieldFromCanvas(chatEl);
 
 /**
  * 先让绘图区知道面板占了右边多少，**再**画图。

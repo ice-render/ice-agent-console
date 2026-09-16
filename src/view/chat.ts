@@ -9,7 +9,8 @@
  * 所以分界划在这儿：**DOM 管对话，canvas 管绘图区**（见 `src/view/stage.ts`）。
  *
  * 面板是 `position: fixed` **浮在绘图区右边缘上**的。一个必须做的动作：
- * 在面板根上 `stopPropagation` 掉指针 / 滚轮 / 点击事件 —— 见 `__shieldFromCanvas`。
+ * 在面板根上 `stopPropagation` 掉指针 / 滚轮 / 点击事件 —— 见 `shieldFromCanvas`，
+ * 由 `boot.ts` 在 `#chat`（**整个面板**，不只是消息区）上装一次。
  *
  * 渲染策略是"按 id 复用元素"而不是重绘整棵树 —— 因为条目上有状态机
  * （流式 / 已渲染 / 校验不通过 / 已提交），整棵重建会把"这一条已经失败过"这类
@@ -25,9 +26,25 @@ interface TextSlot {
 
 /**
  * 引擎会**广播**这些事件给每一个 ICE 实例（`DOMEventInterceptor` 在 `window` 上
- * 挂的是冒泡阶段的监听），唯一的过滤是"事件目标是不是另一块 **canvas**"。
- * 对话面板是个 `<div>`，不在过滤范围内 —— 在面板上滚一下，画布那个实例照样会
- * 当成一次滚轮缩放。所以在面板根上把它们拦下来。
+ * 挂的是冒泡阶段的监听），过滤只认"事件目标是不是另一块 **canvas**"（见
+ * `DOMEventDispatcher.__isForeignCanvasTarget`）。对话面板是个 `<div>`，
+ * 不在过滤范围内，所以在面板根上把它们拦下来。
+ *
+ * ⚠️ **"没拦住"长什么样，实测过**（2026-09-16，像素级，拿图表图层做正反两面）：
+ *
+ * | | 在图表自己上悬停（对照） | 在面板上悬停（实验） |
+ * |---|---|---|
+ * | 摘掉这道屏蔽 | 画面变（提示框 / 高亮） | **画面也变** |
+ * | 装上这道屏蔽 | 画面变 | 画面一动不动 |
+ *
+ * ⚠️ **这条泄漏在工艺图上量不出来**：工艺图的滚轮缩放监听是直接挂在 canvas 元素上的
+ * （`diagram-layer.ts` 的 `canvas.addEventListener('wheel', …)`），事件目标是面板时
+ * 根本到不了它。所以"在面板上滚一下，图没动"**不能**用来判断这道屏蔽有没有用 ——
+ * 它挡的是**走引擎事件总线的那类交互（悬停 / 命中）**，而那几个图层正好压在面板下面。
+ * 别拿滚轮做判据，也别因为"实测没效果"把它删掉。
+ *
+ * 装在哪一层是有讲究的：挂在**面板根**上，往后往面板里加东西（比如底部那排
+ * 家族链接）自动被覆盖；加到面板**外面**的浮层要自己再拦一次。
  *
  * **不拦键盘**：输入框一直是这样工作的，拦了输入法就废了。
  */
@@ -44,6 +61,18 @@ const SHIELDED_EVENTS = [
   'auxclick',
   'wheel',
 ];
+
+/**
+ * 把一块浮层"对画布透明"：指针 / 滚轮 / 点击事件就地掐掉，不再冒泡到 `window`。
+ *
+ * 导出成函数而不是塞进 `ChatView` 的构造函数，是因为**要拦的是整个面板**，
+ * 而 `ChatView` 拿到的是消息区（`#thread`）—— 渲染根与"该拦多大一块"是两件事，
+ * 由 `boot.ts`（它同时看得到 `#chat` 与 `#thread`）决定。
+ */
+export function shieldFromCanvas(el: HTMLElement): void {
+  const stop = (event: Event) => event.stopPropagation();
+  for (const name of SHIELDED_EVENTS) el.addEventListener(name, stop);
+}
 
 /**
  * 距底部多少像素以内算"贴着底部"。
@@ -84,7 +113,6 @@ export class ChatView {
 
   constructor(private readonly root: HTMLElement) {
     this.emptyEl = root.querySelector('.empty');
-    this.__shieldFromCanvas();
     // `passive: true`：这个监听只读位置、不阻止滚动，声明出来能让浏览器少一次等待
     this.root.addEventListener('scroll', this.onScroll, { passive: true });
   }
@@ -222,11 +250,6 @@ export class ChatView {
     }
     entry.update(item);
     return entry.el;
-  }
-
-  private __shieldFromCanvas(): void {
-    const stop = (event: Event) => event.stopPropagation();
-    for (const name of SHIELDED_EVENTS) this.root.addEventListener(name, stop);
   }
 
   /** 距底部还有多少像素。内容比容器矮时是负数 —— 那也算"贴底"。 */

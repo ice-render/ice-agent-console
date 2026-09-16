@@ -113,3 +113,49 @@ test('键盘 Tab 到文字替身里的链接时，它是**看得见**的', async
 
   expect(errors).toEqual([]);
 });
+
+/**
+ * 面板底部那排家族链接。
+ *
+ * 它同时是**可见 UI** 与**爬虫的出站路径**，所以两边都要钉：
+ * 链接得是真 `<a href>`（爬得到）、得在面板里（点它不会打到画布）、
+ * 而且加了这一行之后**输入区不能被挤走** —— footer 是 `flex:none`，
+ * 它多高就从消息区借多高，借过头的话输入框会被推出面板。
+ */
+test('面板底部的家族链接：可爬、可点、且没有挤坏输入区', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/?autoplay=0');
+  await waitDiagramReady(page);
+
+  const links = page.locator('#chat .family a');
+  const count = await links.count();
+  expect(count, '家族链接应当有 5 个以上').toBeGreaterThanOrEqual(5);
+
+  // ---- 1. 绝对地址、指向真实存在过的仓库、没有重复 ----
+  const hrefs = await links.evaluateAll((els) => els.map((el) => (el as HTMLAnchorElement).href));
+  for (const href of hrefs) expect(href).toMatch(/^https:\/\/github\.com\/ice-render\/[\w-]+$/);
+  expect(new Set(hrefs).size).toBe(hrefs.length);
+
+  // ---- 2. 可见（不是藏在 sr-only 里的链接）----
+  await expect(links.first()).toBeVisible();
+
+  // ---- 3. 输入区与发送按钮仍然在面板矩形里 ----
+  const panel = (await page.locator('#chat').boundingBox())!;
+  const input = (await page.locator('#input').boundingBox())!;
+  const send = (await page.locator('#send').boundingBox())!;
+  expect(input.y + input.height).toBeLessThanOrEqual(panel.y + panel.height);
+  expect(send.y + send.height).toBeLessThanOrEqual(panel.y + panel.height);
+
+  // ---- 4. 在链接那一行上滚轮：背后的工艺图不能被缩放 ----
+  // （面板整体装了屏蔽，见 src/view/chat.ts 的 shieldFromCanvas。这一条是它的回归线：
+  //   哪天有人把屏蔽挪回消息区，这一行就会红。）
+  const scale = () => page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport().scale);
+  const before = await scale();
+  const linkBox = (await links.first().boundingBox())!;
+  await page.mouse.move(linkBox.x + linkBox.width / 2, linkBox.y + linkBox.height / 2);
+  await page.mouse.wheel(0, -800);
+  await page.waitForTimeout(250);
+  expect(await scale(), '在链接行上滚轮不该缩放工艺图').toBe(before);
+
+  expect(errors).toEqual([]);
+});

@@ -203,6 +203,41 @@ describe('canvas 的文字替身（爬虫能读到的正文）', () => {
   });
 });
 
+describe('出站链接：别让整站变成孤岛', () => {
+  /**
+   * 整站只有一个 URL、没有任何子页面，改之前**可见 DOM 里一个外链都没有** ——
+   * 爬虫没有出路，人也没法从演示走到家族仓库。所以面板底部刻意加了那排链接
+   * （位置与理由见 README §12、public/index.html 里的注释）。
+   */
+  // 先把**注释剥掉**再扫：上面那段说明里就写着"真 `<a href>`"这样的字样，
+  // 不剥的话正则会把散文当成标签数进去（第一版就是这么红的）。
+  const footer = ((html.match(/<footer>[\s\S]*?<\/footer>/) || [])[0] || '').replace(
+    /<!--[\s\S]*?-->/g,
+    ''
+  );
+  const links = [...footer.matchAll(/href="(https:\/\/github\.com\/[^"]+)"/g)].map((m) => m[1]);
+
+  it('面板底部有 5 个以上指向 ICE 家族仓库的绝对链接', () => {
+    expect(links.length).toBeGreaterThanOrEqual(5);
+    expect(links.every((h) => h.startsWith('https://github.com/ice-render/'))).toBe(true);
+    // 同一个仓库挂两遍是"凑数"，不是内容
+    expect(new Set(links).size).toBe(links.length);
+  });
+
+  it('必须是真 `<a href>`，不是 JS 点击', () => {
+    // 爬虫只跟 `<a href>`。写成 `onclick=window.open(...)` 对它们等于没有，
+    // 而这一类"看着有链接其实爬不到"的写法在单页应用里很常见。
+    const anchors = [...footer.matchAll(/<a\b[^>]*>/g)].map((m) => m[0]);
+    expect(anchors.length).toBeGreaterThanOrEqual(5);
+    for (const tag of anchors) {
+      expect(tag).toMatch(/href="https:\/\//);
+      // 新窗口打开是给**人**的（别把演示页挤掉），noopener 是安全的标配
+      expect(tag).toContain('target="_blank"');
+      expect(tag).toContain('rel="noopener noreferrer"');
+    }
+  });
+});
+
 describe('标题是这一页的身份，不许随画面漂', () => {
   it('运行期没有任何地方改 document.title', () => {
     /**

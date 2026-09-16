@@ -572,6 +572,29 @@
       }
       #send:disabled { opacity: 0.5; cursor: not-allowed; }
       .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+
+      /*
+       * 面板底部的家族链接（HTML 在 `<footer>` 里）。
+       *
+       * 排布上只有一条要求：**别把输入区挤走**。它在 `flex:none` 的 footer 里，
+       * 多高就从 `#thread` 借多高（那一条是 `flex:1`，自己会缩），所以这里
+       * 用小字号 + 自动换行，宁可折成两三行也不横向溢出。
+       * 颜色全走 token（`--muted` / `--hint` / `--ice-ink`），暗色主题自动跟随。
+       */
+      #chat .family {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 3px 10px;
+        margin-top: 9px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      #chat .family .family-label { color: var(--hint); letter-spacing: 0.3px; }
+      #chat .family a { color: var(--muted); text-decoration: none; }
+      #chat .family a:hover { color: var(--ice-ink); text-decoration: underline; }
       /*
        * 组名：占满一整行（`flex-basis: 100%` 配合父级的 `flex-wrap`），
        * 于是"工艺图"那一组与"其他"那一组自然分成两块，不用另起容器。
@@ -715,6 +738,76 @@
           <textarea id="input" rows="1" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
           <button id="send" type="submit">发送</button>
         </form>
+        <!--
+          面板底部的家族链接。
+
+          **为什么是这里，而不是顶部 Nav + 底部 footer**（那版做过评估、最后没做）：
+
+          1. 这一行在 `#chat` **里面** —— 面板整体屏蔽了指针 / 滚轮 / 点击事件
+             （`src/view/chat.ts` 的 `shieldFromCanvas`），所以点它、在它上面滚，
+             都不会打到背后的画布。做成 Nav / footer 就没有这层保护，
+             得为它们单独再拦一次（引擎的拦截器只按"目标是不是另一块 canvas"过滤）。
+          2. 绘图区**铺满视口**是这个工程的既定设定（README §2.0）：Nav / footer 一进来，
+             画布就得缩进，连带 12 张截图与几条"满版"判据都要改。
+          3. 它同时补上了**爬虫的出站路径** —— 改之前可见 DOM 里一个外链都没有（README §12）。
+
+          ⚠️ 全是**真 `<a href>`**、绝对地址、新窗口打开：爬虫要跟得到，
+          而且它是可见的（隐藏链接没有这个价值）。
+          ⚠️ 链接指向的仓库**都验过存在**（7 个全 200），别凭印象加 —— 指向 404 的链接
+          比没有链接更糟。
+        -->
+        <nav class="family" aria-label="ICE 家族仓库">
+          <span class="family-label">ICE 家族</span>
+          <a
+            href="https://github.com/ice-render/ice-render"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="ICE 渲染引擎 —— 本页绘图区的内核"
+            >ice-render</a
+          >
+          <a
+            href="https://github.com/ice-render/ice-chart"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="图表库 —— 图表图层就是它画的"
+            >ice-chart</a
+          >
+          <a
+            href="https://github.com/ice-render/ice-chart-dsl"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="图表的 JSON DSL：校验 → 编译 → setOption"
+            >ice-chart-dsl</a
+          >
+          <a
+            href="https://github.com/ice-render/ice-entity-designer"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="实体设计器 —— 这张污水处理工艺图是它画的"
+            >ice-entity-designer</a
+          >
+          <a
+            href="https://github.com/ice-render/ice-web-components"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="控件库 —— 画在画布上的按钮与表单控件"
+            >ice-web-components</a
+          >
+          <a
+            href="https://github.com/ice-render/ice-web-components-dsl"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="控件的 JSON DSL —— 表单图层用它渲染"
+            >ice-web-components-dsl</a
+          >
+          <a
+            href="https://github.com/ice-render/ice-agent-console"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="本页源码与架构文档（AG-UI × ICE 的接线）"
+            >本页源码</a
+          >
+        </nav>
       </footer>
     </aside>
 
