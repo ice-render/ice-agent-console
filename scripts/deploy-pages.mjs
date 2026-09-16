@@ -17,6 +17,11 @@
  *    历史没有意义（上一版的 `boot.<hash>.js` 留在分支上只会白占体积）。
  * 4. **远端是 `origin-github`，不是 `origin`** —— 本仓 `origin` 指向 gitee，
  *    而 gitee 的 Pages 是另一套（要手动开、且免费版有限制）。两个远端并存是历史原因。
+ * 5. **`robots.txt` / `sitemap.xml` / `og-cover.jpg` 必须真的躺在站点根目录**。
+ *    它们在 `public/` 里、由 webpack 搬进 `dist/`（见 `CopyPublicFiles`），而这一分支
+ *    是**整份 dist/ 拷过来的**。丢掉它们的症状是：页面完全正常，爬虫抓不到、
+ *    分享卡片空白 —— 只有对着线上站点 `curl /robots.txt` 才看得出来。
+ *    第 2b 步的自检会把这些逐条验一遍（含"og:image 指向的文件真的在产物里"）。
  *
  * ## 用法
  *
@@ -102,6 +107,103 @@ const html = readFileSync(join(DIST, 'index.html'), 'utf8');
 if (!/<script[^>]+src=boot\.[a-f0-9]+\.js/.test(html)) die('index.html 里没有相对路径引用的 boot 脚本');
 ok('index.html 用的是相对路径（子路径部署的前提）');
 
+// ------------------------------------------------- 2b. 自检 TDK / 爬虫三件套
+step('2b', '自检：TDK 与爬虫三件套（它们全是静态文件，只对着产物看才算数）');
+/**
+ * ## 为什么这条自检必须在**产物**上做
+ *
+ * title / description / keywords、JSON-LD、robots.txt、sitemap.xml 全都**不是运行时拼的**
+ * —— 爬虫读的就是 `dist/index.html` 这份原文（`html-webpack-plugin` 在 production 下
+ * 还会把它压缩一遍，而"压缩会不会吃掉某个标签"也只有对着产物看才知道）。
+ *
+ * 这里**只钉"在不在"与"是不是同一个站点地址"**，不钉文案本身：文案会改，站点地址不会。
+ * 文案层面的规矩（关键词、文字替身、不许动态改 title）在 `tests/seo.test.ts`。
+ *
+ * 最容易坏的一处是 **og:image 指向一个没被部署的文件** —— 页面完全正常、分享卡片空白、
+ * 构建与环境都不报错。所以这里把那个 URL 反解成本地文件名，真的去 dist/ 里找一遍。
+ */
+
+/** 从一段标签属性文本里取属性值（产物里引号可能被省掉，所以三种写法都认）。 */
+const attr = (raw, key) => {
+  const re = new RegExp(`(?:^|\\s)${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
+  const m = raw.match(re);
+  return m ? m[1] ?? m[2] ?? m[3] ?? null : null;
+};
+const metas = [...html.matchAll(/<meta\s[^>]*>/gi)].map((m) => m[0]);
+const meta = (kind, key) => {
+  const hit = metas.find((t) => (attr(t, kind) || '').toLowerCase() === key.toLowerCase());
+  return hit ? attr(hit, 'content') : null;
+};
+
+// title / description / keywords —— TDK 三件套本体
+const title = (html.match(/<title>([^<]+)<\/title>/) || [])[1];
+if (!title) die('index.html 里没有 <title>');
+if (title.length < 10 || title.length > 60) {
+  die(`title 长 ${title.length} 字（期望 10..60，太长会被搜索结果截断）：「${title}」`);
+}
+const description = meta('name', 'description');
+if (!description || description.length < 40) {
+  die(`description 缺失或过短（${description ? description.length : 0} 字符）—— 搜索结果里那两行摘要就是它`);
+}
+const keywords = meta('name', 'keywords');
+const words = (keywords || '').split(',').filter((k) => k.trim());
+if (words.length < 5) die('keywords 缺失或少于 5 个词（Google 不看，百度 / 360 / 搜狗看）');
+if ((meta('name', 'robots') || '').includes('noindex')) die('robots meta 里写着 noindex');
+ok(`title ${title.length} 字 / description ${description.length} 字 / keywords ${words.length} 词`);
+
+// canonical：**必须是绝对地址**（子路径部署时写 "/" 会指向域名根，那是另一个站点）
+const canonicalTag = html.match(/<link[^>]*rel=["']?canonical["']?[^>]*>/i);
+const canonical = canonicalTag ? attr(canonicalTag[0], 'href') : null;
+if (!canonical || !/^https:\/\/[^/]+\/.+/.test(canonical)) {
+  die(`canonical 缺失或不是绝对地址：${canonical}（要写全 https://<域>/<子路径>/）`);
+}
+if (meta('property', 'og:url') !== canonical) die('og:url 与 canonical 不一致（会被当成两个页面）');
+ok(`canonical = og:url = ${canonical}`);
+
+// JSON-LD：**必须真的能 JSON.parse**（多一个逗号就是"结构化数据静默失效"）
+const ld = html.match(/<script type=["']?application\/ld\+json["']?>([\s\S]*?)<\/script>/i);
+if (!ld) die('index.html 里没有 application/ld+json');
+let graph;
+try {
+  graph = JSON.parse(ld[1])['@graph'];
+} catch (e) {
+  die(`JSON-LD 不是合法 JSON：${e.message}（压缩器一般不动它，多数是手改时多了个逗号）`);
+}
+const types = (graph || []).map((n) => n['@type']);
+for (const t of ['WebSite', 'SoftwareApplication']) {
+  if (!types.includes(t)) die(`JSON-LD 里少了 @type=${t}`);
+}
+ok(`JSON-LD 合法：${types.join(' + ')}`);
+
+// 文字替身：**canvas 页面的正文就靠它**
+const summary = html.match(/<section[^>]*id=["']?site-summary["']?[\s\S]*?<\/section>/);
+if (!summary) die('index.html 里没有 #site-summary（canvas 的文字替身）—— 爬虫将读不到任何正文');
+const summaryText = summary[0].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ');
+if (summaryText.length < 600) die(`#site-summary 只剩 ${summaryText.length} 字符可读文本（期望 ≥600）`);
+if (!/<noscript[\s>]/.test(html)) die('index.html 里没有 <noscript> 兜底（不跑 JS 的爬虫看到的是白屏）');
+ok(`文字替身 ${summaryText.length} 字符 + noscript 兜底`);
+
+// 站点根目录那两个文件：它们在不在 dist/ 里、loc 对不对
+for (const f of ['robots.txt', 'sitemap.xml']) {
+  if (!existsSync(join(DIST, f))) die(`dist/${f} 不存在（webpack 的 CopyPublicFiles 没搬过来？）`);
+}
+const robots = readFileSync(join(DIST, 'robots.txt'), 'utf8');
+const sitemapUrl = `${canonical.replace(/\/$/, '')}/sitemap.xml`;
+if (!robots.includes(`Sitemap: ${sitemapUrl}`)) die(`robots.txt 里的 Sitemap 不是 ${sitemapUrl}`);
+if (!readFileSync(join(DIST, 'sitemap.xml'), 'utf8').includes(`<loc>${canonical}</loc>`)) {
+  die(`sitemap.xml 里没有 <loc>${canonical}</loc>`);
+}
+ok(`robots.txt → ${sitemapUrl}，sitemap.xml → ${canonical}`);
+
+// og:image：卡片封面**必须真的部署上去了**（指向空气是这类标签最常见的坏法）
+const ogImage = meta('property', 'og:image');
+if (!ogImage) die('没有 og:image');
+const ogFile = ogImage.split('/').pop();
+if (!ogImage.startsWith(canonical) || !existsSync(join(DIST, ogFile))) {
+  die(`og:image 指向 ${ogImage}，但 dist/${ogFile} 不存在 —— 分享卡片会是空白`);
+}
+ok(`og:image ${ogFile} 在产物里（${(readFileSync(join(DIST, ogFile)).length / 1024).toFixed(0)} KiB）`);
+
 if (DRY) {
   console.log(`\n\x1b[33m--dry：自检通过，停在本地。产物在 ${DIST}\x1b[0m`);
   console.log('想本地看效果：npx http-server dist -p 8200 -c-1');
@@ -112,15 +214,36 @@ if (DRY) {
 step(3, `组装 ${BRANCH} 分支（.pages-work/）`);
 rmSync(WORK, { recursive: true, force: true });
 mkdirSync(WORK, { recursive: true });
-for (const f of ['index.html', '.nojekyll']) {
-  if (f === '.nojekyll') continue;
-  cpSync(join(DIST, f), join(WORK, f));
+/**
+ * **整份 dist/ 搬过去**，不再逐个文件白名单。
+ *
+ * 理由：白名单那种写法每加一个静态文件（这次就是 robots.txt / sitemap.xml / og-cover.jpg）
+ * 都要回来改一次，而**漏改的后果是静默的** —— 线上 404、构建日志照样是绿的。
+ * `output.clean` 保证 dist/ 里没有陈年垃圾，所以 dist/ 就是"要发的东西"的完整定义，
+ * 直接递归拷贝，以后加文件不用再动这里。
+ */
+cpSync(DIST, WORK, { recursive: true });
+
+/**
+ * `sitemap.xml` 的 `<lastmod>` 按**最后一次提交的日期**重写。
+ *
+ * 不用"部署当天"：源码没动就不该假装页面更新过 —— 长期虚报的 lastmod 会被搜索引擎
+ * 判成不可信，之后真更新了也不再采信。拿不到 git 日期（比如浅克隆）就保留仓库里那份。
+ */
+try {
+  const stamp = execFileSync('git', ['log', '-1', '--format=%cs'], { cwd: ROOT }).toString().trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(stamp)) {
+    const smPath = join(WORK, 'sitemap.xml');
+    writeFileSync(
+      smPath,
+      readFileSync(smPath, 'utf8').replace(/<lastmod>[^<]*<\/lastmod>/, `<lastmod>${stamp}</lastmod>`)
+    );
+    ok(`sitemap.xml 的 lastmod = ${stamp}（最后一次提交的日期）`);
+  }
+} catch {
+  console.log('      \x1b[33m!\x1b[0m 读不到 git 提交日期，sitemap.xml 沿用仓库里的 lastmod');
 }
-for (const b of bundles) {
-  cpSync(join(DIST, b), join(WORK, b));
-  const lic = join(DIST, `${b}.LICENSE.txt`);
-  if (existsSync(lic)) cpSync(lic, join(WORK, `${b}.LICENSE.txt`));
-}
+
 // 见文件头第 2 条：这一行不能省
 writeFileSync(join(WORK, '.nojekyll'), '');
 writeFileSync(
@@ -135,8 +258,8 @@ writeFileSync(
     '',
   ].join('\n')
 );
-ok(`已放入 ${bundles.length} 个 JS + index.html + .nojekyll + README.md`);
-ok('没有放进 dist/ 之外的东西（源码、node_modules、截图都不进这个分支）');
+ok(`已放入 dist/ 的全部内容 + .nojekyll + README.md（${bundles.length} 个 JS）`);
+ok('没有放进 dist/ 之外的东西（源码、node_modules、docs/images 都不进这个分支）');
 
 // ---------------------------------------------------------------- 4. 提交
 step(4, '提交');

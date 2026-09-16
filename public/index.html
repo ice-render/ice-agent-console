@@ -11,7 +11,130 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2361D9FB'/%3E%3Cg fill='%23ffffff'%3E%3Crect x='7' y='17' width='4' height='8' rx='1'/%3E%3Crect x='14' y='11' width='4' height='14' rx='1'/%3E%3Crect x='21' y='14' width='4' height='11' rx='1'/%3E%3C/g%3E%3C/svg%3E"
     />
-    <title>ice-agent-console</title>
+
+    <!--
+      ============================== TDK / SEO ==============================
+
+      这个页面**几乎全是 canvas**：工艺图、图表、控件条都画在画布上，
+      爬虫在 DOM 里读不到一个字的正文（"画了什么"更是无从谈起）。
+      所以下面的 TDK 与文件末尾那份文字替身（`#site-summary`）是**一件事的两半**：
+
+        · 这一坨决定**搜索结果里长什么样**（标题 / 摘要 / 分享卡片 / 站点信息）；
+        · 末尾那段 sr-only 的语义化 HTML 决定**爬虫有没有内容可读**。
+
+      几个刻意的取舍：
+
+      1. **全部写死在静态 HTML 里，不用 JS 拼。** 本站是构建产物（`npm run deploy:pages`
+         推 gh-pages 分支），而**不执行 JS 的爬虫读到的就是 dist/index.html 这一份原文**。
+         运行期拼字符串等于对它们不存在。
+      2. **运行期不许改 `document.title`。** 演示构建开页会自动开演、图层会从工艺图切到
+         图表 —— 抓取时若渲染到那一刻，标题就会被改成"图表…"这种**取决于播放进度**的东西。
+         标题是这一页的身份，不该随画面漂（`tests/seo.test.ts` 钉着这条）。
+      3. **canonical / og:url / JSON-LD 里的站点地址必须与 robots.txt / sitemap.xml 完全一致**
+          —— 四处地址对不上时，搜索引擎会看到两个站点。地址在四个文件里各出现一次，
+         靠 `tests/seo.test.ts` 钉住（换域名时要一起改）。
+      4. `keywords` 对 Google **早就无效**，对百度 / 360 / 搜狗仍然看一眼，
+         而且零成本 —— 所以留着，但**不靠它**。
+    -->
+    <title>ICE Agent Console — AG-UI 事件流驱动的 ICE 画布控制台</title>
+    <meta
+      name="description"
+      content="ICE Agent Console：AG-UI 事件流驱动 Canvas 的在线演示。开页画出 68 单元 / 81 管线的污水处理 AAO 工艺图，可推镜头、高亮、动态增删图元。"
+    />
+    <meta
+      name="keywords"
+      content="ICE Agent Console,AG-UI,ICE 渲染引擎,ice-render,ice-chart,ice-entity-designer,canvas 可视化,画布渲染,污水处理工艺图,AAO 工艺,工艺流程设计器,AI Agent 可视化,智能体控制台,事件流驱动,图表 DSL,在线演示"
+    />
+    <meta name="author" content="ICE Render" />
+    <!-- 允许大图预览与完整摘要：搜索结果的缩略图对"画出来的东西"尤其重要 -->
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+    <meta name="theme-color" content="#61D9FB" />
+    <link rel="canonical" href="https://ice-render.github.io/ice-agent-console/" />
+
+    <!--
+      社交卡片（微信 / Twitter / Slack / 飞书 抓的是这几个）。
+      `og:image` 指的是**站点根目录下的一张真实文件** —— 它由 webpack 从 public/ 搬进 dist/，
+      指向一个不存在的路径是这类标签最常见的坏法（页面正常、卡片空白，且不报错）。
+      og-cover.jpg 是 docs/images/hero.png 居中裁成 1200×630 的社交尺寸，56 KiB。
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ICE Agent Console" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:url" content="https://ice-render.github.io/ice-agent-console/" />
+    <meta property="og:title" content="ICE Agent Console — AG-UI 事件流驱动的 ICE 画布控制台" />
+    <meta
+      property="og:description"
+      content="agent 的事件流直接驱动 Canvas：开页就画出某 10 万 m³/d 污水厂的 AAO 工艺流程图，并能缩放、高亮、动态增删图元。ICE 渲染家族 × AG-UI 协议的纯前端在线演示。"
+    />
+    <meta property="og:image" content="https://ice-render.github.io/ice-agent-console/og-cover.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="ICE Agent Console 界面：绘图区铺满视口、上面画着污水处理工艺图，对话面板浮在它的右边缘"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ICE Agent Console — AG-UI 事件流驱动的 ICE 画布控制台" />
+    <meta
+      name="twitter:description"
+      content="agent 的事件流直接驱动 Canvas：开页就画出某 10 万 m³/d 污水厂的 AAO 工艺流程图，并能缩放、高亮、动态增删图元。"
+    />
+    <meta name="twitter:image" content="https://ice-render.github.io/ice-agent-console/og-cover.jpg" />
+    <meta
+      name="twitter:image:alt"
+      content="ICE Agent Console 界面：绘图区铺满视口、上面画着污水处理工艺图，对话面板浮在它的右边缘"
+    />
+
+    <!--
+      结构化数据（schema.org，JSON-LD）—— 搜索引擎"认出这是个什么软件"的依据：
+      应用名 / 类别 / 免费 / 支持的平台 / 截图 / 源码地址，都是能直接进富结果与知识面板的字段。
+      写成 JSON 对象放进 script，别改成运行时注入（理由同上面第 1 条）。
+      校验：https://validator.schema.org （粘 URL 就行）。
+    -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://ice-render.github.io/ice-agent-console/#website",
+            "url": "https://ice-render.github.io/ice-agent-console/",
+            "name": "ICE Agent Console",
+            "alternateName": "ice-agent-console",
+            "description": "把 AG-UI 协议接到 ICE 渲染家族的在线演示：agent 的事件流直接驱动 Canvas 画布。",
+            "inLanguage": "zh-CN",
+            "publisher": { "@type": "Organization", "name": "ICE Render" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://ice-render.github.io/ice-agent-console/#app",
+            "name": "ICE Agent Console",
+            "url": "https://ice-render.github.io/ice-agent-console/",
+            "description": "AG-UI 事件流驱动 ICE 画布的控制台演示：开页画出一张 68 单元 / 81 管线的污水处理 AAO 工艺流程图，agent 可以推镜头、打高亮、用 JSON Patch 动态增删图元，并支持中断 → 填表 → resume 的人机回环。",
+            "applicationCategory": "DeveloperApplication",
+            "applicationSubCategory": "数据可视化 / 图表",
+            "operatingSystem": "Web（现代浏览器）",
+            "browserRequirements": "需要 JavaScript 与 Canvas 2D",
+            "inLanguage": "zh-CN",
+            "isAccessibleForFree": true,
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+            "screenshot": "https://ice-render.github.io/ice-agent-console/og-cover.jpg",
+            "codeRepository": "https://github.com/ice-render/ice-agent-console",
+            "keywords": "AG-UI,ICE 渲染引擎,Canvas 可视化,污水处理工艺图,AAO 工艺,AI Agent 可视化",
+            "featureList": [
+              "AG-UI 事件流驱动 Canvas 画布（不是往消息流里插卡片）",
+              "绘图区铺满视口，按 tool 切图层：工艺图 / 图表 / 表单",
+              "agent 能在图上推镜头、高亮图元（自定义事件，不污染 state）",
+              "STATE_DELTA + JSON Patch 增量改图：增删图元不重画、不重置视口",
+              "人机回环：中断 → 表单 → resume 开新一轮",
+              "校验器诊断回灌，agent 自修复 DSL",
+              "两种 transport：连后端的 SSE，或纯前端（可静态托管）跑同一份剧本"
+            ]
+          }
+        ]
+      }
+    </script>
     <style>
       /*
        * 布局：**绘图区是主体，对话浮在它上面。**
@@ -482,6 +605,86 @@
       #thread::-webkit-scrollbar-thumb, .args::-webkit-scrollbar-thumb {
         background: var(--line); border-radius: 5px;
       }
+
+      /* ================= 给爬虫与屏幕阅读器的"文字版" ================= */
+
+      /*
+       * 页面绝大多数内容画在 canvas 上，而 **canvas 里没有 DOM 文本**：
+       * 爬虫把 JS 跑完、看渲染后的 DOM，看到的仍然是一片 `<canvas>` 元素。
+       * 所以画布上"画了什么、能做什么"另配一份语义化 HTML（文件末尾的 `#site-summary`），
+       * 视觉上藏起来。
+       *
+       * 用的是无障碍领域通行的 visually-hidden 手法（1px + clip），
+       * **不是 `display:none` / `visibility:hidden`** —— 那两种连无障碍树和一部分爬虫
+       * 都会一起跳过，等于白写。
+       *
+       * ⚠️ 那条底线：里面写的是**内容的等价描述**（给 canvas 配文字替身，
+       * 跟给图片配 alt 是同一件事），**不是把关键词堆一遍**。堆砌是会被判作弊的。
+       */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      /*
+       * JS 没跑起来时的兜底（`<noscript>` 的内容只在禁用 JS 时才进渲染树，
+       * 所以这段样式对正常访问**零影响**）。
+       * 居中标在上层：正常情况 #stage 是空白的，这段话恰好说明"为什么是空的"，
+       * 而不是留一个让人以为页面坏了的白屏。
+       */
+      #nojs {
+        position: fixed;
+        z-index: 20;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: min(560px, calc(100% - 40px));
+        padding: 18px 22px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: var(--overlay-shadow);
+      }
+      #nojs h2 { margin: 0 0 8px; font-size: 15px; }
+      #nojs p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.8; }
+      #nojs a { color: var(--ice-ink); }
+
+      /*
+       * 文字替身里的链接**仍然可以被 Tab 到** —— 那是这类手法的固有代价（它没被删掉，
+       * 屏幕阅读器用户恰恰要靠它跳去源码）。代价是"键盘用户会聚焦到一个看不见的东西"，
+       * 所以聚焦时把它**真的显示出来**。用 `:focus` 而不是 `:focus-visible`：
+       * 后面那条在程序化聚焦 / 鼠标点击时不一定命中，而这条规则宁滥勿缺。
+       *
+       * 顺带一提，这段只在"有人一路 Tab 到页面最末尾"时才会出现。
+       */
+      #site-summary a:focus {
+        position: fixed;
+        z-index: 30;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        width: auto;
+        height: auto;
+        margin: 0;
+        padding: 8px 14px;
+        overflow: visible;
+        clip: auto;
+        clip-path: none;
+        white-space: nowrap;
+        background: var(--overlay-bg);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        box-shadow: var(--overlay-shadow);
+        color: var(--ice-ink);
+      }
     </style>
   </head>
   <body>
@@ -514,5 +717,109 @@
         </form>
       </footer>
     </aside>
+
+    <!--
+      JS 没跑起来时的兜底。**它也是对不执行 JS 的爬虫（百度 / 360 / 搜狗）唯一的
+      "这不是个坏页面"的说明** —— 那些蜘蛛看到的就是一块空白 canvas。
+    -->
+    <noscript>
+      <div id="nojs">
+        <h2>这个演示需要 JavaScript</h2>
+        <p>
+          绘图区（工艺图 / 图表 / 表单）是 Canvas 渲染的，脚本没跑起来就画不出来。
+          画布上的内容在下面的文字版摘要里仍然读得到；源码与截图见
+          <a href="https://github.com/ice-render/ice-agent-console">GitHub 仓库</a>。
+        </p>
+      </div>
+    </noscript>
+
+    <!--
+      ======================= canvas 的文字替身（爬虫读的是它） =======================
+
+      为什么必须有：整页的主体是 canvas，**画布上的图元、位号、工艺段名称一个都不在 DOM 里**。
+      搜索引擎再会执行 JS，能读到的也只有 `<canvas>` 这个空壳，以及右边那块对话面板。
+
+      所以这里用语义化的 HTML 把"画的是什么、能做什么、用了什么技术"讲一遍。
+      `.sr-only` 只是把它**视觉上**藏起来，它在原始 HTML 里、也在无障碍树里 ——
+      屏幕阅读器用户听到的就是这一段（canvas 对他们是彻底不可见的）。
+
+      ⚠️ 改文案的三条底线（都写进 `tests/seo.test.ts` 了）：
+        1. **不许写成关键词堆砌**，要跟画布上真实的东西对得上；
+        2. **不许用 `display:none` 藏**（连无障碍树一起藏掉，等于白写）；
+        3. 它跟右面板里那些可见文案**不重复** —— 重复内容没有任何增益。
+
+      ⚠️ 这里的工艺段名称与 `shared/water-process-case.ts` 是同一张图的两份表述，
+      改图时**两边都要看一眼**：单测会拿关键词粗筛（工艺段名字写错会红），
+      但它判不了"描述得对不对"，那是人的事。
+    -->
+    <section id="site-summary" class="sr-only" aria-label="页面内容摘要（文字版）">
+      <h2>ICE Agent Console 是什么</h2>
+      <p>
+        ICE Agent Console 是一个把 <strong>AG-UI 协议</strong>接到
+        <strong>ICE 渲染家族</strong>（ice-render / ice-chart / ice-chart-dsl /
+        ice-entity-designer / ice-web-components）上的开源在线演示：
+        agent 产生的事件流<strong>直接驱动浏览器里的 Canvas 画布</strong> —— 画工艺图、画图表、画表单，
+        而不是把卡片插进消息流。
+      </p>
+      <p>
+        界面是反过来的：绘图区铺满整个视口、开页就画着图，对话面板浮在它的右边缘。
+        切界面等于在绘图区里<strong>换图层</strong>（工艺图 / 图表 / 表单，三种形态互斥），
+        其中工艺图那一层是主视图，开页建好之后就不再重建。
+      </p>
+
+      <h2>开页画的是什么：某 10 万 m³/d 市政污水厂的 AAO 工艺流程</h2>
+      <p>
+        基准图是 68 个单元、81 段管线，用到 31 种符号种类与 9 种介质，按真实厂站的形态铺开：
+        两组并联生化线、配水井与集水井、多台鼓风机、多点加药、提标改造段、
+        污泥干化与两套除臭，每个工艺段都带在线仪表。
+      </p>
+      <h3>主流程</h3>
+      <p>
+        厂外进水 → 粗格栅 → 进水泵 → 细格栅 → 曝气沉砂池 → 初沉池 → 配水井 →
+        厌氧池 → 缺氧池 → 好氧池（AAO）→ 二沉池 → 混凝沉淀池 → 滤布滤池 →
+        臭氧接触池 → 活性炭滤池 → 膜池（超滤）→ 消毒接触池 →
+        在线水质监测 → 出水计量 → 排放口。
+      </p>
+      <h3>配套系统</h3>
+      <p>
+        剩余污泥走污泥浓缩池 → 污泥脱水机 → 污泥干化机 → 污泥料仓 → 外运；
+        另有事故池与事故水回流泵、PAC / PAM / 次氯酸钠 / 碳源四个加药点、
+        鼓风机与变频器，以及出水 COD / 氨氮 / 总磷 / 总氮 / 浊度在线仪表。
+      </p>
+
+      <h2>在这个页面上能做什么</h2>
+      <ul>
+        <li>「看看污水处理工艺图」：镜头按工艺段推近，图元逐段高亮讲解，把主流程走一遍。</li>
+        <li>「把工艺图放大」「让图元闪烁」：agent 用自定义事件在画布上推镜头、打高亮 ——
+          它们是瞬时的演示动作，不写进 state，刷新即消失。</li>
+        <li>「提标改造」：用 JSON Patch（STATE_DELTA）<strong>动态增删图元</strong> ——
+          拆一处、加三处，而画面不重画、视口不重置。</li>
+        <li>看图表：同一块绘图区切到图表图层，那里是两块画布（图表 + 底部控件条），
+          支持追加数据与联动。</li>
+        <li>「要下发指令」：中断一轮 → 切到表单图层让用户填表 → 带着 resume 开新的一轮。</li>
+        <li>「故意画错工艺图」：把校验器的结构化诊断回灌给 agent，看它自修复 DSL。</li>
+      </ul>
+
+      <h2>技术要点</h2>
+      <ul>
+        <li>
+          AG-UI 事件流：TEXT_MESSAGE、TOOL_CALL、STATE_SNAPSHOT、STATE_DELTA、CUSTOM、
+          RUN_FINISHED、RUN_ERROR；中断用 interrupt + resume 表达。
+        </li>
+        <li>纯核心 + 命令式外壳：归约器是纯函数、只吐 effects，碰 canvas 的活在绘图区那一层。</li>
+        <li>
+          两条 transport 共用同一份输入映射：连后端的 fetch + SSE，
+          或者把同一份剧本搬进浏览器（纯前端，产物可以直接静态托管）。
+        </li>
+        <li>
+          图表实例只建一次（validateChartDsl → compileChartDsl → createChart / setOption），
+          不在流式更新里反复重建。
+        </li>
+        <li>TypeScript + webpack，MIT 许可。</li>
+      </ul>
+      <p>
+        源码与架构文档：<a href="https://github.com/ice-render/ice-agent-console">github.com/ice-render/ice-agent-console</a>
+      </p>
+    </section>
   </body>
 </html>

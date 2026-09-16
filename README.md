@@ -162,7 +162,7 @@ npm run deploy:pages            # 构建演示产物 → 自检 → 推 origin-g
 npm run deploy:pages -- --dry   # 只构建 + 自检，停在本地（先看看产物有没有问题）
 ```
 
-`dist/` 是自包含的静态目录（一个 `index.html` + 一个 JS），**用相对路径**，
+`dist/` 是自包含的静态目录（一个 `index.html` + 一个 JS + TDK 那几个静态文件，见 §12），**用相对路径**，
 所以子路径部署（`https://<你>.github.io/<仓库>/`）直接用 —— 不需要设 `publicPath`。
 演示站点是**构建产物**，所以既不需要 `gh-pages` 这个 npm 包，也不需要 Actions。
 
@@ -1042,13 +1042,17 @@ ice-agent-console/
 │   └── water-process-case.ts 内置案例：污水处理工艺图（68 单元 / 81 管线）
 │                            ↑ 放 shared/ 是因为**开页就要画它**，boot 跑在浏览器里，
 │                              而 §1.0 的演示模式还要在浏览器里让 agent 用它
-├── public/index.html        页面骨架 + 样式（颜色全走 CSS 变量，见 §3.5）
+├── public/                 构建时**除 index.html 外都原样进 dist/**（webpack 的 CopyPublicFiles）
+│   ├── index.html           页面骨架 + 样式（颜色全走 CSS 变量，见 §3.5）+ TDK + 文字替身（见 §12）
+│   ├── robots.txt           爬虫规则 + sitemap 地址（必须是站点根目录的文件）
+│   ├── sitemap.xml          整站只有一个 URL（换图层不产生新地址）
+│   └── og-cover.jpg         分享卡片封面 1200×630（由 docs/images/hero.png 居中裁出）
 ├── scripts/
 │   ├── dev.mjs              一条命令起两个进程
 │   ├── llm-check.ts         npm run llm:check —— 配完模型先跑这个
 │   ├── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图（含演示模式那张）
 │   └── deploy-pages.mjs     npm run deploy:pages —— 构建演示产物 + 自检 + 推 gh-pages
-├── tests/  e2e/             jest 单测 + playwright
+├── tests/  e2e/             jest 单测 + playwright（seo.test.ts / seo.spec.ts 见 §12）
 ├── docs/images/             README 里的截图（2× 采集；绘图区整幅 / 对话面板整块）
 └── docs/upstream-gaps.md    对上游的观察
 ```
@@ -1132,8 +1136,8 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **250 passed** / 12 suites |
-| e2e | **50 passed** / 10 specs |
+| 单测 | **274 passed** / 14 suites（含 `seo.test.ts`，见 §12） |
+| e2e | **53 passed** / 11 specs |
 | 生产包 | 约 1.36 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
 > 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，
@@ -1212,6 +1216,105 @@ const agent: AgentRun =
 
 ---
 
-## 12. 许可
+## 12. SEO / TDK：canvas 页面怎么让爬虫看见
+
+**这个页面对搜索引擎是天生不友好的**：整页的主体是 canvas，那张工艺图的 68 个单元、
+81 段管线、位号与工艺段名称**一个都不在 DOM 里**。爬虫（哪怕是最会执行 JS 的那种）
+把页面跑完，能读到的也只有 `<canvas>` 这个空壳 —— 图做得再漂亮，对它是不可见的。
+
+所以这件事分三层做，**缺任何一层都等于没做**：
+
+| 层 | 落在哪 | 解决什么 |
+|---|---|---|
+| TDK + OG + JSON-LD | `public/index.html` 的 `head` | 搜索结果里长什么样、分享卡片的封面、搜索引擎"认出这是个什么软件" |
+| **文字替身** `#site-summary`（`.sr-only`） | `public/index.html` 末尾 | 爬虫**有没有正文可读** —— 画布内容的等价描述 |
+| `robots.txt` / `sitemap.xml` / `og-cover.jpg` | `public/` → 站点根目录 | 爬虫进不进得来、图片站点地图、卡片封面是不是一个真文件 |
+
+### 12.1 "只改 TDK"是不够的
+
+TDK 决定的是**搜索结果里那几行长什么样**，它不产生内容。一个 DOM 里没有正文的页面，
+改完 TDK 也只是"有一个标题没有内容的页面"—— 排名不会因为它好起来。
+
+所以这一页真正的 SEO 杠杆是那份**文字替身**：`#site-summary` 用语义化 HTML
+把"画的是什么、能做什么、用了什么技术"讲一遍（约 1400 字符），视觉上藏起来。
+它与右面板里那些可见文案**不重复** —— 重复内容没有增益。
+
+三条底线（都钉在 `tests/seo.test.ts` 里）：
+
+1. **不许写成关键词堆砌**，要跟画布上真实的东西对得上。给 canvas 配文字替身
+   跟给图片配 `alt` 是同一件事；堆砌是另一件事，会被判作弊。
+2. **不许用 `display:none` / `visibility:hidden` 藏** —— 那两种连无障碍树和一部分爬虫
+   都会一起跳过，等于白写。用的是无障碍领域通行的 visually-hidden 手法（1px + `clip-path`）。
+3. 文案里报的数字（68 单元 / 81 段管线）**必须跟内置案例对得上** ——
+   单测直接从 `shared/water-process-case.ts` 读真实数量，改图忘了改文案时会红。
+
+顺带一提，这份文字替身对**屏幕阅读器用户**是同一份东西：canvas 对他们是彻底不可见的。
+所以它里面的链接是刻意保留的（Tab 到时会变成一块看得见的按钮，见 `#site-summary a:focus`）。
+
+### 12.2 三处刻意的取舍
+
+1. **全部写死在静态 HTML 里，不用 JS 拼。** 本站是构建产物，而不执行 JS 的爬虫
+   （百度 / 360 / 搜狗）读到的就是 `dist/index.html` 这一份原文 —— 运行期拼字符串
+   等于对它们不存在。同理 `<noscript>` 里那段说明，是这些蜘蛛看到的唯一"这不是个坏页面"。
+2. **运行期不许改 `document.title`。** 演示构建开页会自动开演（§1.0）、图层会从工艺图
+   切到图表，抓取时若渲染到那一刻，标题就成了"标题取决于播放到第几拍"，
+   而且每次抓取都不一样。这条写成了**硬约束**：`tests/seo.test.ts` 会扫 `src/`，
+   出现 `document.title` 直接红。
+3. **`keywords` 留着，但不靠它。** Google 早就不看它了，百度 / 360 / 搜狗还看一眼，
+   而且零成本 —— 所以写全，但页面的可索引性靠的是上面那份正文。
+
+**明确不做的：服务端渲染 / 预渲染。** 这一页的主体是**交互式画布**，
+预渲染出来的 HTML 跟用户看到的东西对不上；真要 SSR 得把 ICE 引擎搬进 Node 里跑一遍，
+成本与收益不成比例。canvas 页面的正确解法是"给内容配文字替身"，不是"把画布变成 HTML"。
+
+### 12.3 站点地址在四个文件里，必须是同一个
+
+`canonical`（index.html）、`og:url`、`sitemap.xml` 的 `<loc>`、`robots.txt` 的 `Sitemap:`
+—— 四处对不上时，搜索引擎看到的是两个站点。改域名要一起改，靠两条测试钉住：
+
+* `tests/seo.test.ts`：读 `public/` 的源码，验 TDK 长度 / 关键词 / 地址一致性 /
+  JSON-LD 能不能 parse / 文字替身够不够长；
+* `e2e/seo.spec.ts`：跑 **`dist/` 的产物**（压缩会不会吃掉某个标签、加了隐藏文本
+  之后布局有没有被顶坏 —— 后者只能真开一次浏览器看）。
+
+### 12.4 发布链条上多做的一步
+
+`robots.txt` / `sitemap.xml` / `og-cover.jpg` 是**站点根目录的静态文件**，
+不是前端路由：丢进 `src/` 或者只写在 README 里都等于没有。所以：
+
+```
+public/*            →（webpack 的 CopyPublicFiles）→ dist/*
+dist/*（整份）      →（deploy-pages.mjs 递归拷贝）→ gh-pages 分支根目录
+```
+
+两处各有一次"做错了不报错"的历史教训，都写在代码注释里：
+
+* webpack 那一步：`HtmlWebpackPlugin` 只吐 index.html，而 `output.clean` 每跑一次
+  就清空 dist/。本地 dev-server 拿 `public/` 当静态目录，所以**本地一切正常**
+  —— 只有对着 `dist/` 或者线上站点才发现是 404（这次就是这么发现的）。
+* 部署那一步：原来是逐个文件白名单，加一个静态文件就要回来改一次。
+  现在**整份 dist/ 拷过去**，加文件不用再动部署脚本。
+  另外 `sitemap.xml` 的 `<lastmod>` 由部署脚本按**最后一次提交的日期**重写
+  （不是部署当天）：源码没动就不该假装页面更新过，长期虚报会被判成不可信。
+
+`npm run deploy:pages` 的第 2b 步会逐条验一遍：TDK 三件套在不在、canonical 与 og:url
+是不是同一个、JSON-LD 能不能 parse、文字替身有没有正文、`robots.txt` / `sitemap.xml`
+在不在 dist/ 里、**`og:image` 指向的那个文件是不是真的被部署了**
+（指向空气是这类标签最常见的坏法：页面正常、卡片空白、不报错）。
+
+### 12.5 上线之后还差一步（脚本管不了）
+
+提交站点地图是**要人做的**：Google Search Console / Bing Webmaster Tools 里
+提交 `https://ice-render.github.io/ice-agent-console/sitemap.xml`，顺手用
+`https://validator.schema.org` 粘一次 URL 校验 JSON-LD。
+
+现状说清楚：**整站只有一个 URL**。换图层是画布内部的事，不产生新地址
+（`?demo=` / `?autoplay=` / `?theme=` 是同一页的运行期开关，用 canonical 兜住，
+不给它们另开 sitemap 条目 —— 那才是"重复内容"的典型来源）。
+以后真加了多页（比如每个案例一个地址），sitemap 与 TDK 才需要按页各写一份。
+
+---
+
+## 13. 许可
 
 MIT

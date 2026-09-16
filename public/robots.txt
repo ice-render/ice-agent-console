@@ -1,0 +1,18 @@
+# ICE Agent Console —— 演示站点的爬虫规则。
+#
+# 三条事实（改这个文件之前先看）：
+#
+# 1. 这个文件必须落在**站点根目录**：爬虫请求的是 /robots.txt，不是 app 里的某个路由。
+#    本站是构建产物（npm run deploy:pages 推 gh-pages 分支），所以它由 webpack
+#    从 public/ 原样搬进 dist/（见 webpack.config.js 的 CopyPublicFiles）——
+#    丢进 src/ 或者只写在 README 里都等于没有。
+# 2. 整站只有**一个页面**（没有子路由）：换图层是画布内部的事，不产生新的 URL。
+#    所以这里没有 Disallow，也不需要按目录放行。
+# 3. 带查询参数的地址（?demo=1 / ?autoplay=0 / ?theme=dark）是同一页的开关，不是新内容。
+#    处理方式是**用 canonical 指回根地址**，而不是在这里 Disallow：
+#    Disallow 会让爬虫连这些链接都抓不到，canonical 只是告诉它"收录哪一个"。
+
+User-agent: *
+Allow: /
+
+Sitemap: https://ice-render.github.io/ice-agent-console/sitemap.xml

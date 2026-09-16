@@ -164,6 +164,24 @@
    还有一类**应用层解决不了**的：管线标注钉在折线顶点上、引擎没有偏移入口，
    所以"标注压住符号文字"对间距是尺度不变的（放大到 2.2 倍数量一动不动）。
    记在 `docs/upstream-gaps.md` 第 16 条，别再去试"放大间距"这条死路。
+16. **TDK / 爬虫可见性只动那三个静态文件，别在 JS 里拼。**
+    整页主体是 canvas，DOM 里没有正文，所以"这页能不能被搜到"全落在
+    `public/index.html`（head 的 TDK + 末尾 `#site-summary` 那份文字替身）、
+    `public/robots.txt`、`public/sitemap.xml` 上。三条硬约束：
+    - **运行期不许改 `document.title`。** 演示构建开页会自动开演、图层会切走，
+      标题跟着画面走就变成"取决于播放到第几拍"，每次抓取都不一样
+      （`tests/seo.test.ts` 扫 `src/` 钉住这条，不是靠自觉）。
+    - **文字替身不许用 `display:none` / `visibility:hidden` 藏**（连无障碍树与一部分
+      爬虫一起跳过，等于白写），也**不许写成关键词堆砌** —— 它是"给 canvas 配 alt"，
+      不是关键词栏。文案里的数字（68 单元 / 81 段管线）由单测从 `shared/water-process-case.ts`
+      对着真实数量判，改图忘了改文案会红。
+    - **站点地址在四个文件里各出现一次**：canonical、`og:url`、sitemap 的 `<loc>`、
+      robots 的 `Sitemap:`。改域名要一起改 —— 两处测试（`tests/seo.test.ts` 读源码、
+      `e2e/seo.spec.ts` 读产物）会红。
+    `public/` 下除 `index.html` 之外的文件由 webpack 的 `CopyPublicFiles` 原样搬进 `dist/`，
+    部署时**整份 dist/ 拷进 gh-pages** —— 别再往部署脚本里加文件白名单：
+    漏一个的症状是线上 404、而构建日志全绿。改完跑 `npm run deploy:pages -- --dry`，
+    第 2b 步会逐条验（含"og:image 指向的文件真的在产物里"）。
 
 ---
 
@@ -192,6 +210,10 @@
 | 对话里的**工具条目**（只有外壳，没有画布） | `src/view/tool-entry.ts` |
 | 中断 / resume 的归约 | `src/domain/agui/reducer.ts` |
 | 对话面板 DOM 外壳（含浮层的 stopPropagation） | `src/view/chat.ts` |
+| TDK / 分享卡片 / 结构化数据（**静态 HTML，别用 JS 拼**） | `public/index.html` 的 `head` |
+| canvas 的文字替身（爬虫读到的正文） | `public/index.html` 末尾的 `#site-summary` |
+| 爬虫入口：规则 + 站点地图（站点根目录的文件） | `public/robots.txt` + `public/sitemap.xml` |
+| 静态文件怎么进 dist/（`public/` → `dist/`） | `webpack.config.js` 的 `CopyPublicFiles` |
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |
 | 自定义事件名 / context 键 | `shared/contract.ts` |
