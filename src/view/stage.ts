@@ -6,7 +6,7 @@
  * 之前的布局是"对话是主体，图表内联成卡片"。那个结构有两个硬伤：
  *
  * 1. **图在消息流里，所以每次都要重画一遍。** 每张卡片是一块新 canvas + 一个新 ICE
- *    实例，34 个符号 + 37 段管线要重建一次 —— 而用户只是在跟 agent 继续聊。
+ *    实例，68 个符号 + 81 段管线要重建一次 —— 而用户只是在跟 agent 继续聊。
  * 2. **图和话是两条平行的流。** "把刚才那张图放大"没有"刚才那张图"可指，
  *    只能又画一张。
  *
@@ -51,7 +51,7 @@
  * 诊断只出现在对话里的那条工具条目上。旧行为是"卡片亮着、画布空白"，
  * 那会让人以为图坏了 —— 实际上坏的是 DSL，而且 agent 马上就会修。
  */
-import { COLLECT_INPUT_TOOL, RENDER_DIAGRAM_TOOL } from '../../shared/contract';
+import { COLLECT_INPUT_TOOL, RENDER_DIAGRAM_TOOL, type ZoomDirection } from '../../shared/contract';
 import type { InteractionHandlers } from './chart-adapter';
 import { ChartAdapter } from './chart-adapter';
 import { DiagramLayer, type DiagramRegion } from './diagram-layer';
@@ -316,7 +316,7 @@ export class StageView {
    * 图表**静默返回 false** 而不是报错：图表走的是 `ice-chart` 自己的 resize / 悬停路径，
    * 没有对等的"缩放视图"概念。为它编一个错误出来只会让 agent 以为自己说错了话。
    */
-  zoomView(cmd: { direction: 'in' | 'out' | 'reset' | 'to'; factor?: number; steps?: number; scale?: number }): boolean {
+  zoomView(cmd: { direction: ZoomDirection; factor?: number; steps?: number; scale?: number }): boolean {
     if (this.active !== 'diagram') return false;
     return this.diagram()?.zoomBy(cmd) ?? false;
   }

@@ -17,6 +17,16 @@
 两种模式产出的都是**同一串 AG-UI 事件**，所以传输层、前端归约器、渲染层完全分辨不出来，
 也不需要分辨。换模型只动一个文件（`server/agents/llm.ts`）。
 
+"谁产生事件"之外还有**独立的一维**："事件怎么送到页面"。它也有两种，见 §1.0：
+
+| 传输 | 什么时候用 | 需要进程 |
+|---|---|---|
+| **连后端**（默认） | 本地开发、接真模型、e2e | 前端 + `node:http` 的 AG-UI endpoint |
+| **纯前端** | **静态托管**（GitHub Pages 之类）：把同一份剧本搬进浏览器 | 只有一个静态目录 |
+
+两维互不相干（模型模式也能跑在纯前端里，只要把那份 agent 打进包），但默认只组合出
+"剧本 + 连后端"与"剧本 + 纯前端"——这两种覆盖了"本地开发"与"发一个演示站点"。
+
 ```
 ┌──────────────────────────────┐                ┌──────────────────────┐
 │  浏览器                       │  POST /agui    │  AG-UI endpoint      │
@@ -59,16 +69,18 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 | 按钮 | 演示什么 | 截图 |
 |---|---|---|
 | **看看污水处理工艺图** | 把工艺图**切回**绘图区。它开页就在，这一条只是又"显示"了一次 —— **不重画** | [工艺图](docs/images/water-process.png) |
+| **把工艺图放大** | **AI 下命令缩放视图**：相对叠加（放大→再放大→缩小→复位），平滑补间 | — |
+| **让图元闪烁** | **AI 下命令图元闪烁**：`point_at` 带 `blink`，依次点出三个池子并各闪几下 | [识别高亮](docs/images/highlight.png) |
+| **提标改造** | **改图**：`STATE_DELTA` + JSON Patch 拆掉初沉池、加三个提标单元 —— **图层不重建** | [提标改造](docs/images/upgrade.png) |
+| 故意画错工艺图 | 同一条自修复回路，但**吐回同一种图层**：图 DSL 写错 → 修出来的还是图 | — |
 | 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 绘图区切到图表 → **指着 3 月讲** | [图表](docs/images/chart.png) |
+| 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 | [流式追加](docs/images/streaming.png) |
 | 要下发指令 | **人机回环**：中断 → 绘图区切成表单 → 填完提交 → 带 `resume` 开新 run | [表单卡](docs/images/form-card.png) |
 | 看看新控件都能用吗 | **控件原型页**：一张表单里放 10 个字段，覆盖 DSL 0.3.0 的 20 个字段类型 | [新控件](docs/images/showcase.png) |
-| 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 | [流式追加](docs/images/streaming.png) |
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 | [自修复](docs/images/self-repair.png) |
-| 故意画错工艺图 | 同一条回路，但**吐回同一种图层**：图 DSL 写错 → 修出来的还是图 | — |
-| **把工艺图放大** | **AI 下命令缩放视图**：相对叠加（放大→再放大→缩小→复位），平滑补间 | — |
-| **让图元闪烁** | **AI 下命令图元闪烁**：`point_at` 带 `blink`，依次点出三个池子并各闪几下 | — |
-| **提标改造** | **改图**：`STATE_DELTA` + JSON Patch 拆掉初沉池、加三个提标单元 —— **图层不重建** | [提标改造](docs/images/upgrade.png) |
 | 今天天气怎么样 | 兜底：不画图，只回文字（**绘图区保持原样**，不是清空） | — |
+
+（分组顺序即界面上的顺序，`src/entries/boot.ts` 的 `CHIP_GROUPS` 是它的出处。）
 
 **也可以在图上直接操作**：
 
@@ -88,22 +100,40 @@ npm run serve        # 只跑静态产物（仍需后端在跑）
 所以有一条**纯前端**的路：
 
 ```bash
-npm run build:demo   # 产物不连后端
-npx http-server dist -p 8200 -c-1
+npm run build:demo                    # 产物默认走演示模式
+npx http-server dist -p 8200 -c-1     # 只是起个静态服务器，没有后端
 ```
 
-打开 http://localhost:8200 —— **后端没起也照样能用**。`dist/` 是自包含的，
-可以整个扔到 GitHub Pages、对象存储、或者任何静态托管上：
+打开 http://localhost:8200 —— **后端没起也照样能用**。画面与连后端时**一模一样**，
+区别只有顶栏那一行徽标：
+
+![演示模式](docs/images/demo-mode.png)
+
+注意截图右上角的 **`演示模式` `纯前端`** —— 这张图就是在**没有任何后端进程**的情况下拍的，
+而它跑了完整的 14 拍讲解（901 个事件、14 次 `point_at` / `zoom`）。
+
+> 这不是"看起来一样"：拍照脚本另起了一个干净页面、断言 `runMode() === 'demo'`，
+> 并**全程盯着有没有请求打到 8099**（结果 0 个）。截图只能证明画面，这两条才是证据。
+
+#### 发到 GitHub Pages
+
+`dist/` 是自包含的静态目录（一个 `index.html` + 一个 JS），**用相对路径**，
+所以子路径部署（`https://<你>.github.io/<仓库>/`）直接用。推到 `gh-pages` 分支即可：
 
 ```bash
-# 发到 GitHub Pages（推到 gh-pages 分支即可，不需要额外依赖）
-cd dist && git init -b gh-pages && git add -A \
-  && git commit -m "demo site" \
-  && git push -f git@github.com:<你>/<仓库>.git gh-pages
+npm run build:demo
+cd dist
+git init -b gh-pages
+git add -A && git commit -m "demo site"
+git push -f git@github.com:<你>/<仓库>.git gh-pages
 ```
 
-产物用的是**相对路径**，所以子路径部署（`https://<你>.github.io/<仓库>/`）直接用。
-它也是自包含的单个 JS —— 连 `file://` 双击打开都能跑（只是那样聊天要能输入网址才行）。
+然后在仓库的 **Settings → Pages** 里把 Source 选成 `gh-pages` 分支、根目录。
+不需要 `gh-pages` 这个 npm 包，也不需要 Actions —— 演示站点是**构建产物**，
+没有"每次 push 都重跑一遍流水线"的必要。
+
+它也自包含到**单个 JS**，所以连 `file://` 双击打开都能跑
+（代价见下面"为什么不用动态 `import()`"）。
 
 #### 它不是"另一个 mock 实现"
 
@@ -248,8 +278,12 @@ ice-agent-console · 大模型配置自检
 
 ![工艺图](docs/images/water-process.png)
 
-上面是**只有绘图区**的那一份（对话面板收起来了）。把面板展开就是首屏那张 ——
-**图是主体，话浮在上面**。
+上面这张裁到**图的着墨范围**（不然 1440×900 里有六成是白边）。下面这张是同一屏、
+但**对话面板收起来**了 —— 1440 宽的绘图区**整幅**都是那张图，最能说明"图才是页面主体"：
+
+![整幅绘图区](docs/images/full-bleed.png)
+
+把面板展开就是首屏那张 —— **图是主体，话浮在上面**。
 
 它不是一张图片，也不是拿几个符号摆出来的示意图。判定"真实"的标准不是"看着热闹"，
 而是**图上可判定的工艺约束**：
@@ -294,11 +328,46 @@ ice-agent-console · 大模型配置自检
 
 1. **画** —— `ice-entity-designer` 的 `WaterProcessDesigner`，由一份
    **kind-first 图 DSL** 驱动（`{ kind: 'water-process', units, pipes }`）。
-2. **看** —— 图的世界尺寸约 **4900×2400**，而可视区只有 ~1050 宽，所以它是**可缩放平移的视口**，
-   不是缩略图。初始视野按 DSL 里 `viewport.focus` 指定的主流程链适配（约 0.21 倍）；
-   想建立全局印象时用 `fitAll()` 按**全部图元**适配（约 0.22 倍），两者是不同的取景。
+2. **看** —— 图的世界尺寸约 **4820×2330**（单元原点跨度；算上符号自身的宽高还要更大），
+   而可视区只有 ~1050 宽，所以它是**可缩放平移的视口**，不是缩略图。
+   两种取景刻意分开：
+   - 初始视野按 DSL 里 `viewport.focus` 指定的主流程链适配（约 0.21 倍）—— **近景**，
+     只看水线主线，污泥线 / 事故水 / 加药间本来就该在框外（"排除它们"正是 focus 存在的理由）；
+   - 「看整张图纸」用 `fitAll()` 按**全部图元**的包围盒适配（约 0.21 倍）—— **全景**。
+     讲稿里"先把整张图框进来"那一档走的是同一条路（`ice/zoom` 的 `direction: 'fit'`），
+     见 §2.0.1。
+
+   两个倍率数值接近、语义完全不同，所以**别互相替代** —— 拿一个手算常数去当"全景"，
+   会随窗口宽度、面板遮盖与图元尺寸漂掉（实测的后果见 §2.0.1）。
 3. **讲** —— agent 讲解时能把某个单元**移到视野中央并高亮**（`point_at`），
    与图表的「指着讲」走同一条通道（`ice/point-at` 自定义事件）。
+
+#### 2.0.1 "全景"档为什么是 `fit` 而不是一个倍率
+
+这条是实测踩出来的，值得单独说 —— 它演示了"看起来对"和"真的对"差多远。
+
+原先讲稿的"全貌"档写的是 `{ direction: 'to', scale: 0.22 }`：一个照着
+"4820 宽的世界 ÷ 可视区 1048"手算出来的常数。它有两个问题：
+
+| 问题 | 后果 |
+|---|---|
+| **倍数算不准** | 恰好装得下的倍率取决于可视区宽度（窗口尺寸 − 面板遮盖）、图元自身尺寸、留白。手算的余量被这些吃掉之后 0.22 实际略微超宽 |
+| **`to` 不重新取景，只改倍率** | `to` 的平移锚点是"保住当前可视区中心那个世界点"（这样"先 `pointAt` 把目标移到中心、再 `to` 放大"才能把目标留在原地）。于是它**继承**了上一个镜头的位置 —— 从生化段特写推远到"全貌"时，图纸中心并不在屏幕中心上 |
+
+实测结果：**左侧 1870 世界像素（整个预处理段加半个生化段）被推出屏幕左边界**。
+画面看起来只是个"远景"，不报错，也几乎看不出来 —— 除非把**全部图元的世界包围盒**
+投影到屏幕上，量四个方向有没有溢出。
+
+修法不是调那个常数，而是换掉语义：给 `ice/zoom` 加了 `direction: 'fit'`，
+倍率与平移**一起**由内容包围盒算出来，与界面上「看整张图纸」按钮**共用同一份计算**
+（`DiagramLayer.__fitViewport()`）。现在讲稿那一档与 `fitAll()` 的倍率**完全相同**
+（差 < 1e-16），四个方向都留出余量。
+
+> 这个 bug 还在链路上暴露了第二个坑：`fit` 是新方向，而归约器的合法性判断是
+> `in || out || reset || (to && 合法 scale)` —— `fit` 一条都不满足，被当"非法方向"
+> **静默丢掉**。协议里合法、视图层也实现了，命令却根本到不了视图层。
+> 所以 e2e 断言的不是"有没有溢出"，而是**"讲稿的全景档倍率 == fitAll 的倍率"** ——
+> 后者对"命令被丢掉"这件事灵敏得多（0.22 与 0.2059 差 6.8%，一眼就红）。
 
 #### 这张图会**变**：动态增删图元
 
@@ -322,12 +391,16 @@ ice-agent-console · 大模型配置自检
 |---|---|---|
 | **指着讲** | 把某个单元**移到视野中央并高亮** | `ice/point-at`（`{ value }`） |
 | **高亮闪烁** | 在指着讲之上再**闪几下**（引注意） | 同一事件带 `blink: true` —— 不是另开一个工具，"定位 + 强调"本来就是一次动作 |
-| **缩放视图** | `in` 放大 / `out` 缩小 / `reset` 回到初始视野，都是**相对**的 | `ice/zoom`（`{ direction, factor?, steps? }`） |
+| **缩放视图** | `in` 放大 / `out` 缩小 / `reset` 回到初始视野 / `to` 绝对倍率 / `fit` 整图适配 | `ice/zoom`（`{ direction, factor?, steps?, scale? }`） |
+
+五个方向里前三个与"人/模型的手势"对应，后两个是给**讲稿**用的（`to` 幂等、`fit` 按包围盒算，
+见 §2.0.1）。协议里模型**只能下前三个** —— 模型不知道当前倍率，让它给绝对值就是在猜
+（`server/agents/llm.ts` 的 `readZoomCommand` 显式只认这三个，多的一律当没给）。
 
 两处设计取舍值得说明：
 
-- **缩放是相对的，不是绝对倍率**。agent 并不知道当前倍率，给 `scale: 1.5` 这种绝对值
-  很容易一跳跳到底、或者看不出变化。`reset` 也不回到 1 倍，而是回到**初始视野**
+- **给人和模型的是相对的，不是绝对倍率**。agent 并不知道当前倍率，给 `scale: 1.5`
+  这种绝对值很容易一跳跳到底、或者看不出变化。`reset` 也不回到 1 倍，而是回到**初始视野**
   （按 DSL 的 `viewport.focus` 适配的那一屏）—— 对一张 4820 宽的世界坐标图，
   1 倍意味着"看不清全貌"，不是用户要的"复位"。
 - **闪烁用引擎原生的声明式动画**（`direction: 'alternate'` + `iterationCount`），
@@ -422,18 +495,41 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 > **提标改造** —— 拆掉初沉池（AAO 前不设初沉池可以让更多碳源进生化段），
 > 再上一段 **臭氧 → 活性炭 → 超滤**，并把原来 `filter → disinfect` 的直连管线换成绕经它们四条。
 
-![提标改造](docs/images/upgrade.png)
+改之前 / 改之后（两张都是**同一块画布、同一个 ICE 实例**，中间没有重建也没有换视口）：
 
-**它走的不是"重画一张新图"**，而是 `STATE_DELTA` 里的**标准 JSON Patch**：
+| 改造前 | 改造后 |
+|---|---|
+| ![改造前](docs/images/upgrade-before.png) | ![改造后](docs/images/upgrade.png) |
+
+对着看那两处差别：**左边偏上那个「初沉池」没了**（连它的三根管线一起），
+**深度处理那一条线上多出了三个池子**（臭氧 / 活性炭 / 膜池）。
+
+**它走的不是"重画一张新图"**，而是 `STATE_DELTA` 里的**标准 JSON Patch**（下面是把真实载荷抄下来的）：
 
 ```jsonc
-// 第一拍：拆初沉池（连带它的三根管线）+ 补一根连通管 —— 拆一处、接一处
-{ "op": "remove", "path": "/diagram/units/6" },
+// 第一拍：拆初沉池 —— 连带删掉挂在它身上的三根管线、摘掉 focus 里的那一项，再补一根连通管
+//         （拆一处、接一处；只把 units 那一项拿掉会留下悬空管线，见下面坑 ①）
+{ "op": "remove", "path": "/diagram/pipes/62" },            // pipe-primary-deodor1
+{ "op": "remove", "path": "/diagram/pipes/6" },             // pipe-primary-dist
+{ "op": "remove", "path": "/diagram/pipes/5" },             // pipe-grit-primary
+{ "op": "remove", "path": "/diagram/units/6" },             // primary
+{ "op": "remove", "path": "/diagram/viewport/focus/6" },
 { "op": "add",    "path": "/diagram/pipes/-", "value": { "id": "pipe-grit-dist", … } },
-// 第二拍：换掉被取代的直连管 + 加提标段
-{ "op": "remove", "path": "/diagram/pipes/29" },
-{ "op": "add",    "path": "/diagram/units/-", "value": { "id": "ozone", … } }
+
+// 第二拍：换掉被取代的那根直连管 + 加提标段三个单元与四根绕行管线
+//         ⚠️ 这些下标是相对**第一拍之后**的文档算的，不是相对原始图（见下面坑 ②）
+{ "op": "remove", "path": "/diagram/pipes/27" },            // pipe-filter-disinfect
+{ "op": "add",    "path": "/diagram/units/-", "value": { "id": "ozone", … } },
+{ "op": "add",    "path": "/diagram/units/-", "value": { "id": "carbon", … } },
+{ "op": "add",    "path": "/diagram/units/-", "value": { "id": "membrane", … } },
+{ "op": "add",    "path": "/diagram/pipes/-", "value": { "id": "pipe-filter-ozone", … } },
+{ "op": "add",    "path": "/diagram/pipes/-", "value": { "id": "pipe-ozone-carbon", … } },
+{ "op": "add",    "path": "/diagram/pipes/-", "value": { "id": "pipe-carbon-membrane", … } },
+{ "op": "add",    "path": "/diagram/pipes/-", "value": { "id": "pipe-membrane-disinfect", … } }
 ```
+
+净效果（模型层可断言）：符号 **68 → 70**（−1 +3）、管线 **81 → 82**（−3 +1 −1 +4），
+图层重建次数保持 **1**、`validateWater()` 仍是 **零问题**、视口不重置。
 
 **为什么用 JSON Patch 而不是自造一个"图元增删事件"**："state 变了"这件事协议里本来就有词
 （`STATE_DELTA` + RFC 6902）。再发明一个通道只会多一条要维护、要测试、要跟模型解释的东西。
@@ -780,7 +876,11 @@ ice-agent-console/
 │       └── tools.ts         模型模式：tool 定义 + 系统提示词
 ├── src/
 │   ├── domain/              纯逻辑，无 DOM
-│   │   ├── agui/            SSE 解析 / 归约器 / JSON Patch
+│   │   ├── agui/            事件 → 状态的归约 / JSON Patch / **两条 transport**
+│   │   │   ├── run-input.ts   `RunRequest` → `RunAgentInput`（两条 transport 共用，别各拼一份）
+│   │   │   ├── transport.ts   ★ 传输开关：构建期默认 + `?demo=` 覆盖（见 §1.0）
+│   │   │   ├── client.ts      连后端：`fetch` + SSE
+│   │   │   └── local-agent.ts 纯前端：把 `ScriptedAgent` 喂成同一条事件流
 │   │   ├── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
 │   │   ├── diagram/         图 DSL：白名单 / 校验 / 编译（纯逻辑，node 可测）
 │   │   └── theme.ts         主题：一份 token 分发给画布与 DOM（含浮层三件套）
@@ -791,18 +891,19 @@ ice-agent-console/
 │   │   ├── widget-layer.ts  图表图层的第二块画布（控件条，浮在绘图区底部）
 │   │   ├── form-layer.ts    表单图层（ice-web-components-dsl 画的）
 │   │   ├── tool-entry.ts    对话里的工具条目（**只有外壳，没有画布**）
-│   │   └── chat.ts          对话面板外壳 + 浮层的 stopPropagation
+│   │   └── chat.ts          对话面板外壳 + 浮层的 stopPropagation + 有条件跟随滚动
 │   └── entries/boot.ts      接线：开页画图、分发动作、执行 effects、触发 run
 ├── shared/
-│   ├── contract.ts          自定义事件名 / context 键（server 与 web 的唯一出处）
+│   ├── contract.ts          自定义事件名 / context 键 / `ZoomDirection`（server 与 web 的唯一出处）
 │   ├── diagram.ts           图 DSL 的结构类型（**只有类型** —— server 那套 tsconfig 不加载 DOM）
 │   └── water-process-case.ts 内置案例：污水处理工艺图（68 单元 / 81 管线）
-│                            ↑ 放 shared/ 是因为**开页就要画它**，boot 跑在浏览器里
+│                            ↑ 放 shared/ 是因为**开页就要画它**，boot 跑在浏览器里，
+│                              而 §1.0 的演示模式还要在浏览器里让 agent 用它
 ├── public/index.html        页面骨架 + 样式（颜色全走 CSS 变量，见 §3.5）
 ├── scripts/
 │   ├── dev.mjs              一条命令起两个进程
 │   ├── llm-check.ts         npm run llm:check —— 配完模型先跑这个
-│   └── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图
+│   └── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图（含演示模式那张）
 ├── tests/  e2e/             jest 单测 + playwright
 ├── docs/images/             README 里的截图（2× 采集；绘图区整幅 / 对话面板整块）
 └── docs/upstream-gaps.md    对上游的观察
@@ -864,6 +965,13 @@ npm run llm:check     # 模型配置自检（不懂模型也能跑：没配就�
 npm run shoot         # 重拍 docs/images 里的截图（需先 npm run dev）
 ```
 
+> ⚠️ **`npm run shoot` 拍的是"给人看的那一版"，不是"能跑就行的那一版"。**
+> 它有两条硬要求：①点快捷按钮必须**精确匹配**文案（面板里有一对只差三个字的按钮，
+> 子串匹配会让脚本点到另一个上，然后在一个看不出所以然的步骤上超时）；
+> ②凡是宣传"某图元被高亮"的截图，都要等到闪烁的底块处于**亮的那半周期**再拍
+> —— 随机时刻拍到的可能正好是最暗那一帧，黄框几乎透明，而截图本身不会报错。
+> 两条都是实测踩出来的，注释写在 `scripts/shoot-docs.cjs` 里。
+
 **模型路径不填 token 也能测**：`tests/llm-agent.test.ts` 会起一个**真的 http 服务**冒充
 OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以不 mock `fetch`：
 要验的正是"配上一个接口就能用"，而那包括 URL 拼接、请求头、请求体形状、响应解析、
@@ -879,9 +987,9 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **241 passed** / 11 suites |
-| e2e | **44 passed** / 9 specs |
-| 生产包 | 约 1.33 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
+| 单测 | **244 passed** / 11 suites |
+| e2e | **45 passed** / 9 specs |
+| 生产包 | 约 1.36 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
 > 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，
 > 这里只用到了 `ICEButton`；设计器（`ice-entity-designer`）196 KiB —— 它带 9 个领域包的记号集，
@@ -898,6 +1006,10 @@ e2e 的判据**不是"DOM 里有没有 canvas"**——canvas 元素存在但全�
 但"有墨"还不够：`countInk > 3000` 对"表单只占左边一小块、右边空 74%"照样成立。
 所以表单那两例量的是**着墨包围盒**（`inkBounds()`）—— 按**排布**判，而不是按"画了没有"判。
 这一组是被实测缺陷逼出来的，见 §5.3。
+
+同理，"图在框里"也不能靠数墨：裁掉三分之一一样有墨。所以「看整张图」那一例量的是
+**全部图元的世界包围盒投影到屏幕之后四个方向有没有溢出**，并且断言讲稿那一档的倍率
+与 `fitAll()` **完全相同** —— 后者才是对"命令在链路上被丢掉"灵敏的探针（见 §2.0.1）。
 
 另外每条用例都收集 console / pageerror / 网络错误，要求为空。
 

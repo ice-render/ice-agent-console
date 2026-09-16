@@ -16,7 +16,7 @@ import {
   readDiagnosticsTool,
 } from '../server/agents/scripted';
 import { buildPlan, resumeValues } from '../server/agents/scenarios';
-import { WATER_PROCESS_DSL } from '../shared/water-process-case';
+import { WATER_PROCESS_DSL, UPGRADE_UNITS } from '../shared/water-process-case';
 import { applyJsonPatch } from '../src/domain/agui/state-patch';
 import { validateDiagramDsl } from '../src/domain/diagram/validate';
 import { planToEvents, type ToolCallCardPlan } from '../server/agents/dsl-to-events';
@@ -172,6 +172,36 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
     }
   });
 
+  it('★ 开场白里的规模数字**从数据现算**，不写死（曾经写死过 34/37）', () => {
+    // 回归：图从 34/37 扩到两组生化并联之后，讲稿里还写着 34 个单元 ——
+    // 画面上 68 个符号、嘴上说 34 个，这种"文案与数据各存一份"的漂移
+    // 只会在用户看着屏幕时暴露。这里把两者钉在一起：改图必然改文案。
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    const payload = payloadOf(plan);
+    const intro = plan.intro ?? '';
+    const expected = [
+      `${payload.units.length} 个单元`,
+      `${payload.pipes.length} 段管线`,
+      `${new Set(payload.units.map((u: any) => u.kind)).size} 种工艺符号`,
+      `${new Set(payload.pipes.map((p: any) => p.medium)).size} 种介质线型`,
+    ];
+    for (const s of expected) expect(intro).toContain(s);
+  });
+
+  it('图卡的**标题**只描述基础图真有的东西（提标段是剧本才加的）', () => {
+    // 回归：标题里曾写着"臭氧 / 活性炭 / 超滤"，而这三格在基础图里是**预留空位**，
+    // 只有「提标改造」剧本会把它们插进去。标题与画面不符同样是用户一眼可见的错。
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    const payload = payloadOf(plan);
+    const ids = new Set(payload.units.map((u: any) => u.id));
+    for (const id of ['ozone', 'carbon', 'membrane']) {
+      expect(ids.has(id)).toBe(false);
+      expect(payload.title).not.toContain(UPGRADE_UNITS.find((u) => u.id === id)!.name);
+    }
+    expect(payload.title).toContain('滤布滤池');
+    expect(payload.title).toContain('消毒');
+  });
+
   it('★ 含「流」的水务问法不会被流式剧本抢走', () => {
     // 回归：水务分支必须排在 `/实时|趋势|流|…/` **之前**，
     // 否则"工艺流程"里的"流"会把这条问法判成实时吞吐量
@@ -301,16 +331,29 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
 
   it('★ 第一个例子的镜头是"远看 → 推近 → 回到全貌"', () => {
     const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
-    const scales = (plan.beats || []).map((b) => b.zoom?.scale).filter((n): n is number => typeof n === 'number');
+    const beats = plan.beats || [];
+
+    // "全貌"档是 `fit`（整图适配），不是某个手算的倍率 —— 所以它**没有** `scale`。
+    // 理由见 scenarios.ts 的档位表：手写常数既算不准（跟窗口宽度、面板遮盖、图元尺寸有关），
+    // 又会被 `to` 的平移语义带偏（保留上一个镜头的中心 → 一边被裁到画布外）。
+    const isFit = (b: any) => b.zoom?.direction === 'fit';
+    expect({ 开场: isFit(beats[0]) }).toEqual({ 开场: true });
+    expect({ 收尾: isFit(beats[beats.length - 1]) }).toEqual({ 收尾: true });
+
+    // 中间那些拍用绝对倍率，且**都比全貌近** —— 不然"随着讲解放大"就没有发生
+    const scales = beats
+      .map((b) => b.zoom?.scale)
+      .filter((n): n is number => typeof n === 'number');
     expect(scales.length).toBeGreaterThan(0);
-    // 首尾都是全貌档（最远），中间比它近 —— 不然"随着讲解放大"就没有发生
-    const first = scales[0];
-    const last = scales[scales.length - 1];
-    const peak = Math.max(...scales);
-    expect(peak).toBeGreaterThan(first * 1.5);
-    expect(last).toBeCloseTo(first, 6);
-    // 只有一个"全貌"档，其余都比它近
-    expect(scales.filter((s) => s === first).length).toBeLessThanOrEqual(2);
+    const nearest = Math.max(...scales);
+    expect(nearest).toBeGreaterThan(0.85 * 1.5);
+
+    // 除了首尾那两个"全貌"，不该再有 `fit` —— 多出来的话"推近"就被打断了
+    expect(beats.filter(isFit).length).toBeLessThanOrEqual(2);
+    // 而且中间的拍必须是 `to`（相对倍率会累积，十几拍之后不可预期）
+    for (const b of beats.filter((x) => x.zoom && !isFit(x))) {
+      expect(b.zoom!.direction).toBe('to');
+    }
   });
 
   it('★ 提标改造问法 → 走**改图**剧本，且带 STATE_DELTA 补丁', () => {

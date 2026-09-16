@@ -45,6 +45,7 @@ import { Layer } from '../domain/ice/layer';
 import { applyThemeToIce } from '../domain/theme';
 import { compileDiagramDsl, type DiagramOp } from '../domain/diagram/compile';
 import type { WaterProcessDslDocument } from '../../shared/diagram';
+import type { ZoomDirection } from '../../shared/contract';
 
 export interface DiagramLayerOptions {
   /**
@@ -353,10 +354,17 @@ export class DiagramLayer {
    * 两个都需要：铺开坐标之后整图约 4820×2330，按 focus 取景看不到污泥线与事故支路；
    * 而只看整图又读不出位号。所以一个当"远看"、一个当"近看"。
    */
-  fitAll(padding = 24): boolean {
-    if (this.cssWidth <= 0 || this.cssHeight <= 0) return false;
+  /**
+   * 算出"整图适配"的目标视口。
+   *
+   * 抽出来是因为有**两个消费者**：`fitAll()`（立刻跳，给界面上的动作与截图脚本用）
+   * 和 `zoomBy({ direction: 'fit' })`（走补间，给讲稿用）。两份各算一遍必然会漂 ——
+   * 而它们漂起来的症状是"讲稿里的整图适配和按钮的整图适配取景不一样"，很难发现。
+   */
+  private __fitViewport(padding = 24): { scale: number; tx: number; ty: number } | null {
+    if (this.cssWidth <= 0 || this.cssHeight <= 0) return null;
     const box = this.__contentBoxOfAll();
-    if (!box) return false;
+    if (!box) return null;
     const r = this.__region();
     const availableW = Math.max(1, r.width - padding * 2);
     const availableH = Math.max(1, r.height - padding * 2);
@@ -364,8 +372,19 @@ export class DiagramLayer {
     const contentH = Math.max(1, box.maxY - box.minY);
     const fit = Math.min(availableW / contentW, availableH / contentH);
     const scale = Math.max(this.options.minScale, Math.min(this.options.maxScale, fit));
+    return { scale, tx: this.__centerTx(box, scale), ty: this.__centerTy(box, scale) };
+  }
+
+  /**
+   * 整图适配：把**全部**图元框进可视区（"看整张图纸"）。
+   *
+   * 立刻生效、不走补间 —— 界面上那个"看整张图"是按钮，按下去就该到位。
+   */
+  fitAll(padding = 24): boolean {
+    const next = this.__fitViewport(padding);
+    if (!next) return false;
     this.__cancelZoom();
-    this.ice.setViewport(scale, this.__centerTx(box, scale), this.__centerTy(box, scale));
+    this.ice.setViewport(next.scale, next.tx, next.ty);
     return true;
   }
 
@@ -601,7 +620,7 @@ export class DiagramLayer {
    * @returns 是否作用在了一张图上（图表图层走到这里会返回 false，不报错）
    */
   zoomBy(cmd: {
-    direction: 'in' | 'out' | 'reset' | 'to';
+    direction: ZoomDirection;
     factor?: number;
     steps?: number;
     scale?: number;
@@ -616,6 +635,12 @@ export class DiagramLayer {
       if (!box) return false;
       const scale = this.__initialScaleFor(box);
       next = { scale, tx: this.__centerTx(box, scale), ty: this.__centerTy(box, scale) };
+    } else if (cmd.direction === 'fit') {
+      // 整图适配：倍率与平移**一起**算。为什么不复用 `to` + 一个手写倍率：
+      // `to` 保留当前中心，于是"从生化段推远到全貌"会偏到裁掉左边（实测过，见 EVT_ZOOM 的注释）。
+      const target = this.__fitViewport();
+      if (!target) return false;
+      next = target;
     } else if (cmd.direction === 'to') {
       const raw = Number(cmd.scale);
       if (!Number.isFinite(raw) || raw <= 0) return false; // 非法目标倍率：当作没来过

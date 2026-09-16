@@ -15,7 +15,7 @@
  * 而"每两条事件之间停 40ms"这种播放节奏留给传输层。
  */
 import { EventType } from '@ag-ui/core';
-import { EVT_POINT_AT, EVT_ZOOM } from '../../shared/contract';
+import { EVT_POINT_AT, EVT_ZOOM, type ZoomDirection } from '../../shared/contract';
 
 /** 事件在这里是"开放结构 + 必有 type"。字段名的正确性由 tests/ 里的官方 schema 校验兜底。 */
 export type AnyEvent = { type: EventType } & Record<string, any>;
@@ -27,12 +27,14 @@ export { EVT_POINT_AT, EVT_ZOOM };
  *
  * - `in` / `out` —— 相对当前倍率叠（`factor` / `steps`）；
  * - `reset` —— 回到初始视野；
- * - `to` —— **绝对**倍率（`scale`），讲解脚本用它（幂等，不累积）。
+ * - `to` —— **绝对**倍率（`scale`），讲解脚本用它（幂等，不累积）；
+ * - `fit` —— **整图适配**：把全部图元框进可视区（倍率与平移一起算）。
  *
- * 详细取舍见 `shared/contract.ts` 的 `EVT_ZOOM`。
+ * 详细取舍见 `shared/contract.ts` 的 `EVT_ZOOM`（方向取值也在那里，
+ * `ZoomDirection` 是协议的一部分，别在本文件另抄一份字面量联合）。
  */
 export interface ZoomCommand {
-  direction: 'in' | 'out' | 'reset' | 'to';
+  direction: ZoomDirection;
   /** 每一"步"的倍率，默认 1.35。仅 `in` / `out` 用。 */
   factor?: number;
   /** 连走几步，默认 1。仅 `in` / `out` 用。 */

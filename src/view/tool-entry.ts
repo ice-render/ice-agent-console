@@ -130,7 +130,7 @@ export class ToolEntryView {
    * 上绘图区成功后的收尾：收起参数原文、亮出"去了哪儿"的提示。
    *
    * @param hintHtml 允许带标签（`<b>` / `<code>`）—— 调用方（boot）知道渲染的结果，
-   *                 比如"34 个符号 + 37 段管线"，那些数字该被强调。
+   *                 比如"68 个符号 + 81 段管线"，那些数字该被强调。
    */
   markMounted(hintHtml: string): void {
     this.mounted = true;

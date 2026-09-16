@@ -83,7 +83,7 @@ export async function readStage(page: Page): Promise<StageInfo> {
 }
 
 /**
- * 等**开页就绪**：绘图区上已经有工艺图，而且 34 个符号都建好了。
+ * 等**开页就绪**：绘图区上已经有工艺图，而且 68 个符号都建好了。
  *
  * ⚠️ 这里**不能用 `waitSettled`**：那条判据要求 `eventCount` 涨过基线，
  * 而开页是不跑 run 的 —— 没跟 AI 说过话时 `eventCount` 一直是 0，

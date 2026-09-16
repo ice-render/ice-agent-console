@@ -25,6 +25,7 @@ import {
   RENDER_DIAGRAM_TOOL,
   STATE_CHART_KEY,
   STATE_DIAGRAM_KEY,
+  type ZoomDirection,
 } from '../../../shared/contract';
 import {
   CHART_ROWS_PATH,
@@ -98,7 +99,7 @@ export interface ThreadState {
    * 解说里会累积，而绝对倍率是幂等的。见 `shared/contract.ts` 的 `EVT_ZOOM`。
    */
   zoom: {
-    direction: 'in' | 'out' | 'reset' | 'to';
+    direction: ZoomDirection;
     factor?: number;
     steps?: number;
     scale?: number;
@@ -126,7 +127,7 @@ export type Effect =
   /** `blink` 是"高亮之后再闪一下"，与 `value` 同属一次定位动作（见 shared/contract.ts）。 */
   | { type: 'point-at'; value: any; blink?: boolean }
   | { type: 'clear-point' }
-  | { type: 'zoom'; direction: 'in' | 'out' | 'reset' | 'to'; factor?: number; steps?: number; scale?: number }
+  | { type: 'zoom'; direction: ZoomDirection; factor?: number; steps?: number; scale?: number }
   /**
    * **增量增删图元**（`STATE_DELTA` 里那批增删补丁的落点）。
    *
@@ -464,7 +465,16 @@ export function reduce(state: ThreadState, action: Action): Reduction {
         // 而"补一个默认值"会让视图侧跳到某个谁也想不到的倍率上，所以宁可整条丢掉。
         const toScale = Number(action.value?.scale);
         const toValid = direction === 'to' && Number.isFinite(toScale) && toScale > 0;
-        if (direction === 'in' || direction === 'out' || direction === 'reset' || toValid) {
+        if (
+          direction === 'in' ||
+          direction === 'out' ||
+          direction === 'reset' ||
+          // `'fit'` 不带参数（整图适配的倍率由视图层从内容包围盒算出来），所以要**单独**列出来。
+          // ⚠️ 漏掉它的症状很隐蔽：命令在协议里合法、到了视图层也能执行，
+          //    却在这里被当"非法方向"静默丢掉 —— 画面停在上一档，不报错。
+          direction === 'fit' ||
+          toValid
+        ) {
           next.zoom = {
             direction,
             ...(action.value?.factor !== undefined ? { factor: action.value.factor } : {}),

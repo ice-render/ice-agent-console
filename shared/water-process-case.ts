@@ -140,15 +140,28 @@ export const UPGRADE_REMOVED_PIPE_IDS = ['pipe-filter-disinfect'];
 /**
  * **拆除初沉池**：AAO 前不设初沉池可以让更多碳源进生化段（真实做法，不是随手删）。
  *
- * 删 `primary` 会**级联删掉**挂在它两端的管线（`FlowDesigner.remove` 干的），
- * 所以补丁里不用显式列那两根。这也是设计上刻意的：让引擎负责一致性，
- * 应用层不要手写"顺便删哪些管线"—— 那种代码一改图就会漏。
+ * ⚠️ 别以为"引擎会级联，所以补丁里不用列管线"。渲染层**确实**会级联
+ * （`FlowDesigner.remove` 顺手删掉挂在它身上的管线），但那保证的只是**画面**干净 ——
+ * `state` 那份文档是另一条账：JSON Patch 只从 `units` 里拿掉一项，
+ * 管线数组会原封不动，于是文档里留下悬空的管线。
+ *
+ * 所以 `scenarios.ts` 的 `upgradePlan` 用 `pipesTouching()` **显式把它们列全**。
+ * 这张图上 `primary` 身上挂着**三根**（`pipe-grit-primary` / `pipe-primary-dist` /
+ * `pipe-primary-deodor1`）—— 早先这里写的是"两根"，漏掉了通往除臭装置的那一根；
+ * 数字别手抄，以 `pipesTouching()` 现算的为准。
  */
 export const UPGRADE_REMOVED_UNIT_IDS = ['primary'];
 
+/**
+ * 基础工艺图（提标改造**之前**的那一版）。
+ *
+ * ⚠️ 标题只描述**本图真有**的东西：`filter` 与 `disinfect` 之间那段空白是给
+ * `UPGRADE_UNITS` 预留的，臭氧 / 活性炭 / 超滤是「提标改造」剧本才加进去的。
+ * 早先标题把这三个写进去了，画面上却没有 —— 标题与图不符，用户一眼能看出来。
+ */
 export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
   kind: 'water-process',
-  title: 'AAO 两组并联 + 混凝沉淀 + 滤布滤池 + 臭氧 / 活性炭 / 超滤 + 消毒（10 万 m³/d）',
+  title: 'AAO 两组并联 + 混凝沉淀 + 滤布滤池 + 消毒（10 万 m³/d）',
   viewport: { focus: MAIN_FLOW_IDS },
   units: [
     // ================= 水线主线：预处理（y = 60，一路往右） =================

@@ -375,6 +375,21 @@ describe('自定义事件 / 叙事', () => {
     expect(state.zoom).toEqual({ direction: 'to', scale: 1.5, seq: 1 });
   });
 
+  it('★ zoom 的 `fit`（整图适配）是合法方向，且**不带**参数', () => {
+    // 回归：`fit` 是后加的方向，当时的合法性判断是
+    // `in || out || reset || (direction === 'to' && 合法 scale)` —— `fit` 一条都不满足，
+    // 于是被当"非法方向"**静默丢掉**：协议里合法、视图层也实现了，命令却根本到不了。
+    // 症状是"讲稿说要把整张图框进来，画面纹丝不动地停在上一档"，而且零报错。
+    // 所以这条用例单列：新增方向时，**这个白名单必须跟着改**。
+    const { state, effects } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'fit' } },
+    ]);
+    expect(state.zoom).toEqual({ direction: 'fit', seq: 1 });
+    expect(effects[0]).toEqual({ type: 'zoom', direction: 'fit' });
+    // 倍率由视图层从内容包围盒现算，协议里不该带 —— 带了反而是"又一份会过期的常数"
+    expect('scale' in effects[0]).toBe(false);
+  });
+
   it('非法的缩放方向不产生 effect、也不破坏已有指令', () => {
     const { state, effects } = run([
       { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'in' } },

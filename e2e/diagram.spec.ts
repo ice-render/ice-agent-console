@@ -70,6 +70,30 @@ const UPGRADED = {
 /** 内置案例的单元表（"这个 id 在图里存在吗"的参照物）。 */
 const unitsOf = () => WATER_PROCESS_DSL.units;
 
+/**
+ * 视口把**全部图元**框住了吗（返回四个方向的溢出量，正数 = 那一侧被裁）。
+ *
+ * 这是"看整张图"这件事的**唯一**正确判据：canvas 上数着墨只能证明"画了东西"，
+ * 证明不了"整张都在框里" —— 裁掉三分之一也一样有墨。
+ * 用 `contentBox`（全部图元的世界包围盒）而不是 `focusBox`：后者是初始近景的取景框，
+ * 它**本来就不该**框住全部（污泥线 / 事故水就在框外）。
+ */
+function frameOverflow(vp: {
+  scale: number;
+  tx: number;
+  ty: number;
+  region: { left: number; top: number; width: number; height: number };
+  contentBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
+}) {
+  const b = vp.contentBox!;
+  return {
+    left: vp.region.left - (b.minX * vp.scale + vp.tx),
+    top: vp.region.top - (b.minY * vp.scale + vp.ty),
+    right: b.maxX * vp.scale + vp.tx - (vp.region.left + vp.region.width),
+    bottom: b.maxY * vp.scale + vp.ty - (vp.region.top + vp.region.height),
+  };
+}
+
 
 test('开页就是工艺图：无需任何对话、数量对、引擎校验无问题、零 console error', async ({ page }) => {
   const errors = collectErrors(page);
@@ -471,6 +495,52 @@ test('窗口尺寸变化后画布跟着变（尺寸不是只在启动时量一�
 
   // 尺寸变了这么多次，图还是那一层
   expect((await readStage(page)).builds.diagram).toBe(1);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+test('★ 「看整张图」真的框住整张图：讲稿的全貌档两侧都不裁，且与 fitAll 同一取景', async ({ page }) => {
+  // 回归：讲稿第一拍说"先把整张图框进来"，收尾也说"整张图是 ice-entity-designer 画的"，
+  // 但那一档原先是一个手算常数倍率（`to: 0.22`）。`to` 的平移锚点是"当前可视区中心那个世界点"
+  // —— 它**保留**上一个镜头的位置 —— 于是从生化段推远时图纸中心并不在屏幕中心上，
+  // 左侧 1870 世界像素（整个预处理段）被推出屏幕左边界。
+  // 画面看起来只是个"远景"，不报错，只有把"全部图元的世界包围盒投影到屏幕上"才看得出来。
+  // 所以要判两件事，缺一条都证不完整：**不裁**，且**和界面上的整图适配同一取景**。
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+
+  await useChip(page, '看看污水处理工艺图');
+  await waitSettled(page, 1);
+  // 收尾那一拍的 `fit` 走的是补间（220ms 左右），而 `useChip` 等的是"run 结束 + 事件数涨过基线"
+  // —— 那是**事件**的结束，不是**动画**的结束。不等补间停下来，量到的会是中间某一帧的视口。
+  await page.waitForFunction(
+    () => {
+      const z = (window as any).__iceAgentConsole.diagramZoom();
+      return z && !z.animating;
+    },
+    undefined,
+    { timeout: 10_000 }
+  );
+
+  const vp = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
+  expect(vp.contentBox).not.toBeNull();
+  const over = frameOverflow(vp);
+  // 容差 1px 给浮点；**四个方向都要判** —— 只判左右的话，"图被整个推出下边界"照样过。
+  expect(
+    Math.max(over.left, over.right, over.top, over.bottom),
+    `全貌档把图裁掉了：${JSON.stringify(over)}`
+  ).toBeLessThanOrEqual(1);
+
+  // ★ 与"看整张图纸"按钮**共用同一份计算**（`StageView.fitAll()`）。
+  //   这条是上面那个 bug 的**更灵敏**的探针：`to: 0.22` 与 fitAll 的 0.2059 差 6.8%，
+  //   光看"裁没裁"在余量大的窗口尺寸下可能碰巧过关，而这条一定红。
+  const before = vp.scale;
+  const fitScale = await page.evaluate(() => {
+    (window as any).__iceAgentConsole.fitAll();
+    return (window as any).__iceAgentConsole.diagramViewport().scale;
+  });
+  expect(before, '讲稿的全貌档应当就是 fitAll 那一档').toBeCloseTo(fitScale, 4);
 
   expect(errors, errors.join('\n')).toEqual([]);
 });

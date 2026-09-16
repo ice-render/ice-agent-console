@@ -21,6 +21,14 @@
  *    那一次点击被静默吞掉，后面就永远等不到。判据必须是"状态对了 **且** 事件数涨过基线"。
  * 2. **2× 采集**：`deviceScaleFactor: 2`，README 在 retina 上才清晰。
  *
+ * ## 最后一张是**另开的页面**：演示模式
+ *
+ * `?demo=1` 走的是另一条 transport，而脚本前面那几十步已经在同一个 `page` 上
+ * 跑过十几轮了 —— 拿它去拍演示模式，拍到的其实是"跑了很久的那个页面"。
+ * 所以演示模式**另起一个 `browser.newPage()`**，并且顺手做两条断言
+ * （`runMode() === 'demo'`、全程没有一个请求打到 8099）：
+ * 截图只能证明"画面长得一样"，而这张图要证明的是"它真没连后端"。
+ *
  * 用法：先起服务（`npm run dev`），再 `node scripts/shoot-docs.cjs`。
  */
 const path = require('node:path');
@@ -110,8 +118,13 @@ const VIEW = { width: 1440, height: 900 };
    * 为什么单独一个：`pointAt` 会把目标移到**可视区中心**，所以中心那一块就是它 ——
    * 而这个"跟着讲解推近 + 高亮"的效果正是这次要展示的东西，
    * 截成整幅的话框只占几个像素，看不出是个"鲜黄的框"。
+   *
+   * 半宽取 330 是量出来的：可视区 1048 宽时，"单格档"（1.5 倍）下被讲的那个池子
+   * 只占 **203×129** 屏幕像素 —— 按整幅裁的话它只有约 20% 宽，看着还是"一张全貌图里
+   * 有个小黄框"。裁到 660×409 之后它占约 31%，同时左右还留着相邻池子与管线当上下文
+   * （再裁紧就只剩一个孤零零的符号，看不出它接在哪条线上）。
    */
-  const shootHighlightCloseUp = async (name, size = 520) => {
+  const shootHighlightCloseUp = async (name, size = 330) => {
     const clip = await page.evaluate((half) => {
       const vp = window.__iceAgentConsole.diagramViewport();
       if (!vp) return null;
@@ -134,6 +147,25 @@ const VIEW = { width: 1440, height: 900 };
 
   /** 只拍绘图区（不带对话面板）—— 用在"图本身才是重点"的那几张。 */
   const stage = () => page.locator('#stage');
+
+  /**
+   * 等闪烁的底块处于**亮的那半周期**再拍。
+   *
+   * 为什么不能直接 `waitForTimeout(600)` 拍：闪烁是 `alternate` 的补间
+   * （`blinkInfo().opacity` 在 0 与 1 之间来回），随机时刻拍到的可能正好是**最暗那一帧** ——
+   * 高亮框几乎透明，"用鲜黄高亮"这件事在图上看不出来，而截图本身不会报错。
+   * 判据用 `blinkInfo().animating === false` 不行（那说明闪完了），要的是"还在闪、且正亮着"。
+   */
+  const waitForBlinkBright = async (threshold = 0.75) => {
+    await page.waitForFunction(
+      (min) => {
+        const b = window.__iceAgentConsole.diagramBlink();
+        return !!b?.id && b.opacity >= min;
+      },
+      threshold,
+      { timeout: 10_000 }
+    );
+  };
   /** 只拍对话面板（浮层）。 */
   const chat = () => page.locator('#chat');
 
@@ -153,10 +185,20 @@ const VIEW = { width: 1440, height: 900 };
     await page.waitForTimeout(400);
   };
 
-  /** 点一个快捷按钮并等这一轮真的跑完（判据见文件头第 1 条）。 */
+  /**
+   * 点一个快捷按钮并等这一轮真的跑完（判据见文件头第 1 条）。
+   *
+   * ⚠️ **必须按精确文案匹配**，不能 `locator('.chip', { hasText })` ——
+   * 那是子串匹配，而按钮里有一对只差三个字的（`故意画错` / `故意画错工艺图`）。
+   * 这个脚本就**因为这个坏掉过一次**：按钮按"作用对象"分组（工艺图那组排最前）之后，
+   * `hasText: '故意画错'` 的 `.first()` 变成了 `故意画错工艺图`，于是它切的是 diagram 图层，
+   * 后面等的 `onLayer('chart')` 永远等不到、直接超时；而失败点在几步之后，
+   * 报出来完全看不出是点错了按钮。截图是**提交进仓库的产物**，所以坏了很久没人发现
+   * —— 上一版截图还停在分组之前。e2e 那边同样的坑由 `chipLocator()` 兜着（见 AGENTS.md 第 8 条）。
+   */
   const chip = async (text, status = 'idle', waitAfter = 900) => {
     const before = await page.evaluate(() => window.__iceAgentConsole.getState().eventCount);
-    await page.locator('.chip', { hasText: text }).first().click();
+    await page.getByRole('button', { name: text, exact: true }).click();
     await page.waitForFunction(
       ([want, min]) => {
         const s = window.__iceAgentConsole.getState();
@@ -193,9 +235,13 @@ const VIEW = { width: 1440, height: 900 };
   // 这一步等的是第一个例子（它会一路推镜头，收尾回到**全貌档**），所以拍到的是整张图纸。
   await chip('看看污水处理工艺图');
   await onLayer('diagram');
-  // 讲完镜头停在"全貌档"（0.42），直接拍会偏小 —— 主动做一次**整图适配**，
+  // 讲完镜头停在"全貌档"，直接拍会偏小 —— 主动做一次**整图适配**，
   // 让图纸按可视区铺满再拍（这才是"这张图的定妆照"，跟开页那一屏不是一回事）。
   await page.evaluate(() => window.__iceAgentConsole.fitAll());
+  // ⚠️ **还要把高亮收掉**：讲解剧本讲完是留着高亮的（`accidentTank`，刻意的 ——
+  // 讲完停在被讲的那个池子上很自然）。但这一张是**图纸的定妆照**，读者要拿它认"这张图长什么样"；
+  // 上面挂着一个不知从哪来的黄框，只会让人以为是某种标注。所以定妆照一律先清高亮。
+  await page.evaluate(() => window.__iceAgentConsole.clearPoint());
   await page.waitForTimeout(400);
   await shootStage('water-process');
   // 折叠起来的那一份：最能说明"图才是主体"
@@ -208,14 +254,29 @@ const VIEW = { width: 1440, height: 900 };
   // ---- 1b. 指着讲 + 鲜黄高亮（推到单格档，让高亮的框占够像素）----
   // 这一张是"随讲解放大 + 把对应图元高亮"那条要求的直接证据：
   // 画面是**推近过的**（不是全貌），而被讲的那个池子套着鲜黄的框。
-  await page.locator('.chip', { hasText: '让图元闪烁' }).first().click();
+  //
+  // ⚠️ 判据不能是"有没有高亮" —— **讲解剧本讲完是留着高亮的**（刻意的），
+  // 所以点下去那一刻 `diagramPointedId()` 就已经非空了，那个等待会**立刻返回**，
+  // 拍到的是还没推镜头、还停在上一个高亮上的中间态（上一版就是这么拍到一张全貌图的）。
+  // 判据必须是"高亮**换到了这一拍的目标**，而且镜头推到位了"。
+  const pointedBefore = await page.evaluate(() => window.__iceAgentConsole.diagramPointedId());
+  // 同理用精确匹配（这一条目前没有同前缀的兄弟，但别给下一对留雷）。
+  await page.getByRole('button', { name: '让图元闪烁', exact: true }).click();
+  await page.waitForFunction(
+    (prev) => {
+      const api = window.__iceAgentConsole;
+      const id = api.diagramPointedId();
+      const z = api.diagramZoom();
+      // 闪烁剧本第一拍点的是 ana1，档位是"单格"；两个条件都要满足，
+      // 而且补间得停下来 —— 否则拍到的是推镜头到一半的画面。
+      return !!id && id !== prev && Math.abs((z?.scale ?? 0) - 1.5) < 0.02 && !z?.animating;
+    },
+    pointedBefore,
+    { timeout: 30_000 }
+  );
   // 闪烁是有时限的（6 轮 × 160ms），所以**等它把高亮打上去就立刻拍**，
   // 不能等整轮跑完 —— 那时候三拍已经闪过去了。
-  await page.waitForFunction(() => !!window.__iceAgentConsole?.diagramPointedId?.(), undefined, {
-    timeout: 30_000,
-  });
-  // 等这一拍的推镜头补间走完（220ms）再加一点余量，否则拍到的是中间态
-  await page.waitForTimeout(600);
+  await waitForBlinkBright();
   await shootHighlightCloseUp('highlight');
 
   // ⚠️ 拍完必须**等这一轮真的跑完**再往下走：闪烁剧本还有两拍，
@@ -227,11 +288,14 @@ const VIEW = { width: 1440, height: 900 };
 
   // ---- 1c. 改图：提标改造（拆一处、加三处）----
   // 两张对照图，都做整图适配 —— 这样"哪里少了、哪里多了"一眼能对上。
+  // 同样先清高亮：对照图上有黄框就没法一眼看出"哪块是新加的"（闪烁刚点完 aer1）。
   await page.evaluate(() => window.__iceAgentConsole.fitAll());
+  await page.evaluate(() => window.__iceAgentConsole.clearPoint());
   await page.waitForTimeout(400);
   await shootStage('upgrade-before');
   await chip('提标改造');
   await page.evaluate(() => window.__iceAgentConsole.fitAll());
+  await page.evaluate(() => window.__iceAgentConsole.clearPoint());
   await page.waitForTimeout(400);
   await shootStage('upgrade');
 
@@ -267,6 +331,46 @@ const VIEW = { width: 1440, height: 900 };
   await page.locator('.tool-entry[data-status="error"]').last().scrollIntoViewIfNeeded();
   await page.waitForTimeout(300);
   await shoot('self-repair', chat());
+
+  // ---- 7. 演示模式：同一份界面，**没有后端** ----
+  // 这一张要证明的是"演示模式下画面跟连后端一模一样，区别只在顶栏那行徽标"。
+  // 所以：另开一个干净页面走 `?demo=1`，就地问一次"这一路 transport 是什么"，
+  // 再断言整个过程中**一个请求都没打到 8099** —— 截图只能看画，这两条才是证据。
+  const demoPage = await browser.newPage({ viewport: VIEW, deviceScaleFactor: 2 });
+  const demoHits = [];
+  const demoErrs = [];
+  demoPage.on('request', (r) => {
+    if (r.url().includes('8099')) demoHits.push(r.url());
+  });
+  demoPage.on('pageerror', (e) => demoErrs.push('pageerror: ' + e.message));
+  demoPage.on('console', (m) => {
+    if (m.type() === 'error') demoErrs.push('console: ' + m.text());
+  });
+
+  await demoPage.goto(BASE + '?demo=1');
+  await demoPage.waitForFunction(() => !!window.__iceAgentConsole?.diagramStats()?.symbols, undefined, {
+    timeout: 20000,
+  });
+  const demoMode = await demoPage.evaluate(() => window.__iceAgentConsole.runMode());
+  // 走一遍讲解，让面板里有内容 —— 空面板证明不了"它真的能跑"。
+  const demoChip = demoPage.getByRole('button', { name: '看看污水处理工艺图', exact: true });
+  const demoBefore = await demoPage.evaluate(() => window.__iceAgentConsole.getState().eventCount);
+  await demoChip.click();
+  await demoPage.waitForFunction(
+    (min) => {
+      const s = window.__iceAgentConsole.getState();
+      return s.status === 'idle' && s.eventCount > min;
+    },
+    demoBefore,
+    { timeout: 40000 }
+  );
+  await demoPage.waitForTimeout(800);
+  await demoPage.locator('body').screenshot({ path: path.join(OUT, 'demo-mode.png') });
+  console.log('  → demo-mode.png');
+  console.log('  runMode =', demoMode, '| 打到 8099 的请求 =', demoHits.length);
+  if (demoMode !== 'demo') errs.push('演示模式没生效：runMode = ' + demoMode);
+  if (demoHits.length) errs.push('演示模式仍打到了后端：' + demoHits.join(', '));
+  errs.push(...demoErrs);
 
   console.log('错误 =', errs.length ? errs : '无');
   await browser.close();
