@@ -14,14 +14,19 @@
     <title>ice-agent-console</title>
     <style>
       /*
-       * 这一层是**真 DOM**，不是 canvas。
+       * 布局：**绘图区是主体，对话浮在它上面。**
        *
-       * ice-web-components 的立场是 "every pixel drawn by the engine"，但它适合的是
-       * 应用外壳、表单、弹窗这类"自成一体的画布界面"。Thread 式消息流不行：
-       * 消息要能选中复制、要能走输入法、要有浏览器原生的滚动惯性、要能被屏幕阅读器读。
+       *   #stage   position:fixed; inset:0        ← 铺满视口，开页就画着工艺图
+       *   #chat    position:fixed; right:gap;…    ← 浮在它右边缘上的一块面板
+       *
+       * 为什么绘图区不是"整块 canvas"而是"一个容器 + 可切换的图层"：
+       * 引擎的模型是「一层 = 一块 canvas + 一个 ICE 实例」，而 `ice-chart` /
+       * `WaterProcessDesigner` 各自都要独占实例。所以同一时刻容器里只挂一个图层。
+       * 详见 `src/view/stage.ts` 的文件头。
+       *
+       * 另一半边界没变：**DOM 管对话与外壳，canvas 管绘图区**。
+       * 消息要能选中复制、要走输入法、要有原生滚动惯性、要被屏幕阅读器读 ——
        * 这些用 canvas 重做一遍只有坏处。
-       *
-       * 所以分界划在这儿：**DOM 管 thread 外壳，canvas 管卡片内容（图表）**。
        */
       /*
        * 颜色**不在这里写死** —— 下面这些变量由 `src/domain/theme.ts` 在启动时
@@ -59,7 +64,14 @@
         --bubble-agent: #f8f9fa;
         --code-bg: #0f172a;
         --code-fg: #b6e3f5;
+        /* 浮层三件套：面板 / 控件条 / 表单靠它们跟"画着图的那一层"分开 */
+        --overlay-bg: #ffffff;
+        --overlay-line: #dee2e6;
+        --overlay-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
         --radius: 10px;
+        /* 对话面板的宽度与离边距。JS 不重算它们，只量——见 boot.ts 的 syncPanelInset */
+        --chat-w: 380px;
+        --chat-gap: 12px;
         color-scheme: light;
       }
       /* 主题名由 JS 写在 <html data-theme> 上；只用来切 color-scheme（滚动条、原生控件） */
@@ -70,57 +82,168 @@
       html, body {
         margin: 0;
         height: 100%;
+        overflow: hidden; /* 绘图区是 fixed 铺满的，页面本身不滚 */
         background: var(--bg);
         color: var(--text);
         font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
           'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
       }
 
-      #app {
-        max-width: 980px;
-        margin: 0 auto;
-        height: 100%;
+      /* ================= 绘图区 ================= */
+
+      #stage {
+        position: fixed;
+        inset: 0;
+        background: var(--panel);
+      }
+
+      /*
+       * 一层 = 一块 canvas + 一个 ICE 实例。`hidden` 时靠 UA 的 `[hidden]{display:none}`，
+       * 所以这里**不要**给 `.stage-layer` 写 `display`。
+       */
+      .stage-layer { position: absolute; inset: 0; }
+      .stage-layer canvas { display: block; }
+
+      /* 图表图层：图表铺满，控件条浮在它底部（那是**第二块画布、第二个 ICE 实例**） */
+      .stage-chart { position: absolute; left: 24px; right: 24px; top: 24px; bottom: 100px; }
+      .stage-widget {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        bottom: 20px;
+        height: 56px;
+        background: var(--overlay-bg);
+        border: 1px solid var(--overlay-line);
+        border-radius: 12px;
+        box-shadow: var(--overlay-shadow);
+      }
+      .stage-widget canvas { display: block; }
+
+      /*
+       * 表单图层：一块居中浮在绘图区上的面板。
+       *
+       * 宽度取 `min(720px, …)` 而不是"铺满"：一行 1400 宽的输入框没人读得过来，
+       * 而表单 DSL 自己也有内容上限（640）。**面板比那个上限宽一点**是刻意的 ——
+       * 这样"内容有没有排到上限"在画布上还看得见（否则画布宽度就是内容宽度，
+       * 两个意图会退化成同一个断言）。这条在 e2e 里有回归。
+       *
+       * 居中按 `--stage-usable-w`（绘图区**没被对话面板压住**的那部分宽度）算，
+       * 由 boot.ts 量完写进来 —— 按整幅画布居中会让表单右半边钻到面板底下。
+       */
+      .stage-form {
+        position: absolute;
+        top: 32px;
+        left: calc(var(--stage-usable-w, 100%) / 2);
+        transform: translateX(-50%);
+        width: min(720px, calc(100% - 64px));
+        max-height: calc(100% - 64px);
+        overflow: auto;
+        background: var(--overlay-bg);
+        border: 1px solid var(--overlay-line);
+        border-radius: 14px;
+        box-shadow: var(--overlay-shadow);
+        padding: 20px 24px;
+      }
+      .stage-form canvas { display: block; }
+
+      /* ================= 对话面板（浮层） ================= */
+
+      #chat {
+        position: fixed;
+        top: var(--chat-gap);
+        right: var(--chat-gap);
+        bottom: var(--chat-gap);
+        width: var(--chat-w);
         display: flex;
         flex-direction: column;
         background: var(--panel);
-        border-left: 1px solid var(--line);
-        border-right: 1px solid var(--line);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: var(--overlay-shadow);
+        overflow: hidden;
+      }
+      /*
+       * 折叠用 `transform` 推出去，**不是 `display:none`** ——
+       * 那样里面滚不动、也拿不到 clientWidth（面板既然要能"再打开"，就得活着）。
+       * 多推 `--chat-gap` 是让右边的外间距也一起出去，这样面板的左边缘真的落在视口外，
+       * `syncPanelInset()` 量出来的遮盖宽度自然就是 0，不用为两种状态各写一条分支。
+       *
+       * 刻意**不做过渡**：面板滑出去要 200ms，而绘图区的重新居中是一瞬间的，
+       * 两个一起放会显得脱节。少一个动画换来"按下就到位"的手感。
+       */
+      #chat[data-collapsed='true'] {
+        transform: translateX(calc(100% + var(--chat-gap) + 8px));
       }
 
-      header {
-        padding: 14px 20px;
+      #chat-toggle {
+        position: fixed;
+        top: var(--chat-gap);
+        right: var(--chat-gap);
+        z-index: 10;
+        height: 36px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--overlay-bg);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        box-shadow: var(--overlay-shadow);
+      }
+      #chat-toggle:hover { border-color: var(--ice); color: var(--ice-ink); }
+
+      #chat header {
+        padding: 12px 14px;
         border-bottom: 1px solid var(--line);
         display: flex;
         align-items: baseline;
-        gap: 10px;
+        gap: 8px;
         flex: none;
       }
-      header h1 {
-        font-size: 15px;
+      #chat header h1 {
+        font-size: 14px;
         margin: 0;
         letter-spacing: 0.2px;
+        flex: none;
       }
-      header h1 span { color: var(--ice-ink); }
-      header .meta {
-        font-size: 12px;
+      #chat header h1 span { color: var(--ice-ink); }
+      #chat header .meta {
+        font-size: 11px;
         color: var(--muted);
         margin-left: auto;
         font-variant-numeric: tabular-nums;
+        line-height: 1.4;
       }
-      header .meta b { color: var(--text); font-weight: 600; }
+      #chat header .meta b { color: var(--text); font-weight: 600; }
+      #chat-collapse {
+        flex: none;
+        width: 26px;
+        height: 26px;
+        margin-left: 6px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--elevated);
+        color: var(--muted);
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      #chat-collapse:hover { border-color: var(--ice); color: var(--ice-ink); }
 
       #thread {
         flex: 1;
         overflow-y: auto;
-        padding: 20px 20px 8px;
-        scroll-behavior: smooth;
+        padding: 14px 14px 6px;
+        overscroll-behavior: contain;
       }
 
       .empty {
         color: var(--muted);
         text-align: center;
-        margin-top: 64px;
-        font-size: 13px;
+        margin-top: 48px;
+        font-size: 12.5px;
         line-height: 2;
       }
       .empty code {
@@ -133,18 +256,18 @@
       /* ---------- 消息（文字气泡） ---------- */
       .msg {
         display: flex;
-        gap: 10px;
-        margin-bottom: 14px;
+        gap: 8px;
+        margin-bottom: 12px;
         align-items: flex-start;
       }
       .msg .who {
         flex: none;
-        width: 30px;
-        height: 30px;
+        width: 26px;
+        height: 26px;
         border-radius: 7px;
         display: grid;
         place-items: center;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
         background: var(--ice);
         color: #06414f;
@@ -153,101 +276,63 @@
       .msg .bubble {
         background: var(--bubble-agent);
         border-radius: var(--radius);
-        padding: 8px 12px;
-        max-width: 76%;
+        padding: 7px 11px;
+        max-width: calc(100% - 40px);
         white-space: pre-wrap;
         word-break: break-word;
         min-height: 20px;
+        font-size: 13px;
       }
       .msg.user { flex-direction: row-reverse; }
       .msg.user .bubble { background: var(--bubble-user); }
       .msg.user .who { order: 2; }
 
-      /* ---------- 卡片（生成式 UI） ---------- */
-      .card {
+      /* ---------- 工具条目（**没有画布**，画布在绘图区） ---------- */
+      .tool-entry {
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        margin: 0 0 14px 40px;
+        margin: 0 0 12px 34px;
         overflow: hidden;
-        background: var(--panel);
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+        background: var(--elevated);
       }
-      .card > .card-head {
-        padding: 8px 12px;
+      /*
+       * `data-active` = "绘图区上现在显示的就是这一条"。
+       * 旧结构靠"卡片里那块画布"回答这个问题，现在画布只有一块，所以要在条目上标出来。
+       */
+      .tool-entry[data-active='true'] { border-color: var(--ice); }
+      .tool-entry > .card-head {
+        padding: 6px 10px;
         border-bottom: 1px solid var(--line);
         display: flex;
         align-items: center;
-        gap: 8px;
-        font-size: 12px;
+        gap: 7px;
+        font-size: 11.5px;
         color: var(--muted);
-        background: var(--elevated);
       }
-      .card > .card-head .title { color: var(--text); font-weight: 600; font-size: 13px; }
-      .card > .card-head .status { margin-left: auto; }
-      .card .dot {
+      .tool-entry > .card-head .title { color: var(--text); font-weight: 600; font-size: 12px; }
+      .tool-entry > .card-head .status { margin-left: auto; }
+      .tool-entry .dot {
         width: 7px; height: 7px; border-radius: 50%;
         background: var(--ice);
         box-shadow: 0 0 0 3px rgba(97, 217, 251, 0.2);
+        flex: none;
       }
-      .card[data-status='streaming'] .dot { animation: pulse 1s ease-in-out infinite; }
-      .card[data-status='error'] .dot { background: var(--err); box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.22); }
-      .card[data-status='done'] .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.22); }
+      .tool-entry[data-status='streaming'] .dot { animation: pulse 1s ease-in-out infinite; }
+      .tool-entry[data-status='error'] .dot { background: var(--err); box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.22); }
+      .tool-entry[data-status='done'] .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.22); }
       @keyframes pulse { 50% { opacity: 0.25; } }
 
-      .card .card-body { padding: 12px; }
-      .card canvas { display: block; width: 100%; }
-
-      /*
-       * 控件层：卡片里的**第二块画布**（图表是第一块）。
-       * 两条虚线把它跟图表分开，是为了让"这是另一张 canvas、另一个 ICE 实例"这件事
-       * 在视觉上也是明确的 —— 否则它看起来就像图表的一部分。
-       */
-      .widget-wrap {
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px dashed var(--line);
-      }
-      .widget-wrap canvas { display: block; }
-
-      /*
-       * 表单层：与图表层**互斥**（一次 tool call 要么是图表要么是表单），
-       * 也是画在自己的 canvas 上、自己的 ICE 实例里。
-       * 用左侧一道实线跟"图"区分开 —— 让人一眼看出这不是图表卡片。
-       */
-      .form-wrap {
-        border-left: 3px solid var(--ice);
-        border-radius: 4px;
-        padding-left: 10px;
-      }
-      .form-wrap canvas { display: block; }
-
-      /*
-       * 图层：第三种形态（`render_diagram`），同样与前两者互斥。
-       *
-       * **高度必须由 CSS 定死**（不能像图表那样靠内容撑）：这一层是个可缩放平移的
-       * 视口，画布要一个确定的尺寸，初始视口才能按它居中算。也正因为是视口，
-       * 它比图表(300)高得多 —— 图的世界尺寸约 1454×985，卡片只有 872 宽，
-       * 高度给足才看得清一段主流程。
-       *
-       * 用**上边框**而不是表单那种左边框：四种形态一眼能分清
-       * （图表无装饰 / 控件条虚线 / 表单左侧实线 / 图上方实线）。
-       */
-      .diagram-wrap {
-        height: 520px;
-        border-top: 3px solid var(--ice);
-        border-radius: 4px;
-      }
-      .diagram-wrap canvas { display: block; }
+      .tool-entry .card-body { padding: 10px; }
 
       /* 流式拼装中的参数（半成品 DSL）——这是 AG-UI 相对"只转个圈"的差别所在 */
       .args {
-        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         /* 半成品 DSL 的代码块：两种主题都用深底，跟"正文气泡"明确分开 */
         background: var(--code-bg);
         color: var(--code-fg);
         border-radius: 6px;
-        padding: 10px 12px;
-        max-height: 168px;
+        padding: 8px 10px;
+        max-height: 150px;
         overflow: auto;
         white-space: pre-wrap;
         word-break: break-all;
@@ -262,36 +347,38 @@
       }
 
       .diag {
-        margin: 10px 0 0;
+        margin: 8px 0 0;
         padding: 0;
         list-style: none;
-        font-size: 12px;
+        font-size: 11.5px;
       }
       .diag li {
-        padding: 7px 10px;
+        padding: 6px 9px;
         border-radius: 6px;
         background: var(--err-bg);
         border: 1px solid var(--err-line);
         color: var(--err-text);
-        margin-bottom: 6px;
+        margin-bottom: 5px;
       }
       .diag li.warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-text); }
       .diag li code { color: inherit; opacity: 0.75; }
 
       .hint {
-        font-size: 12px;
+        font-size: 11.5px;
         color: var(--muted);
-        margin-top: 8px;
+        margin-top: 6px;
+        line-height: 1.7;
       }
       .hint b { color: var(--ice-ink); font-weight: 600; }
+      .hint code { opacity: 0.85; }
 
       /* ---------- 输入区 ---------- */
-      footer {
+      #chat footer {
         flex: none;
-        padding: 12px 20px 16px;
+        padding: 10px 14px 14px;
         border-top: 1px solid var(--line);
       }
-      form {
+      #chat form {
         display: flex;
         gap: 8px;
         align-items: flex-end;
@@ -301,10 +388,11 @@
         resize: none;
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        padding: 10px 12px;
+        padding: 9px 11px;
         font: inherit;
+        font-size: 13px;
         outline: none;
-        min-height: 42px;
+        min-height: 40px;
         max-height: 140px;
         background: var(--elevated);
         color: var(--text);
@@ -313,21 +401,22 @@
       #input:focus { border-color: var(--ice); box-shadow: 0 0 0 3px rgba(97, 217, 251, 0.18); }
       #send {
         flex: none;
-        height: 42px;
-        padding: 0 18px;
+        height: 40px;
+        padding: 0 16px;
         border: none;
         border-radius: var(--radius);
         background: var(--ice);
         color: #06414f;
         font: inherit;
+        font-size: 13px;
         font-weight: 600;
         cursor: pointer;
       }
       #send:disabled { opacity: 0.5; cursor: not-allowed; }
-      .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+      .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
       .chip {
-        font-size: 12px;
-        padding: 4px 10px;
+        font-size: 11.5px;
+        padding: 3px 9px;
         border-radius: 999px;
         border: 1px solid var(--line);
         background: var(--elevated);
@@ -336,23 +425,31 @@
       }
       .chip:hover { border-color: var(--ice); color: var(--ice-ink); }
       /* 滚动条也跟着暗色，否则右边会亮一条 */
-      #thread::-webkit-scrollbar, .args::-webkit-scrollbar { width: 10px; height: 10px; }
+      #thread::-webkit-scrollbar, .args::-webkit-scrollbar { width: 9px; height: 9px; }
       #thread::-webkit-scrollbar-thumb, .args::-webkit-scrollbar-thumb {
         background: var(--line); border-radius: 5px;
       }
     </style>
   </head>
   <body>
-    <div id="app">
+    <!-- 绘图区：铺满整个视口。开页就画着工艺图（boot.ts 里 mount 的） -->
+    <div id="stage"></div>
+
+    <!-- 面板折叠后露出来的那个小按钮 -->
+    <button id="chat-toggle" type="button" hidden>AI 对话</button>
+
+    <aside id="chat" data-collapsed="false">
       <header>
         <h1>ice-<span>agent</span>-console</h1>
         <div class="meta" id="meta"></div>
+        <button id="chat-collapse" type="button" title="收起对话面板">›</button>
       </header>
       <div id="thread">
         <div class="empty">
-          问一句，Agent 会把图表<strong>内联成卡片</strong>画在对话里。<br />
-          试试 <code>看看各渠道的月度销量</code>、<code>要下发指令</code><br />
-          想看自修复回路，试试 <code>故意画错</code>
+          绘图区上已经是那张工艺图了 —— 它是<strong>开页就画好的</strong>，不会重画。<br />
+          这里的每个动作都作用在它上面。试试 <code>把工艺图放大</code>、<code>让图元闪烁</code><br />
+          切别的界面：<code>看看各渠道的月度销量</code>、<code>要下发指令</code><br />
+          走自修复回路：<code>故意画错工艺图</code>
         </div>
       </div>
       <footer>
@@ -362,6 +459,6 @@
           <button id="send" type="submit">发送</button>
         </form>
       </footer>
-    </div>
+    </aside>
   </body>
 </html>

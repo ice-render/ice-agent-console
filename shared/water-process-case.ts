@@ -24,8 +24,14 @@
  * - 规模：`e2e/diagram.spec.ts` 断言 34 / 37
  * - **工艺语义**：`DiagramLayer.issues()` 走引擎的 `validateWater()`，断言零问题。
  *   同一条断言在 `ice-smart-water` 里也是零问题 —— 两边一致才说明搬的过程中没改语义。
+ *
+ * ## 为什么放在 `shared/` 而不是 `server/agents/`
+ *
+ * 因为**开页就要画它**：舞台在 boot 时装载工艺图，而 boot 跑在浏览器里。
+ * `shared/` 是唯一被两套 tsconfig（前端 `tsconfig.json` + 服务端 `tsconfig.server.json`）
+ * 同时加载的目录，所以数据放这里 —— 服务端写计划、前端画图，一份来源。
  */
-import type { WaterProcessDslDocument } from '../../shared/diagram';
+import type { WaterProcessDslDocument } from './diagram';
 
 /**
  * 主流程链（进水 → 生化 → 二沉 → 深度处理 → 排放）。

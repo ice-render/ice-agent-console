@@ -1,17 +1,20 @@
 /**
- * 卡片里的**图卡片层**：把一份图 DSL 画到自己的 canvas 上（`ice-entity-designer`）。
+ * **工艺图层**：把一份图 DSL 画到自己的 canvas 上（`ice-entity-designer`）。
  *
  * 与另外两层的关系：图表层用 `ice-chart`、表单层用 `ice-web-components-dsl`，
  * 这一层用 `ice-entity-designer` 的 `WaterProcessDesigner`。三者都是
  * **一块 canvas + 一个 ICE 实例**（引擎的模型：「一层 = 一个实例 + 一张画布」）。
  *
+ * 它在布局里的位置与另两层**不一样**：这一层在 boot 时就画好，铺满整个绘图区，
+ * 之后**永不重建** —— 对话里所有动作都作用在它上面（见 `src/view/stage.ts`）。
+ * 另两层是按需建、被顶掉时销毁。
+ *
  * ## 只读，但可缩放平移
  *
  * 语义是"**看**图，不是**编辑**图"：符号建成 `interactive:false / draggable:false`，
  * 也不能增删。但滚轮缩放与空白处拖拽平移是**查看**手段，必须有 ——
- * 这张图的世界尺寸约 1454×985，而卡片可用宽度只有 ~872px：
- * 整图适配会把 12px 的位号文字压到 6~7px，根本读不出来。
- * 所以策略是「**看一段、拖着看**」而不是"看缩略图"。
+ * 这张图的世界尺寸约 1454×985，一次看全会把 12px 的位号文字压到 6~7px，
+ * 根本读不出来。所以策略是「**看一段、拖着看**」而不是"看缩略图"。
  *
  * ## 三个必须按顺序做的事（顺序是承重的，别调）
  *
@@ -27,6 +30,11 @@
  *    而不是家族品牌色 —— 两者写的是同一组 `semantic.chrome` token，后写的赢。
  *
  * 另外：`fit(cssW, cssH)` 里必须**先量尺寸、再设视口**，因为初始视口是按画布尺寸居中算的。
+ *
+ * ## "画布"与"可视区"是两个数
+ *
+ * 画布铺满视口，而对话面板浮在右边缘上压住一块 —— 见 `DiagramRegion`。
+ * 视口相关的算法（居中 / 适配 / 缩放锚点）一律按**可视区**算，不按画布算。
  */
 import { ICE, ICERect } from 'ice-render';
 import { WaterProcessDesigner, WATER_SYMBOL_PRESETS } from 'ice-entity-designer';
@@ -42,8 +50,8 @@ export interface DiagramLayerOptions {
   /**
    * 显式指定初始缩放，**覆盖**默认的"适配 focus 框"算法。
    *
-   * 一般不用给：默认算法会把 DSL 里 `viewport.focus` 那一段刚好放进卡片（留 `padding`），
-   * 于是"先看哪儿"由数据决定、缩放到"刚好放得下"为止，随卡片宽度自适应。
+   * 一般不用给：默认算法会把 DSL 里 `viewport.focus` 那一段刚好放进画布（留 `padding`），
+   * 于是"先看哪儿"由数据决定、缩放到"刚好放得下"为止，随画布宽度自适应。
    */
   initialScale?: number;
   minScale?: number;
@@ -56,6 +64,29 @@ export interface DiagramLayerOptions {
    * 下限有 `minScale`、上限有它。没有它的话一张两个单元的小图会被放到 3 倍。
    */
   maxInitialScale?: number;
+}
+
+/**
+ * 画布上**真正给用户看**的那块区域（CSS 像素，相对画布左上角）。
+ *
+ * ## 为什么画布要跟"可视区"分开
+ *
+ * 布局反转之前，图卡是消息流里的一张卡：画布多大，可视区就多大，两者是同一个数。
+ * 现在绘图区**铺满视口**、对话面板**浮在它右边缘上**（`position:fixed`），
+ * 于是画布宽 1440、而没被面板压住的只有前 1048 —— 两者不再相等。
+ *
+ * 分开之后语义很干净：
+ * - 画布尺寸决定"渲染多少像素"（铺满，完全不透明）；
+ * - 可视区决定"内容摆在哪、能动多大"（居中 / 适配 / 缩放锚点全按它算）。
+ *
+ * 不分的代价是实打实的：按整幅 1440 居中的话，图的正中间落在面板底下，
+ * 右边三分之一被白白浪费 —— 而那正是最该看清的主流程后半段。
+ */
+export interface DiagramRegion {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
 /**
@@ -136,6 +167,13 @@ export class DiagramLayer {
   private viewportReady = false;
   private cssWidth = 0;
   private cssHeight = 0;
+  /**
+   * 可视区（画布上没被浮动面板压住的那块）。`null` = 整块画布。
+   *
+   * 只在 `StageView` 明确设置了不同区域时才有值 —— 单独用这一层（比如单测里）
+   * 不用关心它。见 `DiagramRegion` 的注释。
+   */
+  private region: DiagramRegion | null = null;
 
   /** 当前高亮的单元 id。 */
   private highlightedId: string | null = null;
@@ -225,6 +263,48 @@ export class DiagramLayer {
   }
 
   /**
+   * 设定可视区（画布不变）。传 `null` 恢复"整块画布"。
+   *
+   * @returns 区域是否**真的变了**。调用方据此决定要不要重摆视野 ——
+   *          没变还重摆的话，用户拖到的位置会被每次 resize 冲掉。
+   */
+  setRegion(region: DiagramRegion | null): boolean {
+    const next = region
+      ? {
+          left: Math.max(0, region.left),
+          top: Math.max(0, region.top),
+          width: Math.max(1, region.width),
+          height: Math.max(1, region.height),
+        }
+      : null;
+    const prev = this.region;
+    const same =
+      (!prev && !next) ||
+      (!!prev &&
+        !!next &&
+        prev.left === next.left &&
+        prev.top === next.top &&
+        prev.width === next.width &&
+        prev.height === next.height);
+    if (same) return false;
+    this.region = next;
+    return true;
+  }
+
+  /**
+   * 按当前尺寸与可视区**重新摆一次初始视野**（同步，不补间）。
+   *
+   * 与 `zoomBy({direction:'reset'})` 的区别是"要不要动画"：那个是用户主动按的复位，
+   * 给一段 220ms 的过渡更自然；这个是**布局变了**（面板折叠、窗口 resize），
+   * 跟着变才不显得脱节 —— 而且 e2e 能立刻断言，不用等动画。
+   */
+  reframe(): void {
+    this.__cancelZoom();
+    if (!this.viewportReady || this.cssWidth <= 0 || this.cssHeight <= 0) return;
+    this.__applyInitialViewport();
+  }
+
+  /**
    * 工艺校验（引擎的 `validateWater()`：位号唯一、单元要有进出线、管线要标介质与管径、
    * 出水路径必须有在线监测、剩余污泥要有出路、AAO 要有内回流…）。
    *
@@ -257,6 +337,8 @@ export class DiagramLayer {
     ty: number;
     cssWidth: number;
     cssHeight: number;
+    /** 可视区（画布上没被浮动面板压住的那块）。等于画布时也是显式的，方便断言。 */
+    region: DiagramRegion;
     /** 内容（全部图元）的屏幕范围，已应用视口变换 */
     screenBox: { left: number; top: number; right: number; bottom: number } | null;
     /** 全部图元的世界坐标包围盒 */
@@ -276,6 +358,7 @@ export class DiagramLayer {
       ty,
       cssWidth: this.cssWidth,
       cssHeight: this.cssHeight,
+      region: this.__region(),
       screenBox: box
         ? {
             left: box.minX * scale + tx,
@@ -363,12 +446,12 @@ export class DiagramLayer {
       const wanted = current.scale * Math.pow(base, steps);
       const scale = Math.max(this.options.minScale, Math.min(this.options.maxScale, wanted));
       if (Math.abs(scale - current.scale) < 1e-6) return true; // 已经到头了：不算失败，但也没必要动
-      // 锚点 = 画布中心：让"当前在中心的世界点"缩放后仍在中心。
+      // 锚点 = 可视区中心：让"当前在中心的世界点"缩放后仍在中心。
       // 与 `ICE.zoomAt()` 同口径（它反解平移保锚点），只是锚点固定在中心而不是光标处。
       next = {
         scale,
-        tx: this.cssWidth / 2 - this.__worldAtCenterX(current) * scale,
-        ty: this.cssHeight / 2 - this.__worldAtCenterY(current) * scale,
+        tx: this.__regionCx() - this.__worldAtCenterX(current) * scale,
+        ty: this.__regionCy() - this.__worldAtCenterY(current) * scale,
       };
     }
 
@@ -424,20 +507,35 @@ export class DiagramLayer {
     };
   }
 
-  /** 视口下"画布中心"对应的世界坐标（锚点反解用）。`screen = world × scale + t`。 */
-  private __worldAtCenterX(v: { scale: number; tx: number }): number {
-    return (this.cssWidth / 2 - v.tx) / v.scale;
-  }
-  private __worldAtCenterY(v: { scale: number; ty: number }): number {
-    return (this.cssHeight / 2 - v.ty) / v.scale;
+  /** 可视区。没显式设过就是整块画布。 */
+  private __region(): DiagramRegion {
+    return this.region ?? { left: 0, top: 0, width: this.cssWidth, height: this.cssHeight };
   }
 
-  /** 把某块世界坐标居中到画布上（给定 scale）。 */
+  /** 可视区的中心（视口相关算法的锚点都用它，而不是画布中心）。 */
+  private __regionCx(): number {
+    const r = this.__region();
+    return r.left + r.width / 2;
+  }
+  private __regionCy(): number {
+    const r = this.__region();
+    return r.top + r.height / 2;
+  }
+
+  /** 视口下"可视区中心"对应的世界坐标（锚点反解用）。`screen = world × scale + t`。 */
+  private __worldAtCenterX(v: { scale: number; tx: number }): number {
+    return (this.__regionCx() - v.tx) / v.scale;
+  }
+  private __worldAtCenterY(v: { scale: number; ty: number }): number {
+    return (this.__regionCy() - v.ty) / v.scale;
+  }
+
+  /** 把某块世界坐标居中到可视区上（给定 scale）。 */
   private __centerTx(box: { minX: number; maxX: number }, scale: number): number {
-    return this.cssWidth / 2 - ((box.minX + box.maxX) / 2) * scale;
+    return this.__regionCx() - ((box.minX + box.maxX) / 2) * scale;
   }
   private __centerTy(box: { minY: number; maxY: number }, scale: number): number {
-    return this.cssHeight / 2 - ((box.minY + box.maxY) / 2) * scale;
+    return this.__regionCy() - ((box.minY + box.maxY) / 2) * scale;
   }
 
   /**
@@ -541,33 +639,35 @@ export class DiagramLayer {
     const box = this.__focusBox();
     if (!box) return;
     const scale = this.__initialScaleFor(box);
+    const r = this.__region();
     this.ice.setViewport(
       scale,
-      (this.cssWidth - (box.minX + box.maxX) * scale) / 2,
-      (this.cssHeight - (box.minY + box.maxY) * scale) / 2
+      r.left + (r.width - (box.minX + box.maxX) * scale) / 2,
+      r.top + (r.height - (box.minY + box.maxY) * scale) / 2
     );
   }
 
   /**
-   * 初始缩放：把**要框住的那块**刚好放进卡片（四周留 `padding`），并夹在允许范围内。
+   * 初始缩放：把**要框住的那块**刚好放进可视区（四周留 `padding`），并夹在允许范围内。
    *
    * 为什么是"框住 focus 框"而不是"框住整图"：
-   * 这张图的世界宽约 1460，而卡片只有 ~872 —— 整图适配得到 ~0.55 但那是**因为**
+   * 这张图的世界宽约 1460，而可视区只有 ~1050 —— 整图适配得到 ~0.7 但那是**因为**
    * 图上有一大块（事故池支路、污泥线、除臭）并不在主流程线上；
    * 而 DSL 已经用 `viewport.focus` 明确说了"先看主流程"，那就按它算。
    *
    * 为什么还要 `maxInitialScale`：小图（比如两个单元）按"刚好放得下"会放大到几倍，
    * 位号文字糊成一片。图上限 1 倍，够用又不失真。
    *
-   * 两个轴都算、取小的那个 —— 只按宽算的话，一张比卡片还高的图会纵向被裁掉。
+   * 两个轴都算、取小的那个 —— 只按宽算的话，一张比可视区还高的图会纵向被裁掉。
    */
   private __initialScaleFor(box: { minX: number; minY: number; maxX: number; maxY: number }): number {
     if (this.options.initialScale !== undefined) {
       return this.options.initialScale;
     }
     const pad = this.options.padding;
-    const availableW = Math.max(1, this.cssWidth - pad * 2);
-    const availableH = Math.max(1, this.cssHeight - pad * 2);
+    const r = this.__region();
+    const availableW = Math.max(1, r.width - pad * 2);
+    const availableH = Math.max(1, r.height - pad * 2);
     const contentW = Math.max(1, box.maxX - box.minX);
     const contentH = Math.max(1, box.maxY - box.minY);
     const fit = Math.min(availableW / contentW, availableH / contentH);
@@ -617,7 +717,7 @@ export class DiagramLayer {
     return { minX: box.tl[0], minY: box.tl[1], maxX: box.br[0], maxY: box.br[1] };
   }
 
-  /** 把某个单元移到视野中央（只在尺寸已知时有效）。 */
+  /** 把某个单元移到可视区中央（只在尺寸已知时有效）。 */
   private __centerOn(node: any): void {
     if (!this.cssWidth || !this.cssHeight) return;
     const box = this.__boxOf(node);
@@ -625,7 +725,7 @@ export class DiagramLayer {
     const scale = Number(this.ice.viewport?.scale) || this.options.initialScale;
     const cx = (box.minX + box.maxX) / 2;
     const cy = (box.minY + box.maxY) / 2;
-    this.ice.setViewport(scale, this.cssWidth / 2 - cx * scale, this.cssHeight / 2 - cy * scale);
+    this.ice.setViewport(scale, this.__regionCx() - cx * scale, this.__regionCy() - cy * scale);
   }
 
   /** 按业务 id 或位号找单元。 */

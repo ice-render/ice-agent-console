@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { collectErrors, countInk, FORM_CANVAS, settleAfter } from './helpers';
+import { collectErrors, countInk, FORM_CANVAS, readStage, settleAfter } from './helpers';
 
 /**
  * **第二批控件的原型页。**
@@ -30,7 +30,7 @@ test('10 个字段全部上画布，色板有色、占位文案有字', async ({
   const errors = collectErrors(page);
   const after = await openShowcase(page);
 
-  // ---- 卡片真的是表单卡，且 10 个字段都在 ----
+  // ---- 真的切到了表单图层，且 10 个字段都在 ----
   const tool = (after.items.filter((i) => i.kind === 'tool') as any[])[0];
   expect(tool.name).toBe('collect_input');
   expect(tool.dsl.kind).toBe('form');
@@ -48,6 +48,7 @@ test('10 个字段全部上画布，色板有色、占位文案有字', async ({
   ]);
 
   await expect(page.locator(FORM_CANVAS)).toBeVisible();
+  expect((await readStage(page)).active, '绘图区应当切到表单层').toBe('form');
   expect(await countInk(page, FORM_CANVAS)).toBeGreaterThan(10000);
 
   // ---- ① 色板真的有色 ----
@@ -55,7 +56,7 @@ test('10 个字段全部上画布，色板有色、占位文案有字', async ({
   // 那个 bug 的回归：传 `{value,label}` 对象时色块**全是白的**，这里会数到 0~1 种色相。
   // 合法值有 8 个颜色，所以要求至少 5 种不同的饱和色。
   const hues = await page.evaluate(() => {
-    const canvas = document.querySelector('.card .form-wrap canvas') as HTMLCanvasElement;
+    const canvas = document.querySelector('.stage-layer[data-kind=\"form\"] canvas') as HTMLCanvasElement;
     const ctx = canvas.getContext('2d')!;
     const scale = canvas.width / canvas.getBoundingClientRect().width;
     // 色板是第一个字段，色块在 y ≈ 60~200（CSS 像素）那一条
@@ -99,7 +100,7 @@ test('10 个字段全部上画布，色板有色、占位文案有字', async ({
 
   // ---- 内容宽度仍然停在 640 上限，没溢出画布 ----
   const bounds = await page.evaluate(() => {
-    const canvas = document.querySelector('.card .form-wrap canvas') as HTMLCanvasElement;
+    const canvas = document.querySelector('.stage-layer[data-kind=\"form\"] canvas') as HTMLCanvasElement;
     const ctx = canvas.getContext('2d')!;
     const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
     let maxX = -1;

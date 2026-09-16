@@ -15,7 +15,7 @@ import {
   STATE_DIAGRAM_KEY,
   STATE_FORM_KEY,
 } from '../../shared/contract';
-import { WATER_PROCESS_DSL } from './water-process-case';
+import { WATER_PROCESS_DSL } from '../../shared/water-process-case';
 import type { ToolCardPlan } from './dsl-to-events';
 
 /** 一张表 + encoding，这就是 ice-chart-dsl 想要的形态。 */

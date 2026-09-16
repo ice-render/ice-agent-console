@@ -136,10 +136,21 @@ const LOCAL_TOKENS: Record<ThemeName, Record<string, string>> = {
     // 半成品 DSL 的代码块：浅色页面上故意用深底（第一版就是这么定的，保留）
     '--code-bg': '#0F172A',
     '--code-fg': '#B6E3F5',
+    // 浮层：对话面板 / 控件条 / 表单压在"画着图的那一层"上，必须跟它能分开。
+    // token 表里没有"浮层"这个概念，所以在这里显式按主题给：
+    // 亮色主题的 `surface` 与 `elevated` 都是纯白，直接拿来当浮层底会跟绘图区糊在一起，
+    // 只能靠边框 + 阴影拉开 —— 这两行就是那份差值。
+    '--overlay-bg': '#FFFFFF',
+    '--overlay-line': '#D5DBE1',
+    '--overlay-shadow': '0 8px 28px rgba(15, 23, 42, 0.16)',
   },
   dark: {
     '--code-bg': '#101418',
     '--code-fg': '#9FDCF2',
+    // 深底上反过来：浮层要**比绘图区亮一档**才浮得起来，阴影反而几乎不可见（深底没影子）
+    '--overlay-bg': '#1B2027',
+    '--overlay-line': '#2C333C',
+    '--overlay-shadow': '0 8px 28px rgba(0, 0, 0, 0.5)',
   },
 };
 

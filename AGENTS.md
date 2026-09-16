@@ -2,7 +2,10 @@
 
 这个工程把 **ICE 家族**（`ice-render` / `@damoqiongqiu/ice-chart` / `@damoqiongqiu/ice-chart-dsl` /
 `ice-web-components` / `ice-web-components-dsl` / `ice-entity-designer`）
-接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表 / 图 / 表单以卡片形式内联在对话时间线里。
+接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布。
+
+**界面是反过来的**：绘图区是整页的主体（铺满视口、开页就画着工艺图），
+对话是浮在它右边缘上的一块面板。切换界面 = 在绘图区里**换图层**，不是往消息流里插卡片。
 
 改之前请先读 `README.md`（架构与边界）和 `docs/upstream-gaps.md`（对上游的观察）。
 
@@ -18,14 +21,23 @@
    用 `validateChartDsl → compileChartDsl → createChart / setOption`，实例只建一次。
 4. **`appendData` 只能用在数值/时间轴。** 它不补 `xAxis.data`，类目轴追加新类目会错位。
    判不了就走全量 `setOption`（判断逻辑在 `src/domain/ice/option-mapping.ts`）。
-5. **卡片按 tool 名分派，三种形态互斥。** `render_chart` → 图表卡（`.chart-wrap` +
-   `.widget-wrap` 两块画布）；`collect_input` → 表单卡（`.form-wrap` 一块）；
-   `render_diagram` → 图卡（`.diagram-wrap` 一块，由 `ice-entity-designer` 绘制）。
-   写选择器时**必须指明是哪一块**，并在断言"显示的是哪种形态"时用**可见性**而不是计数 ——
-   卡片骨架在构造时就**把所有** wrapper 与 canvas 都建好了，`hidden` 的那些也在 DOM 里，
-   数元素个数会永远通过、等于没测
+5. **绘图区按 tool 名切图层，三种形态互斥。** `render_diagram` → diagram 图层
+   （一块画布，`ice-entity-designer` 绘制）；`render_chart` → chart 图层
+   （**两块**画布：图表 + 控件条，`ice-chart` + `ice-web-components`）；
+   `collect_input` → form 图层（一块，`ice-web-components-dsl`）。
+   写选择器时**必须用 `[data-kind=…]` 指明是哪一层**，不要靠 DOM 顺序
    （`e2e/helpers.ts` 的 `CHART_CANVAS` / `WIDGET_CANVAS` / `FORM_CANVAS` / `DIAGRAM_CANVAS`）。
-   层之间是**并排**的，不需要 `linkViewport` / `setInputPassthrough`。
+   **diagram 图层永不销毁** —— 它是主视图，开页就建好，"切走再切回来不重画"是需求点名的；
+   chart / form 是按需图层，被顶掉即**销毁**（不叠着留）。
+   断言"有没有重画"用 `__iceAgentConsole.stageInfo().builds`，那是这件事的直接读数。
+   图层之间是**并排**的（同一时刻只显示一个），不需要 `linkViewport` / `setInputPassthrough`。
+5c. **浮在画布上的 DOM 面板必须 `stopPropagation`。** 引擎在 `window` 上装了**全局**事件
+   拦截器（`DOMEventInterceptor`），把所有指针 / 滚轮事件**广播给每一个 ICE 实例**，
+   唯一的过滤是"事件目标是不是另一块 **canvas**"。对话面板是个 `<div>`，不在过滤范围内 ——
+   不额外拦一道的话，在面板上滚一下，画布那个实例照样当成一次滚轮缩放。
+   好在拦截器挂的是**冒泡阶段**，所以在面板根上拦一次就行（见 `src/view/chat.ts` 的
+   `SHIELDED_EVENTS`）。**别拦键盘** —— 输入框一直是这样工作的。
+   e2e 有一条正反两面的断言（面板上滚无效 / 画布上滚有效）。
 5a. **画布命令走 CUSTOM，不走 tool call、不进 state。** 目前三条：`ice/point-at`
    （指着讲，`{ value, blink? }`）、`ice/point-clear`、`ice/zoom`
    （缩放视图，`{ direction: 'in'|'out'|'reset', factor?, steps? }`）。
@@ -63,21 +75,24 @@
 | 协议 → ICE 的纯翻译 | `src/domain/ice/option-mapping.ts` |
 | 图 DSL 的校验 / 编译（纯逻辑） | `src/domain/diagram/{types,validate,compile}.ts` |
 | 图 DSL 的结构类型（server 也要用） | `shared/diagram.ts` |
-| 图层（图卡的画布，ice-entity-designer） | `src/view/diagram-layer.ts` |
-| 内置案例：污水处理工艺图（34 单元 / 37 管线） | `server/agents/water-process-case.ts` |
+| **绘图区**（铺满视口 + 图层切换 + 内容比对复用） | `src/view/stage.ts` |
+| 工艺图图层（ice-entity-designer 的画布） | `src/view/diagram-layer.ts` |
+| 内置案例：污水处理工艺图（34 单元 / 37 管线） | `shared/water-process-case.ts` |
 | 层（canvas + ICE 实例）的尺寸与生命周期 | `src/domain/ice/layer.ts` |
 | 图表实例的建立与交互接线 | `src/view/chart-adapter.ts` |
 | 控件层（图表卡的第二块画布，ice-web-components） | `src/view/widget-layer.ts` |
 | 表单层（表单卡的画布，ice-web-components-dsl） | `src/view/form-layer.ts` |
-| 卡片 DOM 与**按 tool 名分派** | `src/view/card.ts` |
+| 对话里的**工具条目**（只有外壳，没有画布） | `src/view/tool-entry.ts` |
 | 中断 / resume 的归约 | `src/domain/agui/reducer.ts` |
-| thread DOM 外壳 | `src/view/thread.ts` |
+| 对话面板 DOM 外壳（含浮层的 stopPropagation） | `src/view/chat.ts` |
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |
 | 自定义事件名 / context 键 | `shared/contract.ts` |
 
 `reducer.ts` 是**纯函数 + effects**：它只描述要做什么，不碰 DOM。碰 canvas 的活在
-`src/entries/boot.ts` 的 `applyEffects` 里。改归约逻辑时保持这个边界，否则归约器就没法单测了。
+`src/entries/boot.ts` 的 `applyEffects` 里（它把 effect **打给 `StageView`**，
+effect 的形状没变、只是落点从"最后一张卡片"换成了"绘图区当前那一层"）。
+改归约逻辑时保持这个边界，否则归约器就没法单测了。
 
 ---
 
@@ -85,8 +100,9 @@
 
 - `EventType` 从 `@ag-ui/core` 取，**不要写字符串字面量**——拼错了会静默丢事件。
 - 事件顺序是**先画后讲**：`TOOL_CALL_* → STATE_SNAPSHOT → 解说 + CUSTOM 指点`。
-  `CUSTOM` 指点的对象是画布，画布得先在。改动顺序前先看 `tests/dsl-to-events.test.ts`。
-- id 必须**跨 run 唯一**（当前是 `前缀_runId_序号`）。撞 id 会让前端拿第二轮的卡片顶掉第一轮的。
+  `CUSTOM` 指点的对象是绘图区**当前那一层**，所以那一层得先在。
+  改动顺序前先看 `tests/dsl-to-events.test.ts`。
+- id 必须**跨 run 唯一**（当前是 `前缀_runId_序号`）。撞 id 会让前端拿第二轮的条目顶掉第一轮的。
 - `state` 存的是**完整状态文档**（`{chart: ...}`），不是拆出来的 chart——
   JSON Patch 的 path 是相对根的。
 - 不认识的事件**丢弃**；不认识的 patch 操作**抛异常**。前者是协议要求的容错，后者是状态分叉。

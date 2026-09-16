@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { clickChartItem, collectErrors, readState, settleAfter, useChip } from './helpers';
+import { CHART_CANVAS, clickChartItem, collectErrors, countInk, readState, readStage, settleAfter, useChip } from './helpers';
 
 /**
  * 往返回路：**用户在图上做的事，变成新一轮 run**。
@@ -42,7 +42,7 @@ test('框选区间触发一轮新 run', async ({ page }) => {
 
   await useChip(page, '看看各渠道的月度销量');
 
-  const canvas = page.locator('.chart-wrap canvas').first();
+  const canvas = page.locator(CHART_CANVAS).first();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 
@@ -71,17 +71,13 @@ test('点击不会破坏已有图表（上行不该有副作用）', async ({ pa
   });
   expect(hit.status).toBe('idle');
 
-  // 图表还在、还是那一张卡片、还在画东西
-  await expect(page.locator('.card')).toHaveCount(1);
+  // 图表还在、还是那一层、还在画东西。
+  // ★ `builds.chart` 不变是这一条的要点：点击是**上行**，它只跑新一轮解析，
+  //   不该在绘图区上新建图层（新建就意味着"点一下重画一次"）。
+  const stage = await readStage(page);
+  expect(stage.active).toBe('chart');
+  expect(stage.builds.chart).toBe(1);
   const state = await readState(page);
   expect(state.sharedState.chart.kind).toBe('bar');
-  const ink = await page.evaluate(() => {
-    const canvas = document.querySelector('.chart-wrap canvas') as HTMLCanvasElement;
-    const ctx = canvas.getContext('2d')!;
-    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    let n = 0;
-    for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) n++;
-    return n;
-  });
-  expect(ink).toBeGreaterThan(1000);
+  expect(await countInk(page, CHART_CANVAS)).toBeGreaterThan(1000);
 });

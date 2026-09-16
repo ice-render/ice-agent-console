@@ -1,13 +1,34 @@
 import { expect, type Page } from '@playwright/test';
 
-/** 归约后的状态形状。只声明 e2e 用得到的字段。 */
 /**
- * 图表那块画布。卡片里现在有**两块** canvas（图表 + 控件条），
- * 所以选择器必须写清楚指的是哪一块 —— `.card canvas` 虽然也能命中第一块，
- * 但那种"靠 DOM 顺序"的写法一旦有人调整顺序就会静默去量错对象。
+ * 绘图区与对话面板的选择器。
+ *
+ * ⚠️ 布局反转之后，**画布不再在对话里**：绘图区是铺满视口的一块，按**图层种类**分开；
+ * 对话里只剩"工具条目"（`.tool-entry`，纯 DOM，没有画布）。
+ *
+ * 所以三种内容各自的画布要用 `[data-kind=…]` 指名 —— 那句"不要用 `.card canvas`，
+ * 一旦有人调整顺序就会静默量错对象"的教训仍然成立，只是 `data-kind` 比 DOM 顺序稳得多。
  */
-export const CHART_CANVAS = '.card .chart-wrap canvas';
-export const WIDGET_CANVAS = '.card .widget-wrap canvas';
+export const DIAGRAM_CANVAS = '.stage-layer[data-kind="diagram"] canvas';
+export const CHART_CANVAS = '.stage-layer[data-kind="chart"] .stage-chart canvas';
+export const WIDGET_CANVAS = '.stage-layer[data-kind="chart"] .stage-widget canvas';
+export const FORM_CANVAS = '.stage-layer[data-kind="form"] canvas';
+
+/** 对话面板里的工具条目（**没有画布**，只是这次 tool call 的回执）。 */
+export const TOOL_ENTRY = '.tool-entry';
+
+/**
+ * 绘图区事实。`builds` 是"有没有重画"的直接读数 —— 切走再切回来时它必须不变。
+ */
+export interface StageInfo {
+  active: 'diagram' | 'chart' | 'form' | null;
+  layers: string[];
+  builds: Record<string, number>;
+  shows: Record<string, number>;
+  canvasCount: number;
+  size: { width: number; height: number };
+  panelInset: number;
+}
 
 export interface ConsoleState {
   threadId: string;
@@ -24,29 +45,61 @@ export interface ConsoleState {
   eventCount: number;
 }
 
+/** 图表 / 内容写进视口的方式：画布在哪儿、内容画到屏幕哪儿了。 */
+export interface DiagramViewport {
+  scale: number;
+  tx: number;
+  ty: number;
+  cssWidth: number;
+  cssHeight: number;
+  /** 画布上没被对话面板压住的那块（CSS 像素）。 */
+  region: { left: number; top: number; width: number; height: number };
+  screenBox: { left: number; top: number; right: number; bottom: number } | null;
+  contentBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
+  focusBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
+}
+
 export interface ConsoleHandle {
   getState: () => ConsoleState;
   apiUrl: () => string;
-  /** 最后一张图卡的模型层事实（不是图卡时 null）。 */
+  /** 绘图区：当前是哪种图层、各层建过几次、几块画布。 */
+  stageInfo: () => StageInfo;
+  /** 工艺图的模型层事实（没有工艺图图层时 null）。 */
   diagramStats: () => { symbols: number; pipes: number; issues: any[] } | null;
-  /** 最后一张图卡里被「指着讲」高亮的单元 id。 */
+  /** 工艺图里被「指着讲」高亮的单元 id。 */
   diagramPointedId: () => string | null;
-  /** 最后一张图卡的视口与内容屏幕范围。 */
-  diagramViewport: () => {
-    scale: number;
-    tx: number;
-    ty: number;
-    cssWidth: number;
-    cssHeight: number;
-    screenBox: { left: number; top: number; right: number; bottom: number } | null;
-    contentBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
-    focusBox: { minX: number; minY: number; maxX: number; maxY: number } | null;
-  } | null;
+  /** 工艺图的视口与内容屏幕范围。 */
+  diagramViewport: () => DiagramViewport | null;
 }
 
 /** 读应用内部状态。比只看 DOM 强得多——协议层的东西在 DOM 里是看不全的。 */
 export async function readState(page: Page): Promise<ConsoleState> {
   return page.evaluate(() => (window as any).__iceAgentConsole.getState());
+}
+
+/** 读绘图区事实（当前图层 / 各层建过几次 / 几块画布）。 */
+export async function readStage(page: Page): Promise<StageInfo> {
+  return page.evaluate(() => (window as any).__iceAgentConsole.stageInfo());
+}
+
+/**
+ * 等**开页就绪**：绘图区上已经有工艺图，而且 34 个符号都建好了。
+ *
+ * ⚠️ 这里**不能用 `waitSettled`**：那条判据要求 `eventCount` 涨过基线，
+ * 而开页是不跑 run 的 —— 没跟 AI 说过话时 `eventCount` 一直是 0，
+ * 拿它当判据会一直等到超时。（这一条踩过：四条用例整片红在超时上。）
+ */
+export async function waitDiagramReady(page: Page, timeout = 20_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const api = (window as any).__iceAgentConsole;
+      const info = api.stageInfo();
+      const stats = api.diagramStats();
+      return info.active === 'diagram' && !!stats && stats.symbols > 0;
+    },
+    undefined,
+    { timeout }
+  );
 }
 
 /**
@@ -209,7 +262,7 @@ export async function clickChartItem(page: Page, selector = CHART_CANVAS): Promi
 }
 
 /**
- * 点卡片控件条上的某个按钮（按 actionId）。
+ * 点绘图区底部控件条上的某个按钮（按 actionId）。
  *
  * 控件是 canvas 画的，**没有 DOM 目标可以点**，所以从应用挂出来的矩形查询里定位。
  * 矩形是画布内的 CSS 像素偏移，而引擎的坐标语义就是 CSS 像素，所以直接相加即可。
@@ -219,7 +272,7 @@ export async function clickWidgetAction(page: Page, actionId: string): Promise<v
     const rects = (window as any).__iceAgentConsole.widgetRects();
     const hit = rects.find((r: any) => r.id === id);
     if (!hit) return null;
-    const canvas = document.querySelector('.card .widget-wrap canvas') as HTMLCanvasElement | null;
+    const canvas = document.querySelector('.stage-layer[data-kind="chart"] .stage-widget canvas') as HTMLCanvasElement | null;
     if (!canvas) return null;
     const box = canvas.getBoundingClientRect();
     return {
@@ -232,11 +285,27 @@ export async function clickWidgetAction(page: Page, actionId: string): Promise<v
   await page.mouse.click(point.x, point.y);
 }
 
-/** 统计卡片里的画布数量与各自的着墨量。图表与控件是两张画布，分开数。 */
-export async function cardCanvasStats(page: Page): Promise<{
-  count: number;
-  chart: { width: number; height: number; ink: number } | null;
-  widget: { width: number; height: number; ink: number } | null;
+/** 一块画布的尺寸与着墨量。 */
+export interface CanvasStat {
+  width: number;
+  height: number;
+  ink: number;
+}
+
+/**
+ * 绘图区**当前显示的那一层**有几块画布、各自多大、着墨多少。
+ *
+ * 旧版是 `cardCanvasStats()`：数一张卡片里的画布。那个概念没有了 ——
+ * 画布现在按图层分（图表层两块：图表 + 控件条），而且非活动层会被收掉，
+ * 所以这里按 `[data-kind]` 分别问。
+ */
+export async function stageStats(page: Page): Promise<{
+  layers: number;
+  canvases: number;
+  diagram: CanvasStat | null;
+  chart: CanvasStat | null;
+  widget: CanvasStat | null;
+  form: CanvasStat | null;
 }> {
   return page.evaluate(() => {
     const ink = (canvas: HTMLCanvasElement | null) => {
@@ -248,30 +317,36 @@ export async function cardCanvasStats(page: Page): Promise<{
       for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) n++;
       return n;
     };
-    const size = (canvas: HTMLCanvasElement | null) =>
-      canvas ? { width: canvas.width, height: canvas.height, ink: ink(canvas) } : null;
-
-    const card = document.querySelector('.card');
-    return {
-      count: card ? card.querySelectorAll('canvas').length : 0,
-      chart: size(card?.querySelector('.chart-wrap canvas') as HTMLCanvasElement | null),
-      widget: size(card?.querySelector('.widget-wrap canvas') as HTMLCanvasElement | null),
+    const stat = (sel: string): CanvasStat | null => {
+      const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+      return canvas ? { width: canvas.width, height: canvas.height, ink: ink(canvas) } : null;
     };
-  });
+    const stage = document.querySelector('#stage');
+    return {
+      layers: stage ? stage.querySelectorAll('.stage-layer').length : 0,
+      canvases: stage ? stage.querySelectorAll('canvas').length : 0,
+      diagram: stat('.stage-layer[data-kind="diagram"] canvas'),
+      chart: stat('.stage-layer[data-kind="chart"] .stage-chart canvas'),
+      widget: stat('.stage-layer[data-kind="chart"] .stage-widget canvas'),
+      form: stat('.stage-layer[data-kind="form"] canvas'),
+    };
+  }) as Promise<{
+    layers: number;
+    canvases: number;
+    diagram: CanvasStat | null;
+    chart: CanvasStat | null;
+    widget: CanvasStat | null;
+    form: CanvasStat | null;
+  }>;
 }
 
-/** 表单卡的画布。表单与图表**互斥**，同一次 tool call 只会出现其中之一。 */
-export const FORM_CANVAS = '.card .form-wrap canvas';
-
 /**
- * 工艺图那块画布（第三块，`render_diagram` 卡片）。
+ * 工艺图那块画布（历史名字保留：`DIAGRAM_CANVAS` 的简写）。
  *
- * 与 `CHART_CANVAS` / `FORM_CANVAS` 并列：选择器指名具体层，
- * **不要**用 `.card canvas` —— 卡片里现在有三块 canvas，靠 DOM 顺序命中
- * 一旦有人调整顺序就会静默量错对象。
+ * 与 `CHART_CANVAS` / `FORM_CANVAS` 并列：选择器指名**图层**，
+ * **不要**写 `#stage canvas` —— 绘图区里可能有不止一块画布（图表层就有两块），
+ * 靠 DOM 顺序命中一旦有人调整顺序就会静默量错对象。
  */
-export const DIAGRAM_CANVAS = '.card .diagram-wrap canvas';
-
 /**
  * 画布上**着墨部分的包围盒**（CSS 像素），以及它占画布的比例。
  *
@@ -332,13 +407,67 @@ export async function clickFormSubmit(page: Page): Promise<void> {
   await page.mouse.click(point.x, point.y);
 }
 
-/** 往最后一张表单卡里写值。canvas 表单没法用 DOM 填。 */
+/** 往表单里写值。canvas 表单没法用 DOM 填。 */
 export async function fillForm(page: Page, values: Record<string, any>): Promise<void> {
   const ok = await page.evaluate((v) => (window as any).__iceAgentConsole.fillForm(v), values);
-  if (!ok) throw new Error('没有找到表单卡');
+  if (!ok) throw new Error('绘图区上现在不是表单图层');
 }
 
-/** 读最后一张卡片的表单诊断（`#diag` 那个列表是 DOM，不是 canvas）。 */
+/** 读表单诊断（`.diag` 那个列表是 DOM，不是 canvas）。 */
 export async function formDiagnostics(page: Page): Promise<string[]> {
-  return page.locator('.card .diag li').allInnerTexts();
+  return page.locator(`${TOOL_ENTRY} .diag li`).allInnerTexts();
+}
+
+/**
+ * 对话面板的几何。
+ *
+ * 布局反转之后"面板浮在绘图区上"这件事本身是**有风险**的（面板会压住画布、
+ * 也可能挡住按坐标点的测试），所以它得能被断言：返回面板矩形、视口尺寸，
+ * 以及"绘图区中心点有没有被面板盖住"。
+ */
+export async function panelGeometry(page: Page): Promise<{
+  panel: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number };
+  /** 面板左边缘的 x —— 面板左边往左都是"没被压住的绘图区" */
+  coveredFromX: number;
+  /** 绘图区中心那个点当前落在哪个元素上（应当**不是** canvas 就是没被压住） */
+  centerElement: string | null;
+  collapsed: boolean;
+}> {
+  return page.evaluate(() => {
+    const chat = document.querySelector('#chat') as HTMLElement;
+    const r = chat.getBoundingClientRect();
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    const el = document.elementFromPoint(cx, cy);
+    return {
+      panel: { x: r.left, y: r.top, width: r.width, height: r.height },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      coveredFromX: r.left,
+      centerElement: el ? `${el.tagName}.${(el as HTMLElement).className}` : null,
+      collapsed: chat.dataset.collapsed === 'true',
+    };
+  });
+}
+
+/** 在对话面板上滚一下 —— 用来验证画布的全局事件拦截器没被误触发。 */
+export async function wheelOnPanel(page: Page, deltaY = -400): Promise<void> {
+  const box = (await page.locator('#chat').boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, deltaY);
+}
+
+/** 折叠 / 展开对话面板，并等绘图区把尺寸与视野重新摆好。 */
+export async function togglePanel(page: Page, collapsed: boolean): Promise<void> {
+  const before = await readStage(page);
+  if (collapsed) await page.locator('#chat-collapse').click();
+  else await page.locator('#chat-toggle').click();
+  // `syncPanelInset()` 是同步的，但 ResizeObserver 的派发与引擎的重绘要等一拍。
+  // 判据用"面板遮盖宽度真的变了"，比死等一个毫秒数稳。
+  await page.waitForFunction(
+    (prev) => (window as any).__iceAgentConsole.stageInfo().panelInset !== prev,
+    before.panelInset,
+    { timeout: 5_000 }
+  );
+  await page.waitForTimeout(120);
 }

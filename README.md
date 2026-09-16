@@ -1,6 +1,9 @@
 # ice-agent-console
 
-把 **ICE 家族**接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布，图表 / 图 / 表单以卡片形式**内联在对话时间线里**。
+把 **ICE 家族**接到 **AG-UI 协议**上：Agent 的事件流驱动 ICE 画布。
+
+**绘图区是整页的主体**，开页就画着那张污水处理工艺图；对话是**浮在它右边缘上**的一块面板。
+切换界面 = 在绘图区里**换图层**，不是往消息流里插卡片。
 
 ![主界面](docs/images/hero.png)
 
@@ -15,13 +18,18 @@
 也不需要分辨。换模型只动一个文件（`server/agents/llm.ts`）。
 
 ```
-┌─────────────┐   POST /agui (RunAgentInput)   ┌──────────────────────┐
-│  浏览器      │ ─────────────────────────────► │  AG-UI endpoint      │
-│             │                                │  (node:http)         │
-│  DOM thread │ ◄───── SSE 事件流 ──────────── │  ScriptedAgent /     │
-│  + canvas   │                                │  LlmAgent            │
-└─────────────┘                                └──────────────────────┘
-   ICE 负责卡片里的图与表单                    ↑ OpenAI 兼容接口（可选）
+┌──────────────────────────────┐                ┌──────────────────────┐
+│  浏览器                       │  POST /agui    │  AG-UI endpoint      │
+│                              │  (RunAgentInput)│  (node:http)        │
+│  ┌────────────────────────┐  │ ──────────────►│                      │
+│  │ #stage  绘图区（铺满）   │  │                │  ScriptedAgent /     │
+│  │   ↑ ICE 在这里画         │  │ ◄── SSE 事件流 ─│  LlmAgent            │
+│  └────────────────────────┘  │                └──────────────────────┘
+│  ┌──────────┐                │                        ↑ OpenAI 兼容接口（可选）
+│  │ #chat    │ 浮在右边缘      │
+│  │ 对话面板  │ （真 DOM）      │
+│  └──────────┘                │
+└──────────────────────────────┘
 ```
 
 ---
@@ -35,7 +43,7 @@
 # 在 ice-render/ 目录下
 ls ice-render/dist/index.cjs ice-chart/dist/index.cjs ice-chart-dsl/dist/index.cjs \
    ice-web-components/dist/index.cjs ice-web-components-dsl/dist/index.cjs \
-   ice-entity-designer/dist/index.cjs   # 都应在（图卡用 ice-entity-designer）
+   ice-entity-designer/dist/index.cjs   # 都应在（工艺图用 ice-entity-designer）
 
 cd ice-agent-console
 npm install
@@ -48,22 +56,24 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 
 | 按钮 | 演示什么 | 截图 |
 |---|---|---|
-| **看看污水处理工艺图** | **图卡**（第三种卡片）：`ice-entity-designer` 画的 34 单元 / 37 管线工艺流程，可缩放平移、能被「指着讲」 | [工艺图](docs/images/water-process.png) |
-| 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 上画布 → **指着 3 月讲** | 头图 |
-| 要下发指令 | **人机回环**：中断 → 出表单卡 → 填完提交 → 带 `resume` 开新 run | [表单卡](docs/images/form-card.png) |
+| **看看污水处理工艺图** | 把工艺图**切回**绘图区。它开页就在，这一条只是又"显示"了一次 —— **不重画** | [工艺图](docs/images/water-process.png) |
+| 看看各渠道的月度销量 | 主链路：文字流式 → 参数流式拼装 → 绘图区切到图表 → **指着 3 月讲** | [图表](docs/images/chart.png) |
+| 要下发指令 | **人机回环**：中断 → 绘图区切成表单 → 填完提交 → 带 `resume` 开新 run | [表单卡](docs/images/form-card.png) |
 | 看看新控件都能用吗 | **控件原型页**：一张表单里放 10 个字段，覆盖 DSL 0.3.0 的 20 个字段类型 | [新控件](docs/images/showcase.png) |
 | 看一下实时吞吐量 | `STATE_DELTA` → `appendData` 快路径，同一张图逐拍长数据 | [流式追加](docs/images/streaming.png) |
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 | [自修复](docs/images/self-repair.png) |
-| 故意画错工艺图 | 同一条回路，但**吐回同一种卡片**：图 DSL 写错 → 修出来的还是图 | — |
+| 故意画错工艺图 | 同一条回路，但**吐回同一种图层**：图 DSL 写错 → 修出来的还是图 | — |
 | **把工艺图放大** | **AI 下命令缩放视图**：相对叠加（放大→再放大→缩小→复位），平滑补间 | — |
 | **让图元闪烁** | **AI 下命令图元闪烁**：`point_at` 带 `blink`，依次点出三个池子并各闪几下 | — |
-| 今天天气怎么样 | 兜底：不画图，只回文字 | — |
+| 今天天气怎么样 | 兜底：不画图，只回文字（**绘图区保持原样**，不是清空） | — |
 
 **也可以在图上直接操作**：
 
 - 点柱子、或框选一段区间 → 触发新一轮 run，你的操作作为结构化上下文上报
-- 卡片底部那条**控件栏**（`ice-web-components` 画在另一张画布上）：
+- 绘图区**底部那条控件栏**（`ice-web-components` 画在另一张画布上）：
   「解释这张图」/「换个画法」/「看实时数据」 —— 同样走 AG-UI 上行
+- 工艺图上滚轮缩放、空白处拖拽平移（那是"看图"的手段，不改数据）
+- 面板右上角 **›** 收起对话 → 绘图区立刻占满整个视口
 
 ```bash
 npm run serve        # 只跑静态产物（仍需后端在跑）
@@ -147,17 +157,19 @@ ice-agent-console · 大模型配置自检
 
 ### 1.2 模型模式下它会怎么做
 
-工具一共三个，都在 `server/agents/tools.ts`：
+工具一共五个，都在 `server/agents/tools.ts`：
 
 | 工具 | 干什么 |
 |---|---|
-| `render_chart` | 把数据画成图表卡（`ice-chart`） |
-| `render_diagram` | 把**图**画成图卡：kind-first 的图 DSL，目前一种 kind = `water-process`（给排水工艺流程图，`ice-entity-designer`） |
+| `render_chart` | 把数据画成图表，切到 chart 图层（`ice-chart`） |
+| `render_diagram` | 把**图**切到 diagram 图层：kind-first 的图 DSL，目前一种 kind = `water-process`（给排水工艺流程图，`ice-entity-designer`） |
 | `collect_input` | **渲染成可填的表单，并让这一轮停下来等提交** —— 在协议里这就是一次中断 |
-| `point_at` | 画完之后指着某个地方讲（图表：`xValue` 是 x 刻度；工艺图：`xValue` 是单元 id 或位号，如 `ana` / `AE-101`） |
+| `point_at` | 画完之后指着某个地方讲（图表：`xValue` 是 x 刻度；工艺图：`xValue` 是单元 id 或位号，如 `ana` / `AE-101`），可带 `blink` |
+| `zoom_view` | 缩放视图（工艺图专用）：`direction: 'in' \| 'out' \| 'reset'` |
 
-一次 run 里**调两次模型**：第一次让它选工具；把工具结果回灌之后再调第二次，拿"画完之后的那句话"。
-这是为了对齐剧本里的卡片形态（`先说一句 → 卡片 → 再讲一句`），也是真实 agent 循环的形状。
+一次 run 里**调两次模型**：第一次让它选工具；把工具结果回灌之后再调第二次，拿"画完之后的那句话"
+（第二次只带 `point_at` / `zoom_view` 这两个"图上动作"工具 —— 不许在讲的时候又画一张）。
+这是为了对齐剧本里的节奏（`先说一句 → 切图层 → 再讲一句`），也是真实 agent 循环的形状。
 
 > **工具 schema 故意写得不等穷尽。** 表单 DSL 的完整约束有 38 个错误码，
 > 全塞进 schema 既贵又没用 —— 值语义（"默认值必须在 options 里"）本来就不是 JSON Schema 能表达的。
@@ -176,14 +188,17 @@ ice-agent-console · 大模型配置自检
 
 五条回路，都是这个工程存在的理由：
 
-![流式追加](docs/images/streaming.png)
+![主界面](docs/images/hero.png)
 
-### 2.0 起点：一张真实的工艺图（不是示意图）
+### 2.0 起点：一张真实的工艺图，而且它**就是页面本身**
 
-第一个按钮画的是**某 10 万 m³/d 市政污水厂的全流程**：
+**开页不需要跟 AI 说任何话**，绘图区上已经是**某 10 万 m³/d 市政污水厂的全流程**：
 AAO + 混凝沉淀 + 滤布滤池 + 消毒，**34 个单元 / 37 段管线**。
 
 ![工艺图](docs/images/water-process.png)
+
+上面是**只有绘图区**的那一份（对话面板收起来了）。把面板展开就是首屏那张 ——
+**图是主体，话浮在上面**。
 
 它不是一张图片，也不是拿几个符号摆出来的示意图：
 
@@ -197,14 +212,37 @@ AAO + 混凝沉淀 + 滤布滤池 + 消毒，**34 个单元 / 37 段管线**。
 选它当第一个例子的原因就是这个覆盖率：它把给排水工艺图这套记号系统**整个跑了一遍**，
 而不是挑几个符号证明"能画"。
 
-**这张图能做的三件事**，也正好是 ICE 家族三层能力的叠加：
+#### 为什么它是"页面本身"而不是一张卡片
 
-1. **画** —— `ice-entity-designer` 的 `WaterProcessDesigner`，由 agent 吐出的一份
+界面曾经是反过来的：对话是主体，图作为一张卡片内联在消息流里。改成现在这样是因为
+那个结构有两个硬伤：
+
+1. **图在消息流里，所以每次都要重画一遍。** 每张卡片是一块新 canvas + 一个新 ICE 实例，
+   34 个符号 + 37 段管线要重建一次 —— 而用户只是在跟 agent 继续聊。
+2. **图和话是两条平行的流。** "把刚才那张图放大"没有"刚才那张图"可指，只能又画一张。
+
+现在的四条规矩（就是这次改动要解决的）：
+
+| 需求 | 落点 |
+|---|---|
+| 一开始就显示工艺图，占满整个页面 | boot 时 `stage.mount('render_diagram', …)`，`#stage` 是 `position:fixed; inset:0` |
+| 消息流与对话框**浮在**页面上 | `#chat` 是 `position:fixed` 的浮层（可折叠，折叠后绘图区占满） |
+| **不重画**，所有动作都作用在已经画好的图上 | 同一份 DSL 再挂一次 → **按内容比对**，只重新显示，一个符号都不重建 |
+| 切别的界面也在同一块绘图区里切 | 绘图区里**换图层**（`diagram` / `chart` / `form`），不是往消息流里插卡片 |
+
+"不重画"这件事在 e2e 里是**可断言**的：`stageInfo().builds` 记着每种图层建过几次 ——
+切到图表再切回工艺图，`builds.diagram` 必须还是 `1`。
+
+#### 这张图能做的三件事
+
+也正好是 ICE 家族三层能力的叠加：
+
+1. **画** —— `ice-entity-designer` 的 `WaterProcessDesigner`，由一份
    **kind-first 图 DSL** 驱动（`{ kind: 'water-process', units, pipes }`）。
-2. **看** —— 图的世界尺寸约 1460×936，而卡片只有 ~872 宽，所以它是**可缩放平移的视口**，
+2. **看** —— 图的世界尺寸约 1460×936，而可视区只有 ~1050 宽，所以它是**可缩放平移的视口**，
    不是缩略图。初始视野按 DSL 里 `viewport.focus` 指定的主流程链适配。
 3. **讲** —— agent 讲解时能把某个单元**移到视野中央并高亮**（`point_at`），
-   与图表卡的「指着讲」走同一条通道（`ice/point-at` 自定义事件）。
+   与图表的「指着讲」走同一条通道（`ice/point-at` 自定义事件）。
 
 一处与"搬图"有关的细节值得点出：这份数据从 `ice-smart-water` 搬过来时，
 **管线端口大多没写**（37 段里有 28 段）。引擎 `createPipe` 的默认端口是 `B → T`（向下绕回），
@@ -213,8 +251,9 @@ AAO + 混凝沉淀 + 滤布滤池 + 消毒，**34 个单元 / 37 段管线**。
 
 #### agent 能在图上下的三种命令
 
-除了"把图画出来"，agent 还能对**已经画出来的图**下达指令。三条都走同一条通道（`CUSTOM` 事件），
-而不是 tool call —— 归约器里写明了判据：
+除了"把图画出来"，agent 还能对**已经画出来的图**下达指令 —— 它们作用在**同一块**绘图区上，
+不新建图层、不改数据。三条都走同一条通道（`CUSTOM` 事件），而不是 tool call ——
+归约器里写明了判据：
 
 > 不走 tool call：它不是一次工具执行，没有参数、没有结果。
 > 不走 state：它是瞬时的演示动作，不是需要恢复的状态。
@@ -237,9 +276,9 @@ AAO + 混凝沉淀 + 滤布滤池 + 消毒，**34 个单元 / 37 段管线**。
 
 ### 2.1 单向：事件流驱动画布
 
-`TOOL_CALL_ARGS` 是**分片流式**的，所以卡片里能看到图表 DSL 一个字一个字拼出来——
+`TOOL_CALL_ARGS` 是**分片流式**的，所以在对话里那条工具条目上能看到图表 DSL 一个字一个字拼出来 ——
 而不是像多数工具调用界面那样只能转个圈。拼完 → `validateChartDsl` → `compileChartDsl`
-→ 挂到画布上。
+→ 切到 chart 图层。
 
 ### 2.2 单向：Agent 指着图讲
 
@@ -279,8 +318,8 @@ Agent 缺参数时**不是反问一句**，而是走协议的中断：
 RUN_FINISHED { outcome: { type: 'interrupt', interrupts: [{ id, reason, message }] } }
 ```
 
-前端据此进入 `waiting`（不是 `idle` —— 用户还没答），并把 `collect_input` 那张 tool call
-渲染成**表单卡**。用户填完点提交：
+前端据此进入 `waiting`（不是 `idle` —— 用户还没答），并把 `collect_input` 那次 tool call
+的产物画成**表单图层**（浮在绘图区中央）。用户填完点提交：
 
 ```
 新一轮 run 的 RunAgentInput.resume = [{ interruptId, status: 'resolved', payload: values }]
@@ -326,73 +365,112 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 |---|---|---|
 | 协议层 | `server/`、`src/domain/agui/` | AG-UI 事件的编解码、归约 |
 | 翻译层 | `server/agents/dsl-to-events.ts`、`src/domain/ice/` | "想画什么" ↔ "事件序列" ↔ "ICE 调用" |
-| 渲染层 | `src/view/` | DOM thread 外壳 + 卡片里的 canvas 层 |
+| 渲染层 | `src/view/` | 浮在画布上的对话面板（DOM） + 绘图区与它的三种图层（canvas） |
 
-### 3.2 一个刻意的分界：DOM 外壳 + canvas 内容
+### 3.2 一个刻意的分界：DOM 管对话，canvas 管绘图区
 
 `ice-web-components` 的立场是 "every pixel drawn by the engine"，但它适合的是
-应用外壳、表单、弹窗这类自成一体的画布界面。Thread 式消息流不行：
+应用外壳、表单、弹窗这类自成一体的画布界面。**对话面板**不行：
 消息要能选中复制、要能走输入法、要有浏览器原生的滚动惯性、要能被屏幕阅读器读。
 
-所以**DOM 管 thread 外壳（消息列表/滚动/输入框/卡片容器），canvas 管卡片内容**。
+所以分界线划在这儿，两半的宿主也是分开的：
+
+| | 谁画 | 为什么 |
+|---|---|---|
+| `#chat`（消息、输入框、工具条目、滚动） | **真 DOM** | 需要选中、输入法、原生滚动、可访问性 |
+| `#stage`（工艺图 / 图表 / 表单） | **canvas**（ICE） | 需要 ICE 的视口、命中测试、声明式动画、主题 |
+
 这个工程不是纯 canvas 应用，这是有意为之。
 
-### 3.3 卡片按 tool 名分派：一次 tool call 一种形态
+#### 浮层必须自己挡住事件（一个很隐蔽的坑）
 
-`CardView` 按工具名分派，**加一种卡片只是加一个工具名** —— 归约器与时间线完全不用动：
+引擎在 `window` 上装了**全局**事件拦截器（`DOMEventInterceptor`），把所有指针 / 滚轮事件
+**广播给每一个 ICE 实例**，唯一的过滤是"事件目标是不是另一块 **canvas**"。
+对话面板是个 `<div>`，**不在过滤范围内** —— 不额外拦一道的话，在面板上滚一下，
+工艺图那个实例照样会当成一次滚轮缩放（而且按自己的画布矩形算坐标）。
 
-| 工具名 | 卡片形态 | 画布 |
+好在拦截器挂的是**冒泡阶段**，所以在面板根上 `stopPropagation()` 就能拦住
+（`src/view/chat.ts` 的 `SHIELDED_EVENTS`）。**别拦键盘** —— 输入框一直是这样工作的。
+
+e2e 有一条正反两面的断言：面板上滚 → 视口不变；画布上滚 → 视口变。
+少了后一半，一个"滚轮完全坏掉"的实现也能让前一半通过。
+
+### 3.3 绘图区按 tool 名切图层：一次 tool call 决定"显示什么"
+
+**加一种图层仍然只是加一个工具名** —— 归约器与协议层一行都不用动：
+
+| 工具名 | 图层 | 画布 | 生命周期 |
+|---|---|---|---|
+| `render_diagram` | `diagram` | 一块（`ice-entity-designer`）。**kind-first** 图 DSL，目前一种 kind = `water-process` | **boot 时建，永不销毁** |
+| `render_chart` | `chart` | **两块**：图表（`ice-chart`）+ 控件条（`ice-web-components`），两个 ICE 实例 | 按需建，被顶掉即销毁 |
+| `collect_input` | `form` | 一块（`ice-web-components-dsl`）。DSL 0.3.0 起支持 **20 个字段类型** | 按需建，被顶掉即销毁 |
+
+**一次只有一层在显示**（图层之间是并排关系，不是叠加）。所以用不上
+`linkViewport` / `setInputPassthrough` / `composeLayersToCanvas` —— 那些只在层与层重叠时有意义。
+
+```
+#stage  position:fixed; inset:0
+├── .stage-layer[data-kind="diagram"]        ← boot 建，永不销毁
+│     └── <canvas>   ICE 实例 ①，WaterProcessDesigner
+├── .stage-layer[data-kind="chart"]          ← 按需
+│     ├── .stage-chart  <canvas>   ICE 实例 ②（ice-chart 自己 new 的）
+│     └── .stage-widget <canvas>   ICE 实例 ③（控件条，浮在绘图区底部）
+└── .stage-layer[data-kind="form"]           ← 按需
+      └── .stage-form   <canvas>   ICE 实例 ④（ice-web-components-dsl）
+```
+
+三种图层的**复用判据刻意不一样**，别统一：
+
+| 图层 | 判据 | 为什么 |
 |---|---|---|
-| `render_chart` | 图表卡 | `.chart-wrap` + `.widget-wrap`（两块，两个 ICE 实例） |
-| `render_diagram` | **图卡** | `.diagram-wrap`（一块，由 `ice-entity-designer` 渲染）。**kind-first** 的图 DSL，目前一种 kind = `water-process` |
-| `collect_input` | **表单卡** | `.form-wrap`（一块，由 `ice-web-components-dsl` 渲染）。DSL 0.3.0 起支持 **20 个字段类型** |
+| `diagram` | **按内容比对** —— DSL 序列化后相同就只 `show` | 这是"不用每次都重新绘制完整的工艺图"的落点 |
+| `chart` | **复用宿主** —— 同一个 `ChartAdapter` 走 `setOption` 换数据 | 它在建实例那条路径上，重建会丢交互监听（见 §5.1） |
+| `form` | **每次重建** | 表单 DSL 是一次性编译的，没有"改一张表单"这回事 |
 
-三者**互斥**（一次 tool call 只有一种形态），但卡片骨架在构造时就一并建好了容器，
-靠 `hidden` 切换。所以 e2e 要按**可见性**断言，不能数 canvas 的个数。
+#### 校验没过时**不切画面**
 
-一张图表卡片里有两个独立的 ICE 实例：
+失败的那一轮**不提交**：绘图区保持原样（很可能还停在上一张好图上），
+诊断只出现在对话里的那条工具条目上。
+旧行为是"卡片亮着、画布空白"—— 那会让人以为图坏了，而实际上坏的是 DSL，agent 马上就会修。
 
-```
-┌─ 图表卡 ───────────────────────────────┐
-│ .chart-wrap  <canvas>                   │  ← ICE 实例 ①（ice-chart 自己 new 的）
-│ .widget-wrap <canvas>                   │  ← ICE 实例 ②（ice-web-components 的控件条）
-└─────────────────────────────────────────┘
-┌─ 表单卡 ───────────────────────────────┐
-│ .form-wrap   <canvas>                   │  ← ICE 实例 ③（ice-web-components-dsl）
-└─────────────────────────────────────────┘
-┌─ 图卡 ─────────────────────────────────┐
-│ .diagram-wrap <canvas>                  │  ← ICE 实例 ④（ice-entity-designer）
-└─────────────────────────────────────────┘
-```
+#### 画布是"可视区"的子集
 
-四块画布、四个 ICE 实例，互相**不叠加**（并排/互斥），所以用不上
-`linkViewport` / `setInputPassthrough` 那些"层叠加"才需要的原语。
+绘图区铺满视口，而对话面板**浮在它的右边缘上**压住一块。所以"画布尺寸"与"可视区"是两个数：
 
-为什么要两块而不是一块：**引擎的模型是「一层 = 一个 ICE 实例 + 一张 canvas」**，
-而 `ice-chart` 内部自己 `new ICE()`、不接受外部实例（见 `docs/upstream-gaps.md` 第 7 条）。
+- 画布尺寸决定**渲染多少像素**（铺满，不透明）；
+- 可视区决定**内容摆在哪、能动多大**（居中 / 适配 / 缩放锚点全按它算）。
+
+不分的代价很直接：按整幅 1440 居中，图的正中间就落在面板底下，右边三分之一白白浪费。
+`src/view/diagram-layer.ts` 的 `DiagramRegion` 就是这件事，`reframe()` 负责在"布局变了"时重摆视野
+（而窗口只是重排时**不**重摆 —— 那会把用户拖到的位置冲掉）。
+
+#### 为什么要两块画布而不是一块
+
+**引擎的模型是「一层 = 一个 ICE 实例 + 一张 canvas」**，而 `ice-chart` 内部自己 `new ICE()`、
+不接受外部实例（见 `docs/upstream-gaps.md` 第 7 条）。
 硬塞只能走 `addMark`，但那个槽位是**按数据坐标**摆位的（适合"锚在异常点上的浮动按钮"），
-不适合"卡片底部一条控件栏"。两种需求，两个层。
+不适合"绘图区底部一条控件栏"。两种需求，两个层。
 
-分工的判据是"这东西该跟着数据坐标走，还是该跟着卡片布局走"：
+分工的判据是"这东西该跟着数据坐标走，还是该跟着界面布局走"：
 
 | 放哪 | 什么进这里 |
 |---|---|
 | 图表层（`addMark`） | 与数据绑定的东西：阈值线、异常点标记、锚在某个点上的小按钮 |
-| 控件层（第二块画布） | 卡片级的控件：一排动作按钮、图表类型切换 |
-| DOM 外壳 | 消息、输入框、滚动 —— 需要可访问性与输入法的东西 |
-
-**层之间是并排关系，不是叠加**，所以不需要 `linkViewport` / `setInputPassthrough` /
-`composeLayersToCanvas` —— 那些只在层与层重叠时才有意义。
-`src/domain/ice/layer.ts` 因此只有"尺寸转交 + 一起销毁"两件事，**故意没做成大抽象**。
+| 控件层（第二块画布） | 界面级的控件：一排动作按钮、图表类型切换 |
+| DOM 面板 | 消息、输入框、滚动 —— 需要可访问性与输入法的东西 |
 
 控件条用 canvas 画而不是 DOM `<button>`，代价要说清楚：**canvas 控件没有 DOM 的可访问性、
 输入法、Cmd+F**。这里选它是因为要试的正是"canvas 控件层能不能跟图表共存"，
-顺带拿到同一套主题。聊天区那部分仍然是真 DOM —— 分界线没变。
+顺带拿到同一套主题。对话面板那部分仍然是真 DOM —— 分界线没变。
+
+`src/domain/ice/layer.ts` 因此只有"尺寸转交 + 一起销毁"两件事，**故意没做成大抽象**。
 
 ### 3.4 纯核心 + 命令式外壳
 
 `src/domain/agui/reducer.ts` 是**纯函数**，返回 `{state, effects}`：
-它只描述"要做什么"，不碰 DOM。碰 canvas 的活在 `src/entries/boot.ts` 的 `applyEffects` 里。
+它只描述"要做什么"，不碰 DOM。碰 canvas 的活在 `src/entries/boot.ts` 的 `applyEffects` 里 ——
+它把 effect **打给 `StageView`**（effect 的形状没变，只是落点从"最后一张卡片"换成了
+"绘图区当前那一层"）。
 
 这样归约器可以被穷举测试（连"边画边指"的事件顺序都能断言），而 canvas 脏活留在需要它的地方。
 
@@ -406,14 +484,14 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | 谁 | 怎么拿到颜色 |
 |---|---|
 | 画布里的**控件** | `iceUIManager.setTheme()` —— 库的主题是"组件构造时读一次"，所以在 boot 时定死 |
-| 画布里的**引擎外壳**（选中框 / 手柄 / 阴影色） | `applyThemeToEngine(ice)` —— 引擎主题是**实例级**的，卡片里那几块画布各调一次 |
+| 画布里的**引擎外壳**（选中框 / 手柄 / 阴影色） | `applyThemeToEngine(ice)` —— 引擎主题是**实例级**的，绘图区里那几块画布各调一次 |
 | 画布里的**图表** | 不用单独调：`ICEChart` 的 `theme: 'auto'` 按**引擎主题背景色的亮度**判明暗 |
 | 画布里的**图**（选中框 / 对齐引导线 / 插槽） | `ice-entity-designer` 的构造里会 `applyDesignerChrome(ice)`，它**从当前引擎主题派生**。所以图层的构造顺序是 **先 `applyThemeToIce` 再 `new WaterProcessDesigner`** —— 反了派生的就是引擎内置默认蓝，而不是家族品牌色 |
 | **DOM 外壳** | `applyThemeToCss()` 把同一张表写进 CSS 变量，样式表里只引用 `var(--…)` |
 
 **默认 light，暗色是 `?theme=dark`。** 暗色那条路是通的 —— 实测过 select 的下拉面板、
 色板、分段控制器、穿梭框在深底上都能看。但库的暗色 token 是 Bootstrap 中性灰基调，
-层与层之间明度差很小，卡片 / 控件 / 浮层容易糊在一起、看着发闷；要好看得动库里的暗色 token，
+层与层之间明度差很小，面板 / 控件 / 浮层容易糊在一起、看着发闷；要好看得动库里的暗色 token，
 那是另一件事（记在 `docs/upstream-gaps.md` 第 11 条，还附带一条实测到的具体缺陷）。
 
 留 `?theme=dark` 这个查询参数是刻意的：**"暗色到底行不行"这件事要反复看才能真正判断**，
@@ -424,12 +502,15 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 - **强调色有两个名字。** 冰蓝 `#61D9FB` 在深底上当文字好看，在浅底上对比度不够（4.5:1 都不到）。
   所以拆成 `--ice`（填充 / 描边）与 `--ice-ink`（当文字，浅底取深一档的 `#0D7EA8`）——
   这是"暗色不是把亮色反过来"的一个具体例子。
-- **token 表里没有的概念集中在一处。** 比如"半成品 DSL 的代码块配色"和"比面板沉一档的内凹面"
+- **token 表里没有的概念集中在一处。** 比如"半成品 DSL 的代码块配色"、"比面板沉一档的内凹面"、
+  以及布局反转新加的**浮层三件套**（`--overlay-bg` / `--overlay-line` / `--overlay-shadow`）
   都不是主题 token。硬凑一个相近的 token 更糟（读的人会以为它是从主题来的），
   所以它们在 `theme.ts` 的 `LOCAL_TOKENS` 里显式按主题给出。
+  浮层那三个是必需的：亮色主题的 `surface` 与 `elevated` 都是纯白，直接拿来当浮层底
+  会跟绘图区糊在一起 —— 只能靠边框 + 阴影拉开，那两行就是那份差值。
 
-**没做成运行时切换的开关**，不是因为懒：库的主题在组件构造时读一次，热切换要重建所有卡片里的
-组件树，而卡片里还跑着 rAF、事件监听与流式更新。要做的话正确的做法是重建整条 thread。
+**没做成运行时切换的开关**，不是因为懒：库的主题在组件构造时读一次，热切换要重建所有画布里的
+组件树，而画布上还跑着 rAF、事件监听与流式更新。要做的话正确的做法是重建整个绘图区。
 
 ---
 
@@ -441,8 +522,8 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 |---|---|---|
 | `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | 状态机 | |
 | `TEXT_MESSAGE_*` | 纯 DOM 气泡 | 这层不需要 ICE |
-| `TOOL_CALL_START/ARGS/END` | 卡片：参数流式拼装 → 解析成 DSL | `ARGS` 分片可见 |
-| `TOOL_CALL_RESULT` | 卡片进入终态 | |
+| `TOOL_CALL_START/ARGS/END` | 对话条目：参数流式拼装 → 解析成 DSL → **切到对应图层** | `ARGS` 分片可见 |
+| `TOOL_CALL_RESULT` | 条目进入终态 | |
 | `STATE_SNAPSHOT` | `compileChartDsl` → `setOption`（**同一实例**） | 快照是替换语义 |
 | `STATE_DELTA` | JSON Patch → 纯追加走 `appendData`，否则全量 `setOption` | 见 §5.2 |
 | `CUSTOM: ice/point-at` | `showHoverAtValue(x)` | 指着讲 |
@@ -450,7 +531,7 @@ agent 吐修正版 → 画出来。**全程自动，用户不用再说话。**
 | 上行 `brush:end` | → 新 run，`context` 带选区 | 同上 |
 | 上行 控件按钮 click | → 新 run，`context` 带 `widget-action` | 来自**第二块画布** |
 | 下行 **读** `RunAgentInput.state` | agent 据此知道当前图表是什么 | 见 §2.4 |
-| `RUN_FINISHED` + `outcome.interrupt` | 状态进 `waiting`；卡片渲染成**表单** | 见 §2.5 |
+| `RUN_FINISHED` + `outcome.interrupt` | 状态进 `waiting`；绘图区切成**表单图层** | 见 §2.5 |
 | 上行 `RunAgentInput.resume` | 用户提交表单 → 带答案开新 run | 协议原生通道 |
 
 ### 4.1 事件顺序：先画后讲
@@ -504,7 +585,7 @@ RUN_FINISHED
 
 **内容宽度是另一件事**，引擎管不了：宽度在 ICE 里是每个组件自己的属性，
 **没有"父级拉满"的自动传导**（细节见 `ice-web-components-dsl/README.md` §8.1）。
-所以卡片要把自己的可用宽度一路传下去，并且容器尺寸变了要**再传一次**：
+所以图层要把自己的可用宽度一路传下去，并且容器尺寸变了要**再传一次**：
 
 ```ts
 // 建的时候
@@ -519,9 +600,11 @@ fit(cssWidth: number) {
 漏掉 `setWidth` 的症状是"窗口变宽了、画布也宽了，但表单还是原来那么宽"——
 不会报错，只是难看得莫名其妙。
 
-> 这里**故意不传 `maxWidth`**：DSL 默认会把内容夹到 640，卡片 896 宽时表单就排 640、
-> 左边对齐 —— 一行 896 宽的输入框没人读得过来。传 `maxWidth: Infinity` 就会铺满整张卡片，
-> e2e 里有一例专门守着这条（"不缩成一小块，也不拉满整张卡片"）。
+> 这里**故意不传 `maxWidth`**：DSL 默认会把内容夹到 640，而表单面板给的是 672 的内容盒，
+> 于是表单排 640、左边对齐 —— 一行 672 宽的输入框没人读得过来。
+> 传 `maxWidth: Infinity` 就会铺满整块面板，
+> e2e 里有一例专门守着这条（"不缩成一小块，也不拉满整块面板"）。
+> 面板比 DSL 的 640 上限**宽一点**是刻意的：这样"内容排到上限了没有"在画布上还看得见。
 
 > 这条是本工程实测逼出来的：修复前宿主 896 宽时表单只在左边画了 229px，
 > **右边空掉 667px（74%）**；而且 `countInk` 那类"画了没有"的断言抓不到它 ——
@@ -542,14 +625,16 @@ fit(cssWidth: number) {
 2. **不做 mark 拖动改历史。** `addMark` + `mark:drag` 是 ICE 独有的能力，但它属于
    **就地改历史**，跟 Thread"消息发出即定"的语义冲突。真要做得改设计
    （建议方向：拖动不写回原卡片，而是追加一条新消息触发新 run）。
-3. **不做历史卡片冻结。** 目前所有卡片都是活的。往上滚的旧卡片仍可交互——
-   这在卡片少的时候没问题，卡片多了需要一个"只有最新一张是活的"策略。
-4. **不做 thread 持久化。** 刷新即清空。`threadId` 已经按协议在用，但没存。
-5. **不做 reasoning / subagent / activity 事件。** 协议里有，本工程没用。
+3. **不做"点旧的工具条目把那个视图调回绘图区"。** 条目上已经标了 `data-active`
+   （哪一条对应绘图区上现在这一层），但点它没有反应。要做得考虑"调回来算不算一次 run"。
+4. **不做对话面板宽度拖拽**，也不做多面板。
+5. **不做 thread 持久化。** 刷新即清空，绘图区也回到开页那张工艺图。
+   `threadId` 已经按协议在用，但没存。
+6. **不做 reasoning / subagent / activity 事件。** 协议里有，本工程没用。
    归约器对未知事件是丢弃语义，所以它们不会导致崩溃，只是不显示。
-6. **不做多中断并发。** 协议允许 `RUN_FINISHED` 一次带多个 `interrupts`，
-   本工程一次只处理一个（取第一个）。多中断需要给每张表单卡各自绑定 interruptId ——
-   归约器已经按数组收了，缺的是卡片与 interruptId 的关联。
+7. **不做多中断并发。** 协议允许 `RUN_FINISHED` 一次带多个 `interrupts`，
+   本工程一次只处理一个（取第一个）。多中断需要给每个表单绑定各自的 interruptId ——
+   归约器已经按数组收了，缺的是表单与 interruptId 的关联。
 
 ---
 
@@ -568,32 +653,34 @@ ice-agent-console/
 │       ├── scenarios.ts     剧本模式：关键词 → 计划
 │       ├── llm.ts           模型模式：LlmAgent（自然语言 → 计划）
 │       ├── llm-client.ts    模型模式：/chat/completions 客户端（fetch，无 SDK）
-│       ├── tools.ts         模型模式：tool 定义 + 系统提示词
-│       └── water-process-case.ts  内置案例：污水处理工艺图（34 单元 / 37 管线）
+│       └── tools.ts         模型模式：tool 定义 + 系统提示词
 ├── src/
 │   ├── domain/              纯逻辑，无 DOM
 │   │   ├── agui/            SSE 解析 / 归约器 / JSON Patch
 │   │   ├── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
 │   │   ├── diagram/         图 DSL：白名单 / 校验 / 编译（纯逻辑，node 可测）
-│   │   └── theme.ts         主题：一份 token 分发给画布与 DOM
-│   ├── view/                DOM 外壳 + canvas 层
-│   │   ├── chart-adapter.ts 图表层（ICE 实例 ①）
-│   │   ├── widget-layer.ts  控件层（ICE 实例 ②，ice-web-components 画）
-│   │   ├── form-layer.ts    表单层（表单卡唯一那块画布，ice-web-components-dsl 画）
-│   │   ├── diagram-layer.ts 图层（图卡唯一那块画布，ice-entity-designer 画）
-│   │   ├── card.ts          卡片：按 tool 名分派出图表 / 图 / 表单
-│   │   └── thread.ts        thread 外壳
-│   └── entries/boot.ts      接线：分发动作、执行 effects、触发 run
+│   │   └── theme.ts         主题：一份 token 分发给画布与 DOM（含浮层三件套）
+│   ├── view/                绘图区（canvas）+ 对话面板（DOM）
+│   │   ├── stage.ts         ★ 绘图区：铺满视口 + 图层切换 + 按内容比对复用
+│   │   ├── diagram-layer.ts 工艺图图层（ice-entity-designer 画的，boot 建、永不销毁）
+│   │   ├── chart-adapter.ts 图表图层的第一块画布
+│   │   ├── widget-layer.ts  图表图层的第二块画布（控件条，浮在绘图区底部）
+│   │   ├── form-layer.ts    表单图层（ice-web-components-dsl 画的）
+│   │   ├── tool-entry.ts    对话里的工具条目（**只有外壳，没有画布**）
+│   │   └── chat.ts          对话面板外壳 + 浮层的 stopPropagation
+│   └── entries/boot.ts      接线：开页画图、分发动作、执行 effects、触发 run
 ├── shared/
 │   ├── contract.ts          自定义事件名 / context 键（server 与 web 的唯一出处）
-│   └── diagram.ts           图 DSL 的结构类型（**只有类型** —— server 那套 tsconfig 不加载 DOM）
+│   ├── diagram.ts           图 DSL 的结构类型（**只有类型** —— server 那套 tsconfig 不加载 DOM）
+│   └── water-process-case.ts 内置案例：污水处理工艺图（34 单元 / 37 管线）
+│                            ↑ 放 shared/ 是因为**开页就要画它**，boot 跑在浏览器里
 ├── public/index.html        页面骨架 + 样式（颜色全走 CSS 变量，见 §3.5）
 ├── scripts/
 │   ├── dev.mjs              一条命令起两个进程
 │   ├── llm-check.ts         npm run llm:check —— 配完模型先跑这个
 │   └── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图
 ├── tests/  e2e/             jest 单测 + playwright
-├── docs/images/             README 里的截图（2× 采集，按内容盒裁切）
+├── docs/images/             README 里的截图（2× 采集；绘图区整幅 / 对话面板整块）
 └── docs/upstream-gaps.md    对上游的观察
 ```
 
@@ -668,17 +755,21 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **171 passed** / 10 suites |
-| e2e | **29 passed** / 8 specs |
-| 生产包 | 约 1.31 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
+| 单测 | **195 passed** / 10 suites |
+| e2e | **38 passed** / 8 specs |
+| 生产包 | 约 1.33 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
 > 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，
 > 这里只用到了 `ICEButton`；设计器（`ice-entity-designer`）196 KiB —— 它带 9 个领域包的记号集，
-> 图卡只用了其中给排水那一个。两个都是"反着用"的代价，真要瘦身得走 tree-shaking
+> 工艺图只用了其中给排水那一个。两个都是"反着用"的代价，真要瘦身得走 tree-shaking
 > （它们目前的产物都是 UMD 单文件，摇不掉）。
 
 e2e 的判据**不是"DOM 里有没有 canvas"**——canvas 元素存在但全白是很典型的一种失败。
 用例一律数**非透明像素**，并断言画布内容在某些事件前后**确实变了**（比如"指着讲"）。
+
+"没有重画"这件事也有直接读数：`__iceAgentConsole.stageInfo().builds` 记着每种图层建过几次。
+几条用例专门钉它 —— 切到图表再切回工艺图、折叠面板、窗口 resize、连发缩放命令，
+`builds.diagram` 必须一直是 `1`。
 
 但"有墨"还不够：`countInk > 3000` 对"表单只占左边一小块、右边空 74%"照样成立。
 所以表单那两例量的是**着墨包围盒**（`inkBounds()`）—— 按**排布**判，而不是按"画了没有"判。

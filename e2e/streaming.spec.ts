@@ -1,5 +1,15 @@
 import { expect, test } from '@playwright/test';
-import { canvasSignature, collectErrors, countInk, readState, useChip, waitForState } from './helpers';
+import {
+  CHART_CANVAS,
+  TOOL_ENTRY,
+  canvasSignature,
+  collectErrors,
+  countInk,
+  readStage,
+  readState,
+  useChip,
+  waitForState,
+} from './helpers';
 
 /**
  * 流式追加：`STATE_DELTA` → `appendData` 快路径。
@@ -8,6 +18,9 @@ import { canvasSignature, collectErrors, countInk, readState, useChip, waitForSt
  * `series.data` 末尾 concat、不碰 `xAxis.data`——类目轴上追加新类目会错位。
  * 视图层对此有防御（认出类目轴就退回全量重绘，见 src/domain/ice/option-mapping.ts），
  * 这里的用例走的是快路径那一支。
+ *
+ * 布局反转之后这一组的分量更重了：追加是"在**同一块画布**上长"，
+ * 而这件事现在是**结构性保证**的 —— 图表宿主只建一次，`STATE_DELTA` 永远落在它身上。
  */
 test('数据一拍一拍追加进同一张图', async ({ page }) => {
   const errors = collectErrors(page);
@@ -17,13 +30,13 @@ test('数据一拍一拍追加进同一张图', async ({ page }) => {
   await page.locator('.chip', { hasText: '看一下实时吞吐量' }).first().click();
 
   // 等第一次上画布：STATE_SNAPSHOT 在 TOOL_CALL_END **之后**到，
-  // 所以"卡片 done"不等于"状态已就绪"——要单独等一次。
+  // 所以"条目 done"不等于"状态已就绪"——要单独等一次。
   await waitForState(page, (s) => s.sharedState !== null, undefined, 30_000);
   const initial = await readState(page);
   expect(initial.sharedState.chart.data.rows).toHaveLength(6);
   expect(initial.sharedState.chart.encoding.x).toBe('秒');
 
-  const signatureBefore = await canvasSignature(page);
+  const signatureBefore = await canvasSignature(page, CHART_CANVAS);
 
   await waitForState(page, (s, min) => s.status === 'idle' && s.eventCount > min, before.eventCount, 30_000);
   const final = await readState(page);
@@ -36,11 +49,12 @@ test('数据一拍一拍追加进同一张图', async ({ page }) => {
     [9, 154],
   ]);
 
-  // 画面确实变了（新点画上去了），而且**始终只有一张卡片**——
-  // 追加不该生成新卡片，那会把"同一张图在长"变成"多张图"
-  expect(await canvasSignature(page)).not.toBe(signatureBefore);
-  await expect(page.locator('.card')).toHaveCount(1);
-  expect(await countInk(page)).toBeGreaterThan(1000);
+  // 画面确实变了（新点画上去了），而且**始终只有一层图**——
+  // 追加不该新建图层，那会把"同一张图在长"变成"多张图"
+  expect(await canvasSignature(page, CHART_CANVAS)).not.toBe(signatureBefore);
+  const stage = await readStage(page);
+  expect(stage.builds.chart, '追加不该重建图表宿主').toBe(1);
+  expect(await countInk(page, CHART_CANVAS)).toBeGreaterThan(1000);
 
   expect(errors, errors.join('\n')).toEqual([]);
 });
@@ -67,7 +81,7 @@ test('追加之后图还能交互（快路径不该把监听弄丢）', async ({
   const rowsAfterAppend = (await readState(page)).sharedState.chart.data.rows.length;
   expect(rowsAfterAppend).toBe(9);
 
-  const canvas = page.locator('.chart-wrap canvas').first();
+  const canvas = page.locator(CHART_CANVAS).first();
   const box = (await canvas.boundingBox())!;
 
   const base = await readState(page);
@@ -89,11 +103,12 @@ test('追加之后图还能交互（快路径不该把监听弄丢）', async ({
   // 交互触发了新一轮，但那张图没被搞坏
   const after = await readState(page);
   expect(after.sharedState.chart.data.rows).toHaveLength(9);
-  await expect(page.locator('.card')).toHaveCount(1);
+  await expect(page.locator(TOOL_ENTRY)).toHaveCount(1);
+  expect((await readStage(page)).builds.chart).toBe(1);
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
-test('第二轮的卡片不会顶掉第一轮的（跨轮 id 唯一）', async ({ page }) => {
+test('第二轮的条目不会顶掉第一轮的（跨轮 id 唯一）', async ({ page }) => {
   await page.goto('/');
   await useChip(page, '看一下实时吞吐量');
   await useChip(page, '看看各渠道的月度销量');
@@ -101,5 +116,5 @@ test('第二轮的卡片不会顶掉第一轮的（跨轮 id 唯一）', async (
   const state = await readState(page);
   const ids = state.items.map((i) => i.id);
   expect(new Set(ids).size, 'id 必须唯一，否则前端按 id 复用元素会互相覆盖').toBe(ids.length);
-  await expect(page.locator('.card')).toHaveCount(2);
+  await expect(page.locator(TOOL_ENTRY)).toHaveCount(2);
 });

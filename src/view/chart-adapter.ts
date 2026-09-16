@@ -111,11 +111,17 @@ export class ChartAdapter {
     this.chart?.clearHover();
   }
 
-  /** 按容器当前宽度重排。画布宽度是流式的（卡片宽度跟着 thread 走）。 */
-  resize(): void {
+  /**
+   * 按容器重排。画布宽度是流式的（以前跟着卡片宽度走，现在跟着绘图区走）。
+   *
+   * 显式传尺寸是给"容器自己量不准"的场景留的口子：布局反转之后图表宿主是
+   * 绝对定位铺满的一块，`parentElement.clientWidth` 有时是 0（还没进 DOM 时），
+   * 那时由舞台上把实测值递进来。
+   */
+  resize(cssWidth?: number, cssHeight?: number): void {
     if (!this.chart) return;
-    const available = this.canvas.parentElement?.clientWidth || 0;
-    this.chart.resize(available > 0 ? available : 640, this.cssHeight);
+    const available = cssWidth ?? this.canvas.parentElement?.clientWidth ?? 0;
+    this.chart.resize(available > 0 ? available : 640, cssHeight ?? this.cssHeight);
   }
 
   get mounted(): boolean {
