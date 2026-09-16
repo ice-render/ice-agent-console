@@ -39,6 +39,18 @@ const { chromium } = require(path.join(dir, 'node_modules/@playwright/test'));
 const OUT = path.join(dir, 'docs/images');
 const BASE = process.env.CONSOLE_URL || 'http://127.0.0.1:8100/';
 
+/**
+ * 拍图统一带上 `?autoplay=0`。
+ *
+ * 这个脚本用 `npm run dev`（**普通**构建）起服务，本来默认就不自动开演；
+ * 但这条参数是**兜底**：一旦有人改成对着演示产物拍（`CONSOLE_URL` 指到 `build:demo` 的
+ * 静态站），自动开演会在开页 0.7 秒后抢跑 —— 于是 `hero` 那一步拍到的是"讲到一半"的画面，
+ * 而且后面每一张的起点都变了。截图是提交进仓库的产物，拍错了不会让任何测试变红。
+ *
+ * ⚠️ 每张用 `page.goto` 的图都要带上它（下面几处都是），别只改第一张。
+ */
+const NO_AUTOPLAY = '?autoplay=0';
+
 /** 拍整页用的视口。绘图区是铺满的，所以这个尺寸就是"读者看到的一屏"。 */
 const VIEW = { width: 1440, height: 900 };
 
@@ -225,7 +237,7 @@ const VIEW = { width: 1440, height: 900 };
 
   // ---- 1. 首屏 ----
   // "首屏"现在就是**工艺图 + 浮在右边的对话面板**（不是空态）—— 图是开页就画好的。
-  await page.goto(BASE);
+  await page.goto(BASE + NO_AUTOPLAY);
   await page.waitForFunction(() => !!window.__iceAgentConsole?.diagramStats()?.symbols, undefined, {
     timeout: 20000,
   });
@@ -347,7 +359,7 @@ const VIEW = { width: 1440, height: 900 };
     if (m.type() === 'error') demoErrs.push('console: ' + m.text());
   });
 
-  await demoPage.goto(BASE + '?demo=1');
+  await demoPage.goto(BASE + '?demo=1&autoplay=0');
   await demoPage.waitForFunction(() => !!window.__iceAgentConsole?.diagramStats()?.symbols, undefined, {
     timeout: 20000,
   });

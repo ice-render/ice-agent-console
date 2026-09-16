@@ -18,7 +18,8 @@ import {
 } from '../../shared/contract';
 import { WATER_PROCESS_DSL } from '../../shared/water-process-case';
 import { apiUrl } from '../domain/agui/client';
-import { pickTransport, resolveRunMode } from '../domain/agui/transport';
+import { pickTransport, resolveRunMode, BUILD_DEFAULT_DEMO } from '../domain/agui/transport';
+import { AUTOPLAY_OPENING, resolveAutoplay } from '../domain/agui/autoplay';
 import type { ResumeEntry } from '../domain/agui/run-input';
 import { installTheme } from '../domain/theme';
 import {
@@ -79,9 +80,35 @@ installTheme();
 const RUN_MODE = resolveRunMode(globalThis.location?.search ?? '');
 const transport = pickTransport(RUN_MODE);
 
+/**
+ * **开页要不要自己先演一遍**（不等任何人点）。
+ *
+ * 两级优先见 `autoplay.ts`。这里那处 `RUN_MODE === 'demo'` 是**只加在构建期默认上**的
+ * 一道限制：演示构建默认自动开演，但如果有人用 `?demo=0` 把它切回"连后端"，
+ * 后端多半没起 —— 那样开页就会自己弹一张红色错误卡。第一印象不该是一张错误卡。
+ *
+ * ⚠️ 这道限制**不能盖过显式参数**：`?autoplay=1` 是用户点名要看，
+ * 那就演（失败了也有那张错误卡解释，那正是它存在的意义）。
+ */
+const AUTOPLAY = resolveAutoplay(
+  globalThis.location?.search ?? '',
+  BUILD_DEFAULT_DEMO && RUN_MODE === 'demo'
+);
+
 const threadId = `thread_${Math.random().toString(36).slice(2, 10)}`;
 let state = initialState(threadId);
 let running = false;
+
+/**
+ * 自动开演那一轮的取消句柄。用户一动手就掐掉它 —— 见 `send()` 的开头。
+ *
+ * 为什么需要：`send()` 有 `if (running) return` 的护栏，而自动开演要跑 19 秒。
+ * 没有取消的话，那 19 秒里用户点按钮 / 打字全部被**静默吞掉**，
+ * 页面看着能点其实没反应 —— 比不自动开演还糟。
+ */
+let autoplayAbort: AbortController | null = null;
+/** 自动开演那一轮的 Promise，用来"等它真的停下来"再放用户那一下过去。 */
+let autoplayDone: Promise<void> | null = null;
 
 /** 渲染端诊断。跨轮存活，所以要放在归约器外面。 */
 let pendingDiagnostics: string | null = null;
@@ -414,17 +441,51 @@ interface SendOptions {
   interaction?: Record<string, any>;
   /** 这是自修复的自动重试，不要再插一条用户气泡。 */
   auto?: boolean;
+  /**
+   * 这一轮是**开页自动开演**，不是用户点的。
+   *
+   * 与 `auto` 分开两个字段而不是合成一个：`auto`（自修复重试）**不该被打断**
+   * —— 它是回路自己的一步；而自动开演是"替用户按一下"，用户一动手就该让位。
+   */
+  autoplay?: boolean;
   /** 对上一轮中断的答复。协议规定恢复中断 = 开新 run + 带上它。 */
   resume?: ResumeEntry[];
 }
 
+/**
+ * 掐掉正在跑的自动开演，并**等它真的停下来**。
+ *
+ * 后面那个"等"是必须的：`send()` 用 `running` 做护栏，而取消是异步的 ——
+ * 不 await 的话紧接着的用户那一轮会被护栏静默吞掉，等于没让位。
+ */
+async function cancelAutoplay(): Promise<void> {
+  if (!autoplayAbort) return;
+  const controller = autoplayAbort;
+  autoplayAbort = null;
+  controller.abort();
+  try {
+    await autoplayDone;
+  } catch {
+    /* 取消路径不该往外抛：错误已经由 onError 转成状态了 */
+  }
+  autoplayDone = null;
+}
+
 async function send(text: string, options: SendOptions = {}): Promise<void> {
+  // **用户优先于自动开演**：这是"自动播放"能不能讨人喜欢的关键。
+  // 不加这一段的话，开页那 19 秒里点按钮 / 打字全被 `running` 护栏吞掉，
+  // 页面看着能点其实没反应。
+  if (!options.auto && !options.autoplay) await cancelAutoplay();
+
   if (running) return;
 
   if (!options.auto) {
     dispatch({ type: '@local/user-message', text });
     autoRepairUsed = false;
   }
+
+  // 自动开演这一轮带 signal，好让用户能掐掉它；其余轮次不带（没有取消入口）
+  const controller = options.autoplay ? new AbortController() : null;
 
   running = true;
   sendEl!.disabled = true;
@@ -467,12 +528,25 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
       {
         onEvent: (event) => dispatch(event),
         onError: (err) => dispatch({ type: 'RUN_ERROR', message: err.message }),
-      }
+      },
+      // 只有自动开演那一轮带 signal（见上面 controller 的注释）
+      controller?.signal
     );
   } finally {
     running = false;
     sendEl!.disabled = false;
+    if (controller && autoplayAbort === controller) autoplayAbort = null;
   }
+
+  // 被用户掐掉的那一轮就**到此为止**，不需要额外收拾状态：
+  // `transport` 对取消是静默返回（`AbortError` 不当错误上报），所以不会再有
+  // `RUN_FINISHED`；而状态不用管 —— 会走到这里的取消只有一条来路（用户抢在自动开演
+  // 前面动了手），那一下**必定**接着开一轮新的 run，`RUN_STARTED` 会把状态推回 running。
+  // 实测过：这里去掉一个"把 status 推回 idle"的动作，用例照样过（说明它是多余的）。
+  //
+  // ⚠️ 以后若加了**不跟着开 run** 的取消入口（比如 Esc 停止），
+  //    这里就得补一个把 `status` 推回 `idle` 的动作 —— 否则界面会一直停在"运行中"。
+  if (controller?.signal.aborted) return;
 
   // 自修复回路：这一轮渲染端报了错，就带着诊断自动再来一次。
   // 脚本化阶段就把这条回路走通，M2 换成真模型时这一段的代码一行都不用动。
@@ -483,6 +557,49 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
   }
 
   updateMeta();
+}
+
+/**
+ * 开页自动开演：等绘图区真的能接受镜头命令了，再替用户按下第一个快捷按钮。
+ *
+ * ## 为什么要等"能接受镜头命令"
+ *
+ * 讲稿的第一拍是 `{ direction: 'fit' }`（把整张图框进来），而 `DiagramLayer.zoomBy()`
+ * 在 `cssWidth / cssHeight` 还没量到时会**返回 false 把命令丢掉**。
+ * 图层建好 ≠ 尺寸量到：尺寸是 `ResizeObserver` 派发的，在首帧之后。
+ * 不等的话第一拍会被静默丢掉 —— 而画面只是"从初始视野直接跳到第二拍"，看不出少了什么。
+ *
+ * ## 为什么要等一小会儿才开演
+ *
+ * 开页那一屏（按 `viewport.focus` 取的近景）得先**被人看见**，
+ * 然后那次 `fit` 的缩放补间才读得出是"镜头拉开、开始讲了"。
+ * 紧接着开演的话，两个画面之间没有停顿，看着像布局抖了一下。
+ */
+const AUTOPLAY_DELAY_MS = 700;
+
+/** 绘图区量到尺寸了吗（`zoomBy` 能生效的前提）。 */
+function diagramReady(): boolean {
+  const vp = stage.diagramViewport();
+  return !!vp && vp.cssWidth > 0 && vp.cssHeight > 0;
+}
+
+async function startAutoplay(): Promise<void> {
+  // 等尺寸：最多 ~2 秒（120 帧），超时就放弃自动开演而不是硬跑
+  for (let i = 0; i < 120 && !diagramReady(); i++) {
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  }
+  if (!diagramReady()) return;
+
+  await new Promise((resolve) => setTimeout(resolve, AUTOPLAY_DELAY_MS));
+
+  // 用户在这些等待里已经动过手（点了按钮 / 打字 / 上一轮已经跑起来了）就别抢戏。
+  // 归约器每收到一条用户消息就会往 items 里追加，所以 items 非空 = 已经有人在用了。
+  if (running || state.items.length > 0) return;
+
+  const controller = new AbortController();
+  autoplayAbort = controller;
+  autoplayDone = send(AUTOPLAY_OPENING, { autoplay: true });
+  await autoplayDone;
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +740,13 @@ inputEl.addEventListener('keydown', (event) => {
    * 这个是远看、那个是近看。截图脚本与"图有没有被裁掉"的断言都要它。
    */
   fitAll: () => stage.fitAll(),
+  /** 这次开页会不会自动演一遍（e2e 断言"开关真的在起作用"，比只看画面强）。 */
+  autoplayEnabled: () => AUTOPLAY,
 };
 
 inputEl.focus();
 updateMeta();
+
+// 开页自动开演 —— 放在最后：上面那些接线（stage / chat / 按钮）都得到位，
+// 否则第一拍的命令没有落点。它自己会等绘图区量到尺寸，所以不用再包一层 rAF。
+if (AUTOPLAY) void startAutoplay();
