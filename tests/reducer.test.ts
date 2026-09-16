@@ -36,6 +36,16 @@ const chartDsl = (rows: any[][]) => ({
   chart: { kind: 'line', data: { columns: ['秒', '吞吐'], rows }, encoding: { x: '秒', y: '吞吐' } },
 });
 
+/** 一份最小的图 DSL（图元增删的用例用它当基准）。 */
+const diagramDsl = () => ({
+  kind: 'water-process',
+  units: [
+    { id: 'a', kind: 'inlet', name: 'A', tag: 'A-1', left: 0, top: 0 },
+    { id: 'b', kind: 'pump', name: 'B', tag: 'B-1', left: 10, top: 0 },
+  ],
+  pipes: [{ id: 'p-ab', sourceId: 'a', targetId: 'b', medium: 'sewage', dn: 'DN100' }],
+});
+
 describe('生命周期', () => {
   it('RUN_STARTED 进入运行态并把 runId 记下来', () => {
     const { state } = run([{ type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' }]);
@@ -173,6 +183,83 @@ describe('状态同步', () => {
     ]);
     expect(effects.some((e) => e.type === 'mount-chart')).toBe(true);
     expect(effects.some((e) => e.type === 'append-rows')).toBe(false);
+  });
+
+  it('★ 全量回退时传的是**那一层自己的 DSL**，不是整份 state', () => {
+    // 回归：这里以前把 `patched`（整份 state，形如 `{chart: {...}}`）当 dsl 传下去，
+    // 视图层的校验器会拦下来 —— 症状是"补丁一来图就变成一张报错的空卡"。
+    // 这条路径原来没有用例走过，是加图元增删时才发现的。
+    const { effects } = run([
+      { type: EventType.TOOL_CALL_START, toolCallId: 'tc1', toolCallName: 'render_chart' },
+      { type: EventType.TOOL_CALL_ARGS, toolCallId: 'tc1', delta: '{"kind":"line"}' },
+      { type: EventType.TOOL_CALL_END, toolCallId: 'tc1' },
+      { type: EventType.STATE_SNAPSHOT, snapshot: chartDsl([[1, 10]]) },
+      { type: EventType.STATE_DELTA, delta: [{ op: 'replace', path: '/chart/kind', value: 'bar' }] },
+    ]);
+    // ⚠️ 取**最后一条**：`TOOL_CALL_END` 也会吐一条 mount-chart（用解析出来的参数），
+    //    而这里要看的是 `STATE_DELTA` 那条。用 `find` 会拿到前面那条，测不到东西。
+    const mounts = effects.filter((e) => e.type === 'mount-chart') as any[];
+    const mount = mounts[mounts.length - 1];
+    expect(mount.dsl).toEqual({
+      kind: 'bar',
+      data: { columns: ['秒', '吞吐'], rows: [[1, 10]] },
+      encoding: { x: '秒', y: '吞吐' },
+    });
+    expect(mount.dsl.chart).toBeUndefined();
+  });
+
+  it('★ 图元增删走 `patch-diagram`（增量），不退回全量重建', () => {
+    const { state, effects } = run([
+      { type: EventType.TOOL_CALL_START, toolCallId: 'tc1', toolCallName: 'render_diagram' },
+      {
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: 'tc1',
+        delta: JSON.stringify(diagramDsl()),
+      },
+      { type: EventType.TOOL_CALL_END, toolCallId: 'tc1' },
+      { type: EventType.STATE_SNAPSHOT, snapshot: { diagram: diagramDsl() } },
+      {
+        type: EventType.STATE_DELTA,
+        delta: [
+          { op: 'add', path: '/diagram/units/-', value: { id: 'ozone', kind: 'storageTank' } },
+          { op: 'add', path: '/diagram/pipes/-', value: { id: 'p-xy', sourceId: 'x', targetId: 'y' } },
+          { op: 'remove', path: '/diagram/units/1' },
+        ],
+      },
+    ]);
+
+    // 2 个 - 删掉 index 1（`b`）+ 追加 1 个 = 2 个，剩下 a 与 ozone。
+    // 注意 `remove` 的 index 是**补丁前**那份文档里的下标 —— 这一条成立的前提是
+    // `detectDiagramPatch` 只认"往末尾追加"（那种 add 不会让已有元素的下标前移）。
+    expect(state.sharedState.diagram.units.map((u: any) => u.id)).toEqual(['a', 'ozone']);
+    const patch = effects.find((e) => e.type === 'patch-diagram') as any;
+    expect(patch).toBeTruthy();
+    expect(patch.units).toEqual([{ id: 'ozone', kind: 'storageTank' }]);
+    expect(patch.pipes).toEqual([{ id: 'p-xy', sourceId: 'x', targetId: 'y' }]);
+    // 下标 1 → 查**补丁前**那份文档 → 'b'
+    expect(patch.removedUnitIds).toEqual(['b']);
+    expect(patch.removedPipeIds).toEqual([]);
+    // 关键：没有退化成重建。
+    // ⚠️ 判据是**条数**而不是"有没有" —— `TOOL_CALL_END` 本身就会吐一条 mount-chart，
+    //    所以"存在 mount-chart"在这里永远为真，那种断言等于没测。
+    //    这一批事件里 mount-chart **只该有一条**（来自 TOOL_CALL_END）。
+    expect(effects.filter((e) => e.type === 'mount-chart')).toHaveLength(1);
+  });
+
+  it('★ 图元增删的补丁落在**图表**那一层时，不误判成图元增删', () => {
+    // `detectDiagramPatch` 只按路径认，所以理论上它也会认 `/diagram/...`；
+    // 但目标那一层不是工艺图时（比如当前是图表），这条路径不该被走。
+    const { effects } = run([
+      { type: EventType.TOOL_CALL_START, toolCallId: 'tc1', toolCallName: 'render_chart' },
+      { type: EventType.TOOL_CALL_ARGS, toolCallId: 'tc1', delta: '{"kind":"line"}' },
+      { type: EventType.TOOL_CALL_END, toolCallId: 'tc1' },
+      { type: EventType.STATE_SNAPSHOT, snapshot: chartDsl([[1, 10]]) },
+      { type: EventType.STATE_DELTA, delta: [{ op: 'add', path: '/chart/data/rows/-', value: [3, 30] }] },
+    ]);
+    expect(effects.some((e) => e.type === 'patch-diagram')).toBe(false);
+    expect(effects.some((e) => e.type === 'append-rows')).toBe(true);
+    // 同上：图表这一层的 mount-chart 也只有 `TOOL_CALL_END` 那一条
+    expect(effects.filter((e) => e.type === 'mount-chart')).toHaveLength(1);
   });
 
   it('补丁应用失败时进入错误态（状态分叉必须让人看见）', () => {

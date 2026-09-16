@@ -22,6 +22,7 @@ import {
   STATE_CHART_KEY,
   STATE_FORM_KEY,
 } from '../shared/contract';
+import { CHART_ROWS_PATH } from '../src/domain/agui/state-patch';
 
 const SCHEMAS: Record<string, any> = {
   [EventType.RUN_STARTED]: core.RunStartedEventSchema,
@@ -318,6 +319,50 @@ describe('增量补丁', () => {
     const customs = events.filter((e) => e.type === EventType.CUSTOM);
     expect(customs.map((e) => e.name)).toEqual([EVT_POINT_AT, EVT_ZOOM, EVT_POINT_AT, EVT_ZOOM]);
     expect(customs.map((e) => e.value.direction ?? e.value.value)).toEqual(['inlet', 'to', 'ana', 'to']);
+  });
+});
+
+describe('STATE_DELTA 的两种落点（追加行 / 增删图元）', () => {
+  const custom = (beat: any) => chartPlan({ beats: [{ text: 'x', ...beat }] });
+
+  it('`patchState` 变成一条 STATE_DELTA，载荷原样透传（不自造格式）', () => {
+    const ops = [
+      { op: 'remove', path: '/diagram/units/6' },
+      { op: 'add', path: '/diagram/pipes/-', value: { id: 'p-x' } },
+    ];
+    const events = planToEvents(custom({ patchState: ops }), CTX);
+    const deltas = events.filter((e) => e.type === EventType.STATE_DELTA);
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0].delta).toEqual(ops);
+  });
+
+  it('`patchState` 与 `appendRows` 可以同一拍里各有一次（两条不同的路径）', () => {
+    const events = planToEvents(
+      custom({
+        patchState: [{ op: 'remove', path: '/diagram/units/0' }],
+        appendRows: [[9, 9]],
+      }),
+      CTX
+    );
+    const deltas = events.filter((e) => e.type === EventType.STATE_DELTA);
+    expect(deltas.map((d) => d.delta[0].path)).toEqual([
+      '/diagram/units/0',
+      `${CHART_ROWS_PATH}/-`,
+    ]);
+  });
+
+  it('`patchState` 是空数组 → 不发（不产生空补丁）', () => {
+    const events = planToEvents(custom({ patchState: [] }), CTX);
+    expect(events.some((e) => e.type === EventType.STATE_DELTA)).toBe(false);
+  });
+
+  it('两个都给了 → 补丁排在追加行**前面**（改结构的信息量更大，先落）', () => {
+    const events = planToEvents(
+      custom({ appendRows: [[1, 1]], patchState: [{ op: 'remove', path: '/diagram/units/0' }] }),
+      CTX
+    );
+    const deltas = events.filter((e) => e.type === EventType.STATE_DELTA);
+    expect(deltas[0].delta[0].op).toBe('remove');
   });
 });
 

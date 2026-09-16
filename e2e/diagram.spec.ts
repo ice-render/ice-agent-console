@@ -16,7 +16,14 @@
  * 第 4 层是反转之后新加的：**不重画**。`stageInfo().builds.diagram` 是它的直接读数。
  */
 import { expect, test } from '@playwright/test';
-import { WATER_PROCESS_DSL } from '../shared/water-process-case';
+import {
+  UPGRADE_BRIDGE_PIPES,
+  UPGRADE_PIPES,
+  UPGRADE_REMOVED_PIPE_IDS,
+  UPGRADE_REMOVED_UNIT_IDS,
+  UPGRADE_UNITS,
+  WATER_PROCESS_DSL,
+} from '../shared/water-process-case';
 import {
   DIAGRAM_CANVAS,
   TOOL_ENTRY,
@@ -34,15 +41,36 @@ import {
   yellowRatio,
 } from './helpers';
 
-/** 案例规模：与 `shared/water-process-case.ts` 一致（那边也断言这两个数）。 */
-const SYMBOLS = 34;
-const PIPES = 37;
+/**
+ * 案例规模（基准图）。
+ *
+ * ⚠️ 不从数字抄一遍，而是**从常量算** —— 这张图会被「提标改造」那条剧本增删，
+ * 规模也会随数据调整，写死的数字会让这里变成"改数据必须记得改测试"。
+ * 真正要钉的是"内置案例真的画出来了"，数量一致是它的一部分。
+ */
+const SYMBOLS = WATER_PROCESS_DSL.units.length;
+const PIPES = WATER_PROCESS_DSL.pipes.length;
+
+/** 拆初沉池时被**级联**删掉的那几根管线（沉砂池 / 配水井 / 除臭各一根）。 */
+const PIPES_TOUCHED_BY_REMOVED_UNITS = 3;
+
+/** 「提标改造」那一条的期望（也是从常量算，理由同上）。 */
+const UPGRADED = {
+  symbols: SYMBOLS - UPGRADE_REMOVED_UNIT_IDS.length + UPGRADE_UNITS.length,
+  // 删掉的管线 = 被取代的那根 + 挂在被删单元上的那几根；新增的 = 连通管 + 提标段四根
+  pipes:
+    PIPES -
+    UPGRADE_REMOVED_PIPE_IDS.length -
+    PIPES_TOUCHED_BY_REMOVED_UNITS +
+    UPGRADE_BRIDGE_PIPES.length +
+    UPGRADE_PIPES.length,
+};
 
 /** 内置案例的单元表（"这个 id 在图里存在吗"的参照物）。 */
 const unitsOf = () => WATER_PROCESS_DSL.units;
 
 
-test('开页就是工艺图：无需任何对话、34/37、引擎校验无问题、零 console error', async ({ page }) => {
+test('开页就是工艺图：无需任何对话、数量对、引擎校验无问题、零 console error', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
 
@@ -112,7 +140,7 @@ test('问一句工艺图：不重建，只是复用（第二次挂同一份 DSL�
   const stage = await readStage(page);
   expect(stage.active).toBe('diagram');
   expect(stage.builds.diagram, '同一份 DSL 不该重建工艺图').toBe(1);
-  expect(stage.canvasCount, '还是只有那 34 个符号所在的这一块画布').toBe(1);
+  expect(stage.canvasCount, '还是只有那 68 个符号所在的这一块画布').toBe(1);
 
   // 条目里明说了"没有重绘" —— 这是给人看的那条线索
   await expect(page.locator(`${TOOL_ENTRY} .hint`)).toContainText('没有重绘');
@@ -159,13 +187,19 @@ test('初始视野：按 DSL 里的 focus 框适配到**可视区**，内容没�
   const fitByFocus = (vp.region.width - 32) / focusW;
   expect(vp.scale).toBeCloseTo(Math.min(fitByFocus, 1), 2);
 
-  // 内容的屏幕范围要落**在可视区里**（右边不越过分板那条线），这是"没被压住"的直接读数
+  // **被框住的那一段**（focusBox）的屏幕范围要落在可视区里 —— 这是"没被面板压住"的直接读数。
+  //
+  // ⚠️ 判据必须用 `focusBox` 而不是 `contentBox` / `screenBox`（后者是**全部图元**的范围）：
+  // 初始视野框的只是 `viewport.focus` 那一段，污泥线 / 事故水 / 加药间**本来就该在视野外** ——
+  // "把它们排除在外"正是 focus 存在的理由。拿全图判会得到"右边溢出 12px"这种假阳性。
+  const framedLeft = vp.focusBox.minX * vp.scale + vp.tx;
+  const framedRight = vp.focusBox.maxX * vp.scale + vp.tx;
   const usableRight = vp.region.left + vp.region.width;
-  expect(vp.screenBox.left, '左边不该出界').toBeGreaterThanOrEqual(-1);
-  expect(vp.screenBox.right, '右边不该钻到面板底下').toBeLessThanOrEqual(usableRight + 1);
+  expect(framedLeft, '被框住的那段左边不该出界').toBeGreaterThanOrEqual(-1);
+  expect(framedRight, '被框住的那段右边不该钻到面板底下').toBeLessThanOrEqual(usableRight + 1);
 
   // focus 真的在裁：主流程链**横向铺满整图**（进水在最左、排放口在最右），
-  // 所以它裁掉的是**纵向**那一大块（污泥线 / 事故池支路 / 除臭装置）。
+  // 所以它裁掉的是**纵向**那一大块（污泥线 / 事故水 / 加药间）。
   // 这条断言同时也说明"为什么要有 focus"—— 按整图算会白白为用不上的行留出高度。
   const focusH = vp.focusBox.maxY - vp.focusBox.minY;
   const contentH = vp.contentBox.maxY - vp.contentBox.minY;
@@ -302,10 +336,24 @@ test('折叠面板：可视区变宽、内容重新居中、图不重建', async
 
   // 内容跟着往右展开（不再为已经不存在的面板留白）
   expect(collapsed.screenBox.right).toBeGreaterThan(expanded.screenBox.right + 100);
-  // 而且仍然是**居中**的：左右留白差不多
-  const leftGap = collapsed.screenBox.left - collapsed.region.left;
-  const rightGap = collapsed.region.left + collapsed.region.width - collapsed.screenBox.right;
-  expect(Math.abs(leftGap - rightGap), `左右留白不对称（${leftGap} vs ${rightGap}）`).toBeLessThan(2);
+
+  // 而且**被框住的那一段**仍然居中 —— 量的是 `focusBox` 而不是 `contentBox`。
+  //
+  // ⚠️ 别拿 `contentBox` 判居中：它是**全部图元**的范围，而初始视野框的是
+  // `viewport.focus` 那一段（主流程 + 深度处理）。污泥线 / 事故水 / 加药间
+  // 本来就在框外 —— "框外"正是 focus 存在的意义，拿 contentBox 判会得到
+  // "右边溢出 24px" 这种假阳性（第一版就是这么写的）。
+  const focusScreen = (vp: any) => ({
+    left: vp.focusBox.minX * vp.scale + vp.tx,
+    right: vp.focusBox.maxX * vp.scale + vp.tx,
+  });
+  const framed = focusScreen(collapsed);
+  const leftGap = framed.left - collapsed.region.left;
+  const rightGap = collapsed.region.left + collapsed.region.width - framed.right;
+  expect(
+    Math.abs(leftGap - rightGap),
+    `被框住的那段左右留白不对称（${leftGap.toFixed(1)} vs ${rightGap.toFixed(1)}）`
+  ).toBeLessThan(2);
 
   // ★ 折叠是**布局变化**，不是重新画 —— 一个符号都不该重建
   expect(stageAfter.builds.diagram, '折叠面板不该重建工艺图').toBe(1);
@@ -512,13 +560,115 @@ async function sampleYellow(page: import('@playwright/test').Page) {
 }
 
 /**
+ * ★ **动态增删图元**：提标改造 —— 拆一处、加几处，而**图不重建**。
+ *
+ * 这是整个工程里唯一一条改"图的**结构**"的用例（其余都只在已有的图上动镜头或高亮）。
+ * 它要证三件事，缺一件就说明增量那条路断了：
+ *
+ * 1. **图元数真的变了** —— `diagramStats()` 读的是模型层，不是像素；
+ * 2. **图层没有重建** —— `stageInfo().builds.diagram` 必须一直是 1。
+ *    退化成全量重建的话图也"对"，用户的缩放位置却被冲掉了，而且不报错；
+ * 3. **`state` 也跟着变了** —— 渲染层增量、state 不增量（或反过来）就是状态分叉，
+ *    下次从 state 重建会露馅。
+ */
+test('★ 提标改造：增删图元走增量，图元数变了而图层没有重建', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+
+  const before = await readStage(page);
+  expect(before.builds.diagram).toBe(1);
+  const beforeStats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
+  expect({ symbols: beforeStats.symbols, pipes: beforeStats.pipes }).toEqual({
+    symbols: SYMBOLS,
+    pipes: PIPES,
+  });
+
+  // ---- 跑「提标改造」----
+  await useChip(page, '提标改造');
+  await waitSettled(page, 1);
+  await page.waitForTimeout(300);
+
+  // ---- ① 模型层：图元数真的变成了"拆一处 + 加三处"之后的样子 ----
+  const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
+  expect({ symbols: stats.symbols, pipes: stats.pipes }).toEqual(UPGRADED);
+  // 改完的图仍然过引擎的工艺校验（拆一处、接一处的意义就在这里）
+  expect(stats.issues).toEqual([]);
+
+  // ---- ② ★ 图层没有重建 ----
+  const after = await readStage(page);
+  expect(after.active).toBe('diagram');
+  expect(after.builds.diagram, '改图不该重建图层 —— 重建的话用户的缩放位置会被冲掉').toBe(1);
+  // 画布还是那一块（没有"每改一次多一块"）
+  expect(after.canvasCount).toBe(1);
+
+  // ---- ③ `state` 与画面一致 ----
+  const state = await readState(page);
+  expect(state.sharedState.diagram.units).toHaveLength(UPGRADED.symbols);
+  expect(state.sharedState.diagram.pipes).toHaveLength(UPGRADED.pipes);
+  const ids = state.sharedState.diagram.units.map((u: any) => u.id);
+  for (const removed of UPGRADE_REMOVED_UNIT_IDS) expect(ids).not.toContain(removed);
+  for (const added of UPGRADE_UNITS.map((u) => u.id)) expect(ids).toContain(added);
+  // 被取代的那根直连管线也没了
+  const pipeIds = state.sharedState.diagram.pipes.map((p: any) => p.id);
+  for (const removed of UPGRADE_REMOVED_PIPE_IDS) expect(pipeIds).not.toContain(removed);
+  // 没有悬空管线（两端都还在 units 里）
+  const unitIds = new Set(ids);
+  for (const pipe of state.sharedState.diagram.pipes) {
+    expect({ pipe: pipe.id, ok: unitIds.has(pipe.sourceId) && unitIds.has(pipe.targetId) }).toEqual({
+      pipe: pipe.id,
+      ok: true,
+    });
+  }
+  // `viewport.focus` 里也不许再提被删的那个（不然复位视野会框错范围）
+  expect(state.sharedState.diagram.viewport.focus).not.toContain(UPGRADE_REMOVED_UNIT_IDS[0]);
+
+  // ---- ④ 新加的图元真的**画**出来了：指到它能看到高亮 ----
+  // 光看模型层不够 —— "建了但没画"是一种很典型的失败（没置脏就是那样）。
+  const pointed = await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId());
+  expect(UPGRADE_UNITS.map((u) => u.id)).toContain(pointed);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+test('★ 改图之后交互仍然有效（增量路径不该把监听弄丢）', async ({ page }) => {
+  // 与"追加之后图还能交互"同一条思路：删/建图元走的是 `designer.remove` / `createSymbol`，
+  // 它们不该动引擎上挂的指针监听。弄丢了的话症状是"改完图之后空白处拖不动了"。
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+
+  await useChip(page, '提标改造');
+  await waitSettled(page, 1);
+
+  const vpBefore = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
+
+  // 空白处拖拽平移：位置挑可视区左下角（那一带基本可以确定没有图元）
+  const box = (await page.locator(DIAGRAM_CANVAS).boundingBox())!;
+  await page.mouse.move(box.x + 40, box.y + box.height - 40);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 160, box.y + box.height - 110, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(220);
+
+  const vpAfter = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
+  expect(vpAfter.tx, '改图之后拖拽应当还能平移').not.toBe(vpBefore.tx);
+  // 而且图元数没被拖坏
+  const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
+  expect({ symbols: stats.symbols, pipes: stats.pipes }).toEqual(UPGRADED);
+  expect((await readStage(page)).builds.diagram).toBe(1);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/**
  * 连续闪烁**不累积**底块。
  *
  * 每次闪烁都会新建一个半透明底块并 `addTool` 进工具层，旧的靠 `removeTool` 收走。
  * 漏收的话每闪一次就多留一层 —— 画面会越来越糊，而且**不会有任何报错**。
  * `blinkInfo().overlays` 是这件事的直接读数。
  *
- * 剧本依次闪 ana → anx → aer 三个单元，所以跑完必须只剩 **1** 个底块。
+ * 剧本依次闪 ana1 → anx1 → aer1 三个单元，所以跑完必须只剩 **1** 个底块。
  */
 test('连续闪烁不累积底块：闪三个单元之后工具层里只有一个', async ({ page }) => {
   const errors = collectErrors(page);
@@ -528,15 +678,15 @@ test('连续闪烁不累积底块：闪三个单元之后工具层里只有一�
   await waitSettled(page, 1);
 
   const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());
-  // 只剩最后指到的那个（aer），而且**本层建的底块**只剩它一个。
+  // 只剩最后指到的那个（aer1），而且**本层建的底块**只剩它一个。
   // 注意数的是"带标记的底块"而不是 `ice.toolNodes` 总数 —— 后者里还有引擎自己的
   // 对齐引导线 / 控制面板 / 连线插槽（实测基线 7~9 个），数总量等于在数引擎。
-  expect(info.id).toBe('aer');
+  expect(info.id).toBe('aer1');
   expect(info.overlays).toBe(1);
 
-  // 图元本身没被污染：还是 34 个（底块进的是工具层，不进 childNodes）
+  // 图元本身没被污染：计数不变（底块进的是工具层，不进 childNodes）
   const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
-  expect(stats.symbols).toBe(34);
+  expect(stats.symbols).toBe(SYMBOLS);
   expect(stats.issues).toEqual([]);
 
   expect(errors, errors.join('\n')).toEqual([]);

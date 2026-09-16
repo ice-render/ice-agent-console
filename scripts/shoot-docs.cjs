@@ -225,6 +225,16 @@ const VIEW = { width: 1440, height: 900 };
     timeout: 30_000,
   });
 
+  // ---- 1c. 改图：提标改造（拆一处、加三处）----
+  // 两张对照图，都做整图适配 —— 这样"哪里少了、哪里多了"一眼能对上。
+  await page.evaluate(() => window.__iceAgentConsole.fitAll());
+  await page.waitForTimeout(400);
+  await shootStage('upgrade-before');
+  await chip('提标改造');
+  await page.evaluate(() => window.__iceAgentConsole.fitAll());
+  await page.waitForTimeout(400);
+  await shootStage('upgrade');
+
   // ---- 2. 图表 + 「指着讲」（主链路）----
   await chip('看看各渠道的月度销量');
   await onLayer('chart');

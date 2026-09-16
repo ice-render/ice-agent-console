@@ -169,7 +169,16 @@ export class DiagramLayer {
   readonly ice: any;
   readonly designer: any;
 
-  private readonly doc: WaterProcessDslDocument;
+  /**
+   * 这份图 DSL。
+   *
+   * **不是 `readonly`** —— `applyPatch` 之后要换成补丁**之后**那一份。
+   * 它只被两处读：`__focusBox()` 与 `viewportInfo().focusBox`（都是"该框住哪一段"）。
+   * 换掉之后"复位视野"与"整图适配"才跟着新数据走；不换的话删掉的池子还挂在
+   * `viewport.focus` 里（`nodes.filter` 找不到它就静默忽略，症状是"复位时框住的范围
+   * 还是老的" —— 不报错，只是不对）。
+   */
+  private doc: WaterProcessDslDocument;
   private readonly options: {
     initialScale?: number;
     minScale: number;
@@ -177,8 +186,14 @@ export class DiagramLayer {
     padding: number;
     maxInitialScale: number;
   };
-  /** 编译出来的指令条数（`counts()` 用，避免每次去问设计器）。 */
-  private readonly compiled: { symbols: number; pipes: number };
+  /**
+   * 编译出来的指令条数（`counts()` 用，避免每次去问设计器）。
+   *
+   * 只在构造时算一次、之后由 `applyPatch` 增减 —— 因为现在图会**动态增删**
+   * （见 `applyPatch`），而 `counts()` 是 e2e 读"图元数对不对"的那个口子，
+   * 停在初始值上会让"加完三个池子"这件事断言不出来。
+   */
+  private compiled: { symbols: number; pipes: number };
 
   /** 初始视口只设一次：窗口 resize 重排尺寸时**不能**把用户的缩放平移冲掉。 */
   private viewportReady = false;
@@ -230,7 +245,11 @@ export class DiagramLayer {
     this.options = {
       // undefined = 用"适配 focus 框"算（见 __initialScaleFor）
       initialScale: options.initialScale,
-      minScale: options.minScale ?? 0.25,
+      // ⚠️ `minScale` 的判据是"**要能把整张图纸缩进可视区**"。
+      // 这张图世界宽约 4900，在 1440 宽的窗口里"整图适配"大约是 0.21 ——
+      // 所以下限必须低于它（原来 0.25 时，整图适配与按 focus 的初始视野**双双被夹住**，
+      // 症状是"开页看不到完整的主流程，而且怎么缩都缩不出来"，还不报错）。
+      minScale: options.minScale ?? 0.12,
       maxScale: options.maxScale ?? 2.5,
       padding: options.padding ?? 16,
       maxInitialScale: options.maxInitialScale ?? 1,
@@ -459,6 +478,108 @@ export class DiagramLayer {
     if (!this.highlightedId) return;
     this.__clearHighlight();
     this.ice.dirty = true;
+  }
+
+  /**
+   * **增量增删图元**（`STATE_DELTA` 里那批增删补丁的落点）。
+   *
+   * 这是"图会变"这件事的落点，也是整条链路上最省的一段：加三个池子就是三次
+   * `createSymbol`、删一个就是一次 `designer.remove`。**不重建图层、不重置视口**
+   * —— 用户的缩放平移、当前高亮全都留着。
+   *
+   * ## 顺序是承重的（和 `__build` 同一个道理）
+   *
+   * 1. **先删管线**：删单元时 `designer.remove` 会**级联删掉挂在它两端的管线**，
+   *    所以先删单元再删管线的话，第二批 `remove` 会撞上"已经不存在了"。
+   *    `FlowDesigner.remove` 对不存在的 id 是静默返回（不会抛），
+   *    但那意味着"删不干净也看不出来"，所以顺序上先做确定性更高的那一步。
+   * 2. **先建完全部单元，再建管线**：`createPipe` 要求两端都已存在（它会抛）。
+   *    某次补丁里同时加了单元和管线时，这个顺序不能反。
+   *
+   * @returns 实际动了几个图元（`{added, removed}`）。0 表示这批补丁在这张图上没落地 ——
+   *          调用方（boot）据此判断要不要退一次全量。
+   */
+  applyPatch(
+    patch: {
+      units?: any[];
+      pipes?: any[];
+      removedUnitIds?: string[];
+      removedPipeIds?: string[];
+    },
+    /**
+     * 补丁**之后**那份 DSL。
+     *
+     * 为什么由调用方递进来而不是自己拼：`viewport.focus` 这类字段不是"图元"，
+     * 图层不关心它怎么变，但 `__focusBox()` 要读它。调用方（boot）手里正好有
+     * reducer 算好的 `state.sharedState.diagram` —— 直接采纳它，比在这里
+     * 把补丁再应用一遍（等于实现第二份 JSON Patch）可靠得多。
+     */
+    patchedDoc?: WaterProcessDslDocument
+  ): { added: number; removed: number } {
+    const units = Array.isArray(patch.units) ? patch.units : [];
+    const pipes = Array.isArray(patch.pipes) ? patch.pipes : [];
+    const removedUnitIds = Array.isArray(patch.removedUnitIds) ? patch.removedUnitIds : [];
+    const removedPipeIds = Array.isArray(patch.removedPipeIds) ? patch.removedPipeIds : [];
+
+    let added = 0;
+    let removed = 0;
+
+    // ---- ① 删：先删**单元**（它会级联带走两端的管线），再删剩下的孤立管线 ----
+    //
+    // 高亮如果正落在被删的那个单元上，要先收掉 —— 否则 `highlightNode` 会一直
+    // 指向一个已经不在树上的组件，`clearPoint()` 之后还原样式时写到一个野对象上
+    // （不报错，但也永远收不回来）。
+    if (removedUnitIds.indexOf(String(this.highlightedId)) >= 0) this.__clearHighlight();
+    for (const id of removedUnitIds) {
+      if (!this.designer.nodes.some((n: any) => String(n.state?.id) === String(id))) continue;
+      this.designer.remove(String(id));
+      removed++;
+    }
+    for (const id of removedPipeIds) {
+      if (!this.designer.edges.some((e: any) => String(e.state?.id) === String(id))) continue;
+      this.designer.remove(String(id));
+      removed++;
+    }
+
+    // ---- ② 增：先全部单元、再管线 ----
+    for (const unit of units) {
+      this.designer.createSymbol(unit.kind, {
+        id: unit.id,
+        name: unit.name,
+        tag: unit.tag,
+        left: unit.left,
+        top: unit.top,
+        interactive: false,
+        draggable: false,
+      });
+      added++;
+    }
+    for (const pipe of pipes) {
+      this.designer.createPipe({
+        id: pipe.id,
+        sourceId: pipe.sourceId,
+        targetId: pipe.targetId,
+        medium: pipe.medium,
+        dn: pipe.dn,
+        sourcePort: pipe.sourcePort,
+        targetPort: pipe.targetPort,
+      });
+      added++;
+    }
+
+    if (added || removed) {
+      // 计数改成增量维护：`counts()` 是 e2e 读"图元数对不对"的口子
+      this.compiled = {
+        symbols: this.compiled.symbols + units.length - removedUnitIds.length,
+        pipes: this.compiled.pipes + pipes.length - removedPipeIds.length,
+      };
+      // 采纳补丁之后那份文档（`__focusBox()` 读它，见 `doc` 的注释）
+      if (patchedDoc) this.doc = patchedDoc;
+      // `createSymbol` 每建一个都会把它记成选中项 —— 与构造里一样要清掉
+      this.designer.select(null);
+      this.ice.dirty = true;
+    }
+    return { added, removed };
   }
 
   /**

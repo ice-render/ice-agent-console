@@ -17,6 +17,8 @@ import {
 } from '../server/agents/scripted';
 import { buildPlan, resumeValues } from '../server/agents/scenarios';
 import { WATER_PROCESS_DSL } from '../shared/water-process-case';
+import { applyJsonPatch } from '../src/domain/agui/state-patch';
+import { validateDiagramDsl } from '../src/domain/diagram/validate';
 import { planToEvents, type ToolCallCardPlan } from '../server/agents/dsl-to-events';
 import {
   COLLECT_INPUT_TOOL,
@@ -154,12 +156,20 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
     expect((plan as ToolCallCardPlan).stateKey).toBe(STATE_DIAGRAM_KEY);
   });
 
-  it('载荷是 34 个单元 / 37 段管线（与 ice-smart-water 的案例一致）', () => {
+  it('载荷是一张真实厂站规模的图（68 单元 / 81 管线），且**从常量直接引**', () => {
     const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
     const payload = payloadOf(plan);
     expect(payload.kind).toBe('water-process');
-    expect(payload.units).toHaveLength(34);
-    expect(payload.pipes).toHaveLength(37);
+    // 不从数字再抄一遍：规模变化时这里应当**自动**跟着走，
+    // 真正要钉的是"剧本发出去的就是那份内置案例"这件事
+    expect(payload).toBe(WATER_PROCESS_DSL);
+    expect(payload.units.length).toBeGreaterThanOrEqual(60);
+    expect(payload.pipes.length).toBeGreaterThanOrEqual(70);
+    // 两组并联的生化线都要在（这是"真实厂站"的第一条特征）
+    const ids = new Set(payload.units.map((u: any) => u.id));
+    for (const id of ['ana1', 'anx1', 'aer1', 'sec1', 'ana2', 'anx2', 'aer2', 'sec2']) {
+      expect(ids.has(id)).toBe(true);
+    }
   });
 
   it('★ 含「流」的水务问法不会被流式剧本抢走', () => {
@@ -301,6 +311,70 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
     expect(last).toBeCloseTo(first, 6);
     // 只有一个"全貌"档，其余都比它近
     expect(scales.filter((s) => s === first).length).toBeLessThanOrEqual(2);
+  });
+
+  it('★ 提标改造问法 → 走**改图**剧本，且带 STATE_DELTA 补丁', () => {
+    for (const text of ['提标改造', '拆掉初沉池', '改图', '增删图元']) {
+      const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
+      expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+      const patches = (plan.beats || []).filter((b) => b.patchState && b.patchState.length);
+      expect(patches.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('★ 「提标改造」不能被"重画一张工艺图"抢走（它也含"工艺图"三个字）', () => {
+    // 与缩放 / 闪烁同一条规矩：这条分支必须排在 `isWaterAsk` **之前**。
+    // 排后面的话意图是"改图"的一句会被"再看看那张图"收走 —— 用户看不到任何改动。
+    const plan = buildPlan({ message: '给这张工艺图做提标改造', hasDiagnostics: false }) as ToolCallCardPlan;
+    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+    expect((plan.beats || []).some((b) => !!b.patchState)).toBe(true);
+  });
+
+  it('★ 提标改造的补丁**删得掉、也加得上**，且顺序是"先删后加"', () => {
+    const plan = buildPlan({ message: '提标改造', hasDiagnostics: false }) as ToolCallCardPlan;
+    const ops = (plan.beats || []).flatMap((b) => b.patchState ?? []);
+    expect(ops.length).toBeGreaterThan(0);
+    // 两类操作都要有（只删不加 = 拆厂；只加不删 = 缺了"改接"那一半）
+    expect(ops.some((o) => o.op === 'remove')).toBe(true);
+    expect(ops.some((o) => o.op === 'add')).toBe(true);
+    // 删的必须是管线 / 单元 / focus 这三类路径之一
+    for (const op of ops.filter((o) => o.op === 'remove')) {
+      expect(/^\/diagram\/(units|pipes|viewport\/focus)\/\d+$/.test(op.path)).toBe(true);
+    }
+    // 加的必须是"往末尾追加"（`/-`）—— 往中间插会让已有元素下标前移，
+    // 而 `remove` 的下标是按**补丁前**算的（见 detectDiagramPatch）
+    for (const op of ops.filter((o) => o.op === 'add')) {
+      expect(/^\/diagram\/(units|pipes)\/-$/.test(op.path)).toBe(true);
+    }
+  });
+
+  it('★ 提标改造的补丁能真的算出那张新图，且**新图也过校验**', () => {
+    // 这条是"补丁要表达完整意图"的落地检查：删单元必须连带删它的管线、
+    // 还要把 `viewport.focus` 里的它摘掉 —— 少任何一样，这份文档就不自洽。
+    const plan = buildPlan({ message: '提标改造', hasDiagnostics: false }) as ToolCallCardPlan;
+    const ops = (plan.beats || []).flatMap((b) => b.patchState ?? []);
+
+    let doc: any = { diagram: structuredClone(WATER_PROCESS_DSL) };
+    doc = applyJsonPatch(doc, ops);
+
+    // 初沉池没了、提标段在
+    const ids = doc.diagram.units.map((u: any) => u.id);
+    expect(ids).not.toContain('primary');
+    for (const id of ['ozone', 'carbon', 'membrane']) expect(ids).toContain(id);
+    // 被取代的那根直连管线也没了
+    expect(doc.diagram.pipes.map((p: any) => p.id)).not.toContain('pipe-filter-disinfect');
+    // 没有悬空管线（两端都得在 units 里）
+    const unitIds = new Set(ids);
+    for (const pipe of doc.diagram.pipes) {
+      expect({ pipe: pipe.id, ok: unitIds.has(pipe.sourceId) && unitIds.has(pipe.targetId) }).toEqual({
+        pipe: pipe.id,
+        ok: true,
+      });
+    }
+    // `focus` 里不许再提被删的那个
+    expect(doc.diagram.viewport.focus).not.toContain('primary');
+    // 最终这张图本仓的守卫也要认（结构与取值都合法）
+    expect(validateDiagramDsl(doc.diagram).valid).toBe(true);
   });
 
   it('readDiagnosticsTool 读出「哪个工具失败了」', () => {

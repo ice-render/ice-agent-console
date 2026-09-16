@@ -7,6 +7,7 @@
 import {
   CHART_ROWS_PATH,
   applyJsonPatch,
+  detectDiagramPatch,
   detectRowAppend,
   type JsonPatchOp,
 } from '../src/domain/agui/state-patch';
@@ -113,5 +114,156 @@ describe('detectRowAppend', () => {
     expect(
       detectRowAppend([{ op: 'add', path: '/chart/other/-', value: [1, 2] }]).isPlainAppend
     ).toBe(false);
+  });
+});
+
+/**
+ * 图元增删的识别。
+ *
+ * `detectDiagramPatch` 决定"改图"是走**增量**（`createSymbol` / `designer.remove`，
+ * 图层不重建、视口不重置）还是退全量重建。判错的后果分两种，都不轻：
+ * - **漏认**（该增量却退全量）：结果还对，只是白重建一次、用户的缩放位置被冲掉；
+ * - **错认**（该退全量却走增量）：图会**静静地少画或多画东西**。
+ *
+ * 第二种才是要穷举的原因，所以下面每一条"不认"的分支都比"认"的分支更重要。
+ */
+describe('detectDiagramPatch', () => {
+  const baseDoc = () => ({
+    diagram: {
+      kind: 'water-process',
+      viewport: { focus: ['a', 'b'] },
+      units: [
+        { id: 'a', kind: 'inlet', name: 'A', tag: 'A-1', left: 0, top: 0 },
+        { id: 'b', kind: 'pump', name: 'B', tag: 'B-1', left: 100, top: 0 },
+        { id: 'c', kind: 'outlet', name: 'C', tag: 'C-1', left: 200, top: 0 },
+      ],
+      pipes: [
+        { id: 'p-ab', sourceId: 'a', targetId: 'b', medium: 'sewage', dn: 'DN100' },
+        { id: 'p-bc', sourceId: 'b', targetId: 'c', medium: 'sewage', dn: 'DN100' },
+      ],
+    },
+  });
+
+  it('往 units / pipes 末尾追加 → 认，且带上要新增的图元', () => {
+    const unit = { id: 'd', kind: 'pump', name: 'D', tag: 'D-1', left: 300, top: 0 };
+    const pipe = { id: 'p-cd', sourceId: 'c', targetId: 'd', medium: 'sewage', dn: 'DN100' };
+    const hit = detectDiagramPatch(
+      [
+        { op: 'add', path: '/diagram/units/-', value: unit },
+        { op: 'add', path: '/diagram/pipes/-', value: pipe },
+      ],
+      baseDoc()
+    );
+    expect(hit.isElementPatch).toBe(true);
+    expect(hit.units).toEqual([unit]);
+    expect(hit.pipes).toEqual([pipe]);
+    expect(hit.removedUnitIds).toEqual([]);
+    expect(hit.removedPipeIds).toEqual([]);
+  });
+
+  it('★ remove 的**下标**要靠补丁前的文档翻成 id', () => {
+    // JSON Patch 只给下标，所以"删的是谁"必须查旧文档。查错文档 = 删错东西。
+    const hit = detectDiagramPatch([{ op: 'remove', path: '/diagram/units/1' }], baseDoc());
+    expect(hit.isElementPatch).toBe(true);
+    expect(hit.removedUnitIds).toEqual(['b']);
+  });
+
+  it('★ 没有补丁前的文档 → 不认（宁可贵一点，也不能删错）', () => {
+    expect(detectDiagramPatch([{ op: 'remove', path: '/diagram/units/1' }], null).isElementPatch).toBe(
+      false
+    );
+    expect(detectDiagramPatch([{ op: 'remove', path: '/diagram/units/1' }], undefined).isElementPatch).toBe(
+      false
+    );
+  });
+
+  it('★ 下标越界 → 不认（不能让它静默删掉别的）', () => {
+    const hit = detectDiagramPatch([{ op: 'remove', path: '/diagram/units/99' }], baseDoc());
+    expect(hit.isElementPatch).toBe(false);
+  });
+
+  it('★ 增删混着别的路径 → 整批不认（宁可退全量）', () => {
+    const hit = detectDiagramPatch(
+      [
+        { op: 'add', path: '/diagram/units/-', value: { id: 'd' } },
+        { op: 'replace', path: '/diagram/title', value: '改了个标题' },
+      ],
+      baseDoc()
+    );
+    expect(hit.isElementPatch).toBe(false);
+  });
+
+  it('★ replace 一个图元 → 不认（那是"改"不是"增删"，语义不同）', () => {
+    const hit = detectDiagramPatch(
+      [{ op: 'replace', path: '/diagram/units/0', value: { id: 'a' } }],
+      baseDoc()
+    );
+    expect(hit.isElementPatch).toBe(false);
+  });
+
+  it('往数组**中间**插 → 不认（那是"顺序变了"，不是"新增了"）', () => {
+    const hit = detectDiagramPatch(
+      [{ op: 'add', path: '/diagram/units/1', value: { id: 'x' } }],
+      baseDoc()
+    );
+    expect(hit.isElementPatch).toBe(false);
+  });
+
+  it('追加的值不是对象（比如数字 / 数组）→ 不认', () => {
+    for (const value of [42, 'x', null, [1, 2]]) {
+      const hit = detectDiagramPatch([{ op: 'add', path: '/diagram/units/-', value }], baseDoc());
+      expect({ value, ok: hit.isElementPatch }).toEqual({ value, ok: false });
+    }
+  });
+
+  it('空补丁 / 缺 path → 不认', () => {
+    expect(detectDiagramPatch([], baseDoc()).isElementPatch).toBe(false);
+    expect(detectDiagramPatch([{ op: 'add' } as JsonPatchOp], baseDoc()).isElementPatch).toBe(false);
+  });
+
+  it('一条都没有效操作 → 不认（避免"认了但什么也不做"这种空转）', () => {
+    expect(detectDiagramPatch([], baseDoc()).isElementPatch).toBe(false);
+  });
+
+  it('★ 删除 + 新增可以同批（改图的常态：拆一处、接一处）', () => {
+    const hit = detectDiagramPatch(
+      [
+        { op: 'remove', path: '/diagram/pipes/0' },
+        { op: 'add', path: '/diagram/pipes/-', value: { id: 'p-ac', sourceId: 'a', targetId: 'c' } },
+      ],
+      baseDoc()
+    );
+    expect(hit.isElementPatch).toBe(true);
+    expect(hit.removedPipeIds).toEqual(['p-ab']);
+    expect(hit.pipes).toHaveLength(1);
+  });
+
+  it('★ 认了之后 applyJsonPatch 的结果必须自洽（管线不悬空）', () => {
+    // 这条盯的是"补丁要表达完整意图"：删单元必须连带删它的管线，
+    // 否则文档里会留下指向不存在单元的管线（本仓的守卫会当场报错）。
+    const doc = baseDoc();
+    const pipeIds = doc.diagram.pipes
+      .filter((p) => p.sourceId === 'b' || p.targetId === 'b')
+      .map((p) => p.id);
+    const ops: JsonPatchOp[] = [
+      // 降序删（`remove` 之后下标会前移）
+      ...doc.diagram.pipes
+        .map((p, i) => ({ id: p.id, i }))
+        .filter((x) => pipeIds.indexOf(x.id) >= 0)
+        .sort((a, b) => b.i - a.i)
+        .map((x) => ({ op: 'remove' as const, path: `/diagram/pipes/${x.i}` })),
+      { op: 'remove', path: '/diagram/units/1' },
+    ];
+    const hit = detectDiagramPatch(ops, doc);
+    expect(hit.isElementPatch).toBe(true);
+
+    const next = applyJsonPatch(doc, ops);
+    expect(next.diagram.units.map((u: any) => u.id)).toEqual(['a', 'c']);
+    expect(next.diagram.pipes).toEqual([]);
+    // 没有悬空引用
+    const ids = new Set(next.diagram.units.map((u: any) => u.id));
+    for (const p of next.diagram.pipes as any[]) {
+      expect(ids.has(p.sourceId) && ids.has(p.targetId)).toBe(true);
+    }
   });
 });

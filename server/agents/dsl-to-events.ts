@@ -64,6 +64,18 @@ export interface ChartBeat {
   zoom?: ZoomCommand;
   /** 这一拍播完后，像流式数据那样往表里追加行（走标准的 JSON Patch）。 */
   appendRows?: any[][];
+  /**
+   * 这一拍播完后，**增删工艺图上的图元**（同样走标准的 JSON Patch）。
+   *
+   * 载荷就是**原样的 JSON Patch 操作数组** —— 这里不自造格式，因为
+   * "state 变了"这件事协议里已经有词了（`STATE_DELTA` + RFC 6902），
+   * 再发明一个"图元增删事件"只会多一条要维护的通道。
+   *
+   * ⚠️ `remove` 的 path 是**下标**（`/diagram/units/6`），所以拼补丁的人
+   * 必须知道被删元素当前的第几位。`scenarios.ts` 里用的是
+   * `indexOfUnit(dsl, id)` —— 别写死数字，那张图的单元顺序会变。
+   */
+  patchState?: Array<{ op: string; path: string; value?: any }>;
 }
 
 /** 一次中断：`RUN_FINISHED` 会带上它，前端据此进入"等用户答复"的状态。 */
@@ -144,7 +156,7 @@ export function chunkString(input: string, size: number): string[] {
  *   TOOL_CALL_START ─ ARGS×n ─ END        ← 参数流式分片，前端能看到 DSL 在拼
  *   TOOL_CALL_RESULT
  *   STATE_SNAPSHOT                        ← 画布真相（可序列化、可恢复）
- *   [beats]  画完之后的解说                ← 每拍之间可插 CUSTOM 指点 / STATE_DELTA 追加
+ *   [beats]  画完之后的解说                ← 每拍之间可插 CUSTOM 指点 / STATE_DELTA（追加行或增删图元）
  *   RUN_FINISHED                          ← 有 interrupt 时带 outcome
  *
  * 为什么不是"边说边画"：`CUSTOM` 指点的对象是画布，画布得先在。
@@ -227,6 +239,14 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
         },
       });
     }
+    if (beat.patchState && beat.patchState.length) {
+      // 与 appendRows 同一条通道（`STATE_DELTA`），只是路径不同：
+      // 那个往 `/chart/data/rows` 追加，这个增删 `/diagram/units` 与 `/diagram/pipes`。
+      // 前端按**补丁的形状**分流（见 state-patch.ts 的两个 detect*），
+      // 所以这里不需要告诉它"这是图元增删" —— 形状本身就说明了。
+      push({ type: EventType.STATE_DELTA, delta: beat.patchState });
+    }
+
     if (beat.appendRows) {
       // 标准 JSON Patch（RFC 6902）：往 DSL 的 data.rows 末尾追加。
       // 之所以打在 DSL 上而不是打在编译后的 ChartOption 上，是因为 DSL 才是

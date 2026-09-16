@@ -15,7 +15,14 @@ import {
   STATE_DIAGRAM_KEY,
   STATE_FORM_KEY,
 } from '../../shared/contract';
-import { WATER_PROCESS_DSL } from '../../shared/water-process-case';
+import {
+  UPGRADE_BRIDGE_PIPES,
+  UPGRADE_PIPES,
+  UPGRADE_REMOVED_PIPE_IDS,
+  UPGRADE_REMOVED_UNIT_IDS,
+  UPGRADE_UNITS,
+  WATER_PROCESS_DSL,
+} from '../../shared/water-process-case';
 import type { ToolCardPlan } from './dsl-to-events';
 
 /** 一张表 + encoding，这就是 ice-chart-dsl 想要的形态。 */
@@ -262,16 +269,17 @@ function isWaterAsk(text: string): boolean {
  * 倍率就飘到不可预期；而写死档位之后，讲稿的任何一拍停在哪一屏都是确定的
  * —— 单测与 e2e 也才断言得了。
  *
- * | 档 | 倍率 | 用在哪 |
- * |---|---|---|
- * | 全貌 | 0.42 | 开场：整张图（含污泥线与事故支路）都在视野里 |
- * | 分段 | 0.85 | 讲一条工艺段（预处理 / 生化 / 深度处理） |
- * | 单格 | 1.5 | 讲一个池子：位号、名称、进出管线都读得清 |
+ * | 档 | 倍率 | 用在哪 | 一屏能看到 |
+ * |---|---|---|---|
+ * | 全貌 | 0.22 | 开场 / 收尾：整张图纸（含污泥线、事故水、加药间） | 约 4800 世界像素宽 = 整张图 |
+ * | 分段 | 0.85 | 讲一条工艺段（预处理 / 生化 / 深度处理） | 约 1200 = 4~5 个池子 |
+ * | 单格 | 1.5 | 讲一个池子：位号、名称、进出管线都读得清 | 约 700 = 1~2 个池子 |
  *
- * 三个数与 `WATER_PROCESS_DSL` 的世界尺寸（约 1900×1800）配着调 ——
- * 改动坐标之后**回来重算一遍**，否则"单格"那档可能连一个池子都装不下。
+ * 三个数与 `WATER_PROCESS_DSL` 的世界尺寸（约 4900×2400）配着调 ——
+ * 改动坐标之后**回来重算一遍**，否则"全貌"那档会装不下整张图
+ * （0.42 是上一版 1900 宽时的数，铺开之后那个倍率只看得到主流程的一半）。
  */
-const VIEW_ALL = 0.42;
+const VIEW_ALL = 0.22;
 const VIEW_STAGE = 0.85;
 const VIEW_UNIT = 1.5;
 
@@ -324,26 +332,26 @@ function waterProcessPlan(): ToolCardPlan {
         text:
           '进生化段。厌氧池是释磷的地方 —— 聚磷菌在这里把磷放出来，' +
           '这是后面能生物除磷的前提：',
-        pointAt: 'ana',
+        pointAt: 'ana1',
         zoom: { direction: 'to', scale: VIEW_UNIT },
       },
       {
         text:
           '缺氧池靠内回流把硝态氮还原成氮气，这是脱氮的主战场。' +
           '注意上方那个内回流调节阀，混合液就是从好氧池经它回到这里的：',
-        pointAt: 'anx',
+        pointAt: 'anx1',
         zoom: { direction: 'to', scale: VIEW_UNIT },
       },
       {
-        text: '好氧池完成硝化与有机物降解，鼓风机从最上面通过空气管给它供氧：',
-        pointAt: 'aer',
+        text: '好氧池完成硝化与有机物降解，鼓风机房从最上面通过空气管给它供氧：',
+        pointAt: 'aer1',
         zoom: { direction: 'to', scale: VIEW_UNIT },
       },
       {
         text:
           '二沉池做泥水分离。上清液去深度处理，污泥一路回流到厌氧池、' +
-          '一路去浓缩脱水 —— 池子底下那三根管子就是这三路：',
-        pointAt: 'sec',
+          '一路去浓缩脱水 —— 池子底下那几根管子就是这几路：',
+        pointAt: 'sec1',
         zoom: { direction: 'to', scale: VIEW_UNIT },
       },
       {
@@ -401,13 +409,13 @@ function zoomPlan(): ToolCardPlan {
     beats: [
       { text: '先推到全貌，看看整张图纸的骨架：', zoom: { direction: 'to', scale: VIEW_ALL } },
       {
-        text: '进到生化段 —— AAO 这三格是全厂的核心，顺序不能颠倒：',
-        pointAt: 'ana',
+        text: '进到生化段。两条线是并联的，A 线在上一行、B 线在下一行 —— 先看 A 线，AAO 这三格的顺序不能颠倒：',
+        pointAt: 'ana1',
         zoom: { direction: 'to', scale: VIEW_UNIT },
       },
       {
         text: '再往右推到二沉池。注意它是最高的一个符号，因为泥水分离在这里发生：',
-        pointAt: 'sec',
+        pointAt: 'sec1',
         zoom: { direction: 'to', scale: VIEW_UNIT },
       },
       { text: '拉回分段档，看深度处理那一整条线：', pointAt: 'coag', zoom: { direction: 'to', scale: VIEW_STAGE } },
@@ -439,9 +447,9 @@ function blinkPlan(): ToolCardPlan {
       '我把 AAO 的三个池子依次点出来、各闪一下 —— 用的是同一个 `point_at`，只是多带一个 `blink`。' +
       '高亮用的是鲜黄，因为这张图上蓝绿青都被介质占用完了。',
     beats: [
-      { text: '厌氧池：聚磷菌在这里释磷，是生物除磷的前提 —— 看这个在闪的黄框：', pointAt: 'ana', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
-      { text: '缺氧池：内回流把硝态氮带过来还原成氮气，脱氮的主战场：', pointAt: 'anx', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
-      { text: '好氧池：硝化与有机物降解都在这儿，也是耗氧最多的一段：', pointAt: 'aer', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
+      { text: '厌氧池：聚磷菌在这里释磷，是生物除磷的前提 —— 看这个在闪的黄框：', pointAt: 'ana1', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
+      { text: '缺氧池：内回流把硝态氮带过来还原成氮气，脱氮的主战场：', pointAt: 'anx1', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
+      { text: '好氧池：硝化与有机物降解都在这儿，也是耗氧最多的一段：', pointAt: 'aer1', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
       { text: '这三个池子合起来就是 AAO，顺序不能颠倒 —— 颠倒了两边都做不成：', zoom: { direction: 'to', scale: VIEW_STAGE } },
       {
         text:
@@ -453,6 +461,214 @@ function blinkPlan(): ToolCardPlan {
 }
 
 /** 默认剧本：柱状图 + 画完之后指着 3 月讲。 */
+type PatchOp = { op: string; path: string; value?: any };
+
+/**
+ * **下标游标**：编补丁时用来算"现在这个 id 在第几位"。
+ *
+ * ## 为什么必须有它（这是这一版踩到的最隐蔽的坑）
+ *
+ * JSON Patch 的 `remove` 只认**下标**，而下标会在每次增删之后变化。
+ * 更麻烦的是 `STATE_DELTA` 是**顺序应用**的 —— 一条 run 里可能有好几拍、
+ * 每拍一批补丁，后一批的下标必须相对**前一批之后**的那份文档算。
+ *
+ * 不这么做会怎样（实测）：第一拍删掉 3 根管线，第二拍还按**基准图**的下标
+ * 去删 `pipe-filter-disinfect`（基准里是 29）—— 那个下标现在已经指向另一根管线了。
+ * 而 `remove` 一个**存在的**下标**不报错**，于是它静默删掉了不该删的那根，
+ * 图看着"变了"，但变错了。
+ *
+ * 所以这里维护一份"id 列表"的镜像，每发一批就同步删/加，之后的下标都从它算。
+ * 它与真实文档的一致性**只在编补丁期间**需要 —— 真正应用补丁的还是 reducer。
+ *
+ * ## 两条规矩
+ *
+ * 1. **降序删**：`remove` 之后后面元素的下标会前移，升序删会错位。
+ *    所以一批里先删靠后的，前面的下标就不受影响（镜像也按同样顺序同步）。
+ * 2. **增删都要同步镜像**：只删不记、或只加不记，后面算出来的下标立刻就是错的。
+ */
+class IndexCursor {
+  private units: string[];
+  private pipes: string[];
+
+  constructor(units: ReadonlyArray<{ id: string }>, pipes: ReadonlyArray<{ id: string }>) {
+    this.units = units.map((u) => u.id);
+    this.pipes = pipes.map((p) => p.id);
+  }
+
+  removePipes(ids: string[]): PatchOp[] {
+    return this.__remove(this.pipes, ids, '/diagram/pipes');
+  }
+
+  removeUnits(ids: string[]): PatchOp[] {
+    return this.__remove(this.units, ids, '/diagram/units');
+  }
+
+  /** 追加到末尾（补丁用 `/-`）—— 已有元素的下标不受影响，但镜像要记住它们存在。 */
+  addUnits(ids: string[]): void {
+    this.units.push(...ids);
+  }
+  addPipes(ids: string[]): void {
+    this.pipes.push(...ids);
+  }
+
+  private __remove(list: string[], ids: string[], base: string): PatchOp[] {
+    const found = ids
+      .map((id) => ({ id, index: list.indexOf(id) }))
+      .filter((item) => {
+        if (item.index < 0) throw new Error(`[scenarios] 图里没有「${item.id}」，补丁没法构造`);
+        return true;
+      })
+      // ⚠️ 降序：见类注释第 1 条
+      .sort((a, b) => b.index - a.index);
+
+    const ops = found.map((item) => ({ op: 'remove', path: `${base}/${item.index}` }));
+    // 同步镜像（同样是降序，否则 splice 会错位）
+    for (const item of found) list.splice(item.index, 1);
+    return ops;
+  }
+}
+
+/**
+ * 删单元时**顺带要删的管线**（两端指向它的那些）。
+ *
+ * 为什么必须显式列出：渲染层确实会级联（`FlowDesigner.remove(unitId)` 顺手删掉
+ * 挂在它两端的连线），但那只保证**画面**干净 —— `STATE_DELTA` 改的是那份 **state 文档**，
+ * 而 JSON Patch 只会把 `units` 数组里那一项拿掉，**管线数组原封不动**。
+ *
+ * 于是文档里会留下"两端指向一个不存在的单元"的管线。后果有两层：
+ * - 立刻：`validateDiagramDsl` 报 `引用了不存在的单元`（本仓的守卫会拦下来）；
+ * - 以后：任何一次"从 state 重建这张图"都会在建那几根管线时抛
+ *   （`createPipe` 要求两端已存在）。
+ *
+ * 所以**补丁要表达完整意图**，别指望渲染层的级联去补文档 —— 那两条路径服务于
+ * 不同的东西，混起来就是一个走两天才浮现的坑（这一条也是实测踩到的）。
+ */
+function pipesTouching(
+  pipes: ReadonlyArray<{ id: string; sourceId: string; targetId: string }>,
+  unitIds: string[]
+): string[] {
+  return pipes
+    .filter((pipe) => unitIds.indexOf(pipe.sourceId) >= 0 || unitIds.indexOf(pipe.targetId) >= 0)
+    .map((pipe) => pipe.id);
+}
+
+/** `viewport.focus` 里也要把被删的单元摘掉，否则守卫会报"引用了不存在的单元"。 */
+function focusRemovalOps(
+  focus: ReadonlyArray<string>,
+  removedUnitIds: string[]
+): PatchOp[] {
+  return focus
+    .map((id, index) => ({ id, index }))
+    .filter((item) => removedUnitIds.indexOf(item.id) >= 0)
+    .sort((a, b) => b.index - a.index)
+    .map((item) => ({ op: 'remove', path: `/diagram/viewport/focus/${item.index}` }));
+}
+
+/** 追加图元（顺序：先单元、再管线 —— `createPipe` 要求两端已存在）。 */
+function appendOps(units: ReadonlyArray<any>, pipes: ReadonlyArray<any>): PatchOp[] {
+  return [
+    ...units.map((u) => ({ op: 'add', path: '/diagram/units/-', value: u })),
+    ...pipes.map((p) => ({ op: 'add', path: '/diagram/pipes/-', value: p })),
+  ];
+}
+
+/**
+ * 剧本：**提标改造 —— 动态增删图元**。
+ *
+ * ## 为什么这是最能说明"图是活的"的一条
+ *
+ * 前面所有剧本都只在**已有的图**上动镜头或改高亮，图元本身一个没变。
+ * 这一条改的是图的**结构**：拆掉初沉池、改接主管、加三个提标单元。
+ * 而它走的**不是**"重画一张新图"，是 `STATE_DELTA` + JSON Patch 的增量：
+ * 三次 `createSymbol`、几次 `remove`，**图层不重建、视口不重置**。
+ *
+ * ## 补丁的构造顺序（每一步都踩过）
+ *
+ * 1. **先删管线、再删单元**。删单元时 `FlowDesigner.remove` 会级联删掉两端的管线，
+ *    所以反过来做的第二批 `remove` 会落到"已经不在了"的下标上 ——
+ *    而 `remove` 一个不存在的下标**不报错**，会静默删掉旁边的那个。
+ * 2. `remove` 的 path 用**下标**（协议如此），下标由 `indexOfUnit` 从 id 现算。
+ * 3. 加单元 / 管线都用 `/-` 追加 —— 图元的顺序对渲染没影响（位置在 `left/top` 里）。
+ *
+ * ## 三拍讲的是三件事
+ *
+ * | 拍 | 补丁 | 讲什么 |
+ * |---|---|---|
+ * | 1 | 删 `primary` + 加 `pipe-grit-dist` | 拆初沉池：碳源留给生化段（**拆一处、接一处**） |
+ * | 2 | 删 `pipe-filter-disinfect` + 加 3 个单元 + 4 根管线 | 提标改造：臭氧 → 活性炭 → 超滤 |
+ * | 3 | （无补丁，只推镜头） | 收尾：图变了，但**没有重画** |
+ *
+ * ⚠️ **两批补丁的下标基准不同**：`STATE_DELTA` 是顺序应用的，第一拍删完之后
+ * 第二拍的下标已经整体前移了。所以第二拍的下标相对"第一拍之后的文档"算
+ * （`IndexCursor` 干的就是这件事）。拿基准图的下标去编第二拍，会**删错管线且不报错**。
+ *
+ * ⚠️ 补丁要**表达完整意图**：删一个单元得连带删它的管线、还要把 `viewport.focus`
+ * 里的它摘掉。渲染层虽然会级联（`designer.remove` 顺手删两端连线），
+ * 但那只保证画面干净 —— `state` 文档是另一条账。详见 `pipesTouching`。
+ */
+function upgradePlan(): ToolCardPlan {
+  const base = WATER_PROCESS_DSL;
+
+  // ⚠️ 补丁必须**逐拍按当前状态**编，不能都拿基准图的下标 —— 见 `IndexCursor`。
+  const cursor = new IndexCursor(base.units, base.pipes);
+
+  // ---- 第一拍：拆初沉池 + 补一根连通管（拆一处、接一处） ----
+  // 删单元要**连带删掉挂在它身上的三根管线**，并把 `viewport.focus` 里的它摘掉 ——
+  // 三样都写全了文档才自洽（理由见 `pipesTouching` 的注释）。
+  const dropPrimary: PatchOp[] = [
+    ...cursor.removePipes(pipesTouching(base.pipes, UPGRADE_REMOVED_UNIT_IDS)),
+    ...cursor.removeUnits(UPGRADE_REMOVED_UNIT_IDS),
+    ...focusRemovalOps(base.viewport?.focus ?? [], UPGRADE_REMOVED_UNIT_IDS),
+  ];
+  const addBridge = appendOps([], UPGRADE_BRIDGE_PIPES);
+  cursor.addPipes(UPGRADE_BRIDGE_PIPES.map((p) => p.id));
+
+  // ---- 第二拍：删掉被取代的直连管 + 加提标单元与绕行管线 ----
+  const dropReplaced = cursor.removePipes(UPGRADE_REMOVED_PIPE_IDS);
+  const addUpgrade = appendOps(UPGRADE_UNITS, UPGRADE_PIPES);
+
+  return diagramCard(WATER_PROCESS_DSL, {
+    intro:
+      '这张图现在是初始状态。我演示一下**改图**：厂里要提标改造，' +
+      '拆掉初沉池、再上一段臭氧 + 活性炭 + 超滤 —— 动的是同一张图，不是重画一张。',
+    beats: [
+      {
+        text:
+          '第一步，拆掉初沉池 —— AAO 前不设初沉池是现代厂的常见做法，' +
+          '让更多碳源进生化段供反硝化用。拆它的同时要补一根连通管：' +
+          '沉砂池直接进配水井，不然主线就断了。',
+        pointAt: 'primary',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+        patchState: [...dropPrimary, ...addBridge],
+      },
+      {
+        text:
+          '第二步，加提标段：臭氧接触池 → 活性炭滤池 → 膜池（超滤），' +
+          '插在滤布滤池和消毒之间；原来那根 `filter → disinfect` 的直连管线被这四根取代了：',
+        pointAt: 'filter',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+        patchState: [...dropReplaced, ...addUpgrade],
+      },
+      {
+        text:
+          '看深度处理那一段多出来的三个池子 —— 这就是提标段。初沉池那一格也空了。' +
+          '整个过程**没有重画**：图层是同一块画布、同一个 ICE 实例，视图也没跳。',
+        pointAt: 'ozone',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+      },
+      {
+        text:
+          '它走的不是新的工具调用，而是 `STATE_DELTA` 里的**标准 JSON Patch**' +
+          '（`add /diagram/units/-` 与 `remove /diagram/units/6`）：' +
+          '"state 变了"这件事协议里本来就有词，不用再发明一个"图元增删事件"。\n' +
+          '前端按**补丁的形状**分流 —— 只往 rows 追加走 `appendData`，只增删图元走增量，' +
+          '其余退全量重建。分流规则是纯函数，`tests/state-patch.test.ts` 里穷举过。',
+        zoom: { direction: 'to', scale: VIEW_ALL },
+      },
+    ],
+  });
+}
+
 function salesPlan(): ToolCardPlan {
   return chartCard(SALES_DSL, {
     intro: '好的，我拉一下各渠道的月度销量，用分组柱状图看。',
@@ -594,7 +810,8 @@ function textOnlyPlan(message: string): ToolCardPlan {
           `  · 要下发指令（走一遍中断 → 填表 → resume 的人机回环）\n` +
           `  · 故意画错（走一遍诊断回灌的自修复回路）\n` +
           `  · 把工艺图放大（让 AI 下命令缩放视图）\n` +
-          `  · 让图元闪烁（让 AI 下命令高亮闪烁）`,
+          `  · 让图元闪烁（让 AI 下命令高亮闪烁）\n` +
+          `  · 提标改造（让 AI **改图**：拆掉初沉池、加三个提标单元）`,
       },
     ],
   };
@@ -777,6 +994,10 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
   // 顺序上这两条也不用再判 isWaterAsk —— 它们是图卡专用的命令（图表卡会静默忽略）。
   if (/放大|缩小|缩放|复位|推近|拉远/.test(text)) return zoomPlan();
   if (/闪烁|闪一下|闪两下|闪一闪|闪烁一下/.test(text)) return blinkPlan();
+  // ⚠️ 「提标 / 改造」也要排在 `isWaterAsk` **之前** —— 这一句里同样含"工艺图"，
+  // 而它的意图是**改图**（增删图元），不是"再看看那张图"。
+  // 判断得**在 `故意画错` 之后**（那一条更具体，且优先级更高）。
+  if (/提标|改造|拆掉|拆除|改图|增删|加三个|加几个|新增图元|删掉/.test(text)) return upgradePlan();
   if (isWaterAsk(text)) return waterProcessPlan();
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
   if (/销量|渠道|柱|卖/.test(text)) return salesPlan();

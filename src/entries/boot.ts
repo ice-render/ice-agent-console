@@ -249,6 +249,22 @@ function applyEffects(effects: Effect[]): string | null {
         stage.clearPoint();
         break;
       }
+      case 'patch-diagram': {
+        // 增量增删图元：走 `createSymbol` / `designer.remove`，**不重建图层**。
+        // 落不到（绘图区上不是工艺图）就退一次全量 —— 便宜的路走不通时，
+        // 走对的那条。`state.sharedState.diagram` 是补丁**之后**那份，就是最新真相。
+        // 把补丁**之后**那份 DSL 一起递进去：图层要用它更新"该框住哪一段"
+        // （`viewport.focus` 会被补丁改，而图层不解析补丁、只采纳结果）。
+        const patchedDsl = state.sharedState?.diagram;
+        const result = stage.patchDiagram(effect, patchedDsl);
+        if (result === null) {
+          if (patchedDsl) {
+            const fallback = stage.mount('render_diagram', patchedDsl);
+            if (!fallback.ok) diagnostics = fallback.diagnostics;
+          }
+        }
+        break;
+      }
       case 'zoom': {
         // 缩放视图：只有工艺图会响应（图表返回 false，静默）。这是"查看"动作，不是编辑。
         //
@@ -469,6 +485,7 @@ const CHIPS = [
   '故意画错工艺图',
   '把工艺图放大',
   '让图元闪烁',
+  '提标改造',
   '今天天气怎么样',
 ];
 

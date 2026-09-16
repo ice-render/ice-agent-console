@@ -326,6 +326,29 @@ export class StageView {
     return this.diagram()?.fitAll() ?? false;
   }
 
+  /**
+   * 增量增删图元。**不重建图层、不重置视口** —— 这正是它存在的理由。
+   *
+   * @returns 实际动了几个图元；`null` 表示现在绘图区上不是工艺图
+   *          （补丁落不到别的图层上，调用方应当退一次全量）。
+   */
+  patchDiagram(
+    patch: {
+      units?: any[];
+      pipes?: any[];
+      removedUnitIds?: string[];
+      removedPipeIds?: string[];
+    },
+    patchedDoc?: any
+  ): { added: number; removed: number } | null {
+    const layer = this.diagram();
+    if (!layer || this.active !== 'diagram') return null;
+    // ⚠️ 内容指纹要跟着失效：不然下一次挂**同一份**（已经被补丁改过的）DSL 时，
+    //    比对会命中旧指纹、以为"内容没变"，于是把那批增删静默吞掉。
+    this.diagramKey = null;
+    return layer.applyPatch(patch, patchedDoc);
+  }
+
   /** 表单层：标记为已提交（界面侧的终态）。 */
   markFormSubmitted(): void {
     this.form()?.markSubmitted();

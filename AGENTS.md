@@ -31,6 +31,21 @@
    chart / form 是按需图层，被顶掉即**销毁**（不叠着留）。
    断言"有没有重画"用 `__iceAgentConsole.stageInfo().builds`，那是这件事的直接读数。
    图层之间是**并排**的（同一时刻只显示一个），不需要 `linkViewport` / `setInputPassthrough`。
+5d. **改图走 `STATE_DELTA` + JSON Patch，不要自造"图元增删事件"。**
+   "state 变了"协议里已经有词（`STATE_DELTA` + RFC 6902）。补丁按**形状**分流
+   （`src/domain/agui/state-patch.ts` 的两个纯函数）：只往 rows 追加 → `appendData`；
+   只增删 `/diagram/units` `/diagram/pipes` → **增量**（`createSymbol` / `designer.remove`，
+   图层不重建、视口不重置）；其它 → 全量重建。
+   两条**实测踩过**的坑：
+   - **渲染层的级联 ≠ 文档的一致性**。`designer.remove(unitId)` 会顺手删掉两端的连线，
+     画面是干净的；但 JSON Patch 只管 `units` 数组，**管线数组原封不动** ——
+     文档里会留下悬空管线。所以补丁要**表达完整意图**（删单元要连带列它的管线，
+     还要把 `viewport.focus` 里的它摘掉）。`detectDiagramPatch` 允许 focus 的删除，
+     但**不允许**它被当成"碰了别的东西"而退回全量。
+   - **下标会变，而 `remove` 一个存在的下标不报错**。`STATE_DELTA` 顺序应用，
+     前一批删完之后后一批的下标已经前移。所以编补丁要用 `scenarios.ts` 里的
+     `IndexCursor`（维护 id 镜像、**降序删**）。用基准图的下标编第二批会静默删错管线。
+   层里那个 `this.doc` 在 `applyPatch` 之后要换成**补丁后**那份（`__focusBox()` 读它）。
 5c. **浮在画布上的 DOM 面板必须 `stopPropagation`。** 引擎在 `window` 上装了**全局**事件
    拦截器（`DOMEventInterceptor`），把所有指针 / 滚轮事件**广播给每一个 ICE 实例**，
    唯一的过滤是"事件目标是不是另一块 **canvas**"。对话面板是个 `<div>`，不在过滤范围内 ——
@@ -75,9 +90,10 @@
 | 协议 → ICE 的纯翻译 | `src/domain/ice/option-mapping.ts` |
 | 图 DSL 的校验 / 编译（纯逻辑） | `src/domain/diagram/{types,validate,compile}.ts` |
 | 图 DSL 的结构类型（server 也要用） | `shared/diagram.ts` |
-| **绘图区**（铺满视口 + 图层切换 + 内容比对复用） | `src/view/stage.ts` |
+| **绘图区**（铺满视口 + 图层切换 + 内容比对复用 + 增量改图落点） | `src/view/stage.ts` |
+| 「这批补丁是追加行 / 增删图元 / 其它」的识别（纯逻辑） | `src/domain/agui/state-patch.ts` |
 | 工艺图图层（ice-entity-designer 的画布） | `src/view/diagram-layer.ts` |
-| 内置案例：污水处理工艺图（34 单元 / 37 管线） | `shared/water-process-case.ts` |
+| 内置案例：污水处理工艺图（68 单元 / 81 管线，会被剧本增删） | `shared/water-process-case.ts` |
 | 层（canvas + ICE 实例）的尺寸与生命周期 | `src/domain/ice/layer.ts` |
 | 图表实例的建立与交互接线 | `src/view/chart-adapter.ts` |
 | 控件层（图表卡的第二块画布，ice-web-components） | `src/view/widget-layer.ts` |

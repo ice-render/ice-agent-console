@@ -18,8 +18,21 @@
  *    而 canvas 相关的脏活留在真正需要它的地方。
  */
 import { EventType } from '@ag-ui/core';
-import { EVT_POINT_AT, EVT_POINT_CLEAR, EVT_ZOOM } from '../../../shared/contract';
-import { CHART_ROWS_PATH, applyJsonPatch, detectRowAppend, type JsonPatchOp } from './state-patch';
+import {
+  EVT_POINT_AT,
+  EVT_POINT_CLEAR,
+  EVT_ZOOM,
+  RENDER_DIAGRAM_TOOL,
+  STATE_CHART_KEY,
+  STATE_DIAGRAM_KEY,
+} from '../../../shared/contract';
+import {
+  CHART_ROWS_PATH,
+  applyJsonPatch,
+  detectDiagramPatch,
+  detectRowAppend,
+  type JsonPatchOp,
+} from './state-patch';
 
 // ---------------------------------------------------------------------------
 // 状态形状
@@ -113,7 +126,20 @@ export type Effect =
   /** `blink` 是"高亮之后再闪一下"，与 `value` 同属一次定位动作（见 shared/contract.ts）。 */
   | { type: 'point-at'; value: any; blink?: boolean }
   | { type: 'clear-point' }
-  | { type: 'zoom'; direction: 'in' | 'out' | 'reset' | 'to'; factor?: number; steps?: number; scale?: number };
+  | { type: 'zoom'; direction: 'in' | 'out' | 'reset' | 'to'; factor?: number; steps?: number; scale?: number }
+  /**
+   * **增量增删图元**（`STATE_DELTA` 里那批增删补丁的落点）。
+   *
+   * 不带 dsl —— 它要的就是"别重建"。新增的 `units` / `pipes` 直接
+   * `createSymbol` / `createPipe`，`removed*Ids` 交给 `designer.remove()`。
+   */
+  | {
+      type: 'patch-diagram';
+      units: any[];
+      pipes: any[];
+      removedUnitIds: string[];
+      removedPipeIds: string[];
+    };
 
 export interface Reduction {
   state: ThreadState;
@@ -160,7 +186,18 @@ export function initialState(threadId: string): ThreadState {
 // 归约
 // ---------------------------------------------------------------------------
 
-/** 找到最后一张图表卡片——`STATE_DELTA` 的作用对象。 */
+/**
+ * 某个工具产出的 DSL 在 state 里挂哪个键。
+ *
+ * 全量回退时要用它：`state` 是**一份文档**（`{chart: …}` / `{diagram: …}`），
+ * 直接把整份文档当 DSL 传给视图层是错的 —— 视图层的校验器会拦下来，
+ * 症状是"补丁一来图就变成一张报错的空卡"（这条路径以前没有用例走过，是加图元增删时发现的）。
+ */
+function stateKeyFor(tool: string): string {
+  return tool === RENDER_DIAGRAM_TOOL ? STATE_DIAGRAM_KEY : STATE_CHART_KEY;
+}
+
+/** 找到最后一次产出 DSL 的工具项——`STATE_DELTA` 的作用对象。 */
 function lastChartItem(items: ThreadItem[]): ToolItem | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];
@@ -377,13 +414,31 @@ export function reduce(state: ThreadState, action: Action): Reduction {
       }
       next.sharedState = patched;
 
-      // 走快路径还是全量重建，由这条纯函数决定（见 state-patch.ts 的注释）
-      const append = detectRowAppend(ops, CHART_ROWS_PATH);
+      // 三条路径由两个纯函数决定（见 state-patch.ts 的注释）：
+      //  1. 只往 rows 末尾追加 → `appendData` 快路径；
+      //  2. 只增删图元          → 增量 `createSymbol` / `remove`，**不重建**；
+      //  3. 其它                → 全量重建（贵一点，但一定对）。
       const target = lastChartItem(next.items);
+      const append = detectRowAppend(ops, CHART_ROWS_PATH);
+      // ⚠️ 传的是**补丁前**的文档（`state.sharedState`）：补丁里给的是下标，
+      //    要把它翻译成"删哪个 id"只能看旧文档。
+      const diagramPatch = target?.name === RENDER_DIAGRAM_TOOL
+        ? detectDiagramPatch(ops, state.sharedState)
+        : { isElementPatch: false as const };
+
       if (append.isPlainAppend && target) {
         effects.push({ type: 'append-rows', toolCallId: target.id, rows: append.rows });
+      } else if (diagramPatch.isElementPatch && target) {
+        effects.push({
+          type: 'patch-diagram',
+          units: (diagramPatch as any).units,
+          pipes: (diagramPatch as any).pipes,
+          removedUnitIds: (diagramPatch as any).removedUnitIds,
+          removedPipeIds: (diagramPatch as any).removedPipeIds,
+        });
       } else if (target) {
-        effects.push({ type: 'mount-chart', toolCallId: target.id, dsl: patched });
+        // 全量：按目标那一层的 stateKey 取出**它自己那份 DSL**，不是整份 state
+        effects.push({ type: 'mount-chart', toolCallId: target.id, dsl: patched?.[stateKeyFor(target.name)] });
       }
       return { state: next, effects };
     }
