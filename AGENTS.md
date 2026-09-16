@@ -88,7 +88,18 @@
    而且是**瞬时跳**不是 `smooth`（平滑动画会被下一条流式消息打断，永远落在后面）。
    `scroll` 事件的派发是异步的，所以 e2e 改完 `scrollTop` 要等一拍
    （`helpers.ts` 的 `scrollChatTo()` 已经代劳）。
-10. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
+10. **演示模式（纯前端）只许依赖 `server/agents/` 里那四个纯文件。**
+   `scripted.ts` / `scenarios.ts` / `dsl-to-events.ts` / `types.ts` 能在浏览器里跑
+   （零 node API），演示模式（`?demo=1` / `build:demo`）就是把它们搬进页面。
+   同目录的 `llm.ts` / `llm-client.ts` / `tools.ts` 与上层的 `index.ts` / `config.ts`
+   是**真 node-only**（`node:http` / `fs` / `process.env`）—— 碰了会把浏览器包搞坏，
+   症状是打包期一堆 node polyfill 找不到、或者打出一个巨大的假包。
+   两条 transport 共用 `src/domain/agui/run-input.ts` 的输入映射与 `RunTransport` 签名，
+   **别各拼一份输入**（`resume` 空数组不带那个条件很容易漏）；
+   取消语义也要一致（`AbortError` 静默返回、不当错误上报）。
+   开关是"构建期默认 + 运行期覆盖"两级，见 `src/domain/agui/transport.ts`。
+   模式判定必须能被单测，所以 `globalThis.location` 只在 boot.ts 里读、不进纯函数。
+11. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
    `__iceAgentConsole.widgetRects()`（应用挂出来的矩形查询），不要写死像素偏移 ——
    按钮宽度是按文案字数算的，改一个字就全错位。
 

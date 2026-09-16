@@ -17,7 +17,9 @@ import {
   DSL_TOOL_CONTEXT_KEY,
 } from '../../shared/contract';
 import { WATER_PROCESS_DSL } from '../../shared/water-process-case';
-import { runAgent, apiUrl, type ResumeEntry } from '../domain/agui/client';
+import { apiUrl } from '../domain/agui/client';
+import { pickTransport, resolveRunMode } from '../domain/agui/transport';
+import type { ResumeEntry } from '../domain/agui/run-input';
 import { installTheme } from '../domain/theme';
 import {
   initialState,
@@ -67,6 +69,15 @@ if (
 // **主题必须在任何组件构造之前装** —— 库的主题是"组件构造时读一次"。
 // 放这儿而不是放进 `main.ts`：这里就是"第一个会造组件的地方"的上游。
 installTheme();
+
+/**
+ * **这次跑哪种 transport**：连后端，还是在浏览器里跑剧本。
+ *
+ * 判定放在模块顶层（只算一次）：模式是**构建期 / 开页时**决定的事，
+ * 不该在每一轮 run 里重新解释一遍 URL。优先级见 `transport.ts`。
+ */
+const RUN_MODE = resolveRunMode(globalThis.location?.search ?? '');
+const transport = pickTransport(RUN_MODE);
 
 const threadId = `thread_${Math.random().toString(36).slice(2, 10)}`;
 let state = initialState(threadId);
@@ -332,6 +343,9 @@ function updateMeta(): void {
           ? '出错'
           : '空闲';
   metaEl!.innerHTML =
+    // 演示模式**必须显式标出来**：它走的是内置剧本、没有任何真模型参与，
+    // 不标的话第一次看到的人会以为"模型模式坏了"（或者以为背后真有个 agent）。
+    (RUN_MODE === 'demo' ? `演示模式<b>纯前端</b> · ` : '') +
     `thread <b>${state.threadId.slice(-6)}</b> · ` +
     `事件 <b>${state.eventCount}</b> · ` +
     `绘图区 <b>${info.active ?? '空'}</b> · ` +
@@ -441,7 +455,7 @@ async function send(text: string, options: SendOptions = {}): Promise<void> {
   const runId = `run_${Date.now().toString(36)}`;
 
   try {
-    await runAgent(
+    await transport(
       {
         threadId,
         runId,
@@ -557,6 +571,13 @@ inputEl.addEventListener('keydown', (event) => {
 (globalThis as any).__iceAgentConsole = {
   getState: () => state,
   apiUrl: () => apiUrl(),
+  /**
+   * 这次跑的是哪一路 transport（`'server'` / `'demo'`）。
+   *
+   * e2e 用它断言"开关真的生效了"—— 比只看画面强：演示模式下画面本来就该与
+   * 连后端时一模一样，看不出区别。
+   */
+  runMode: () => RUN_MODE,
   /** 绘图区事实：当前是哪种图层、各层建过几次、几块画布。 */
   stageInfo: () => stage.info(),
   /** 控件条上各按钮的矩形。canvas 里没有 DOM 目标可定位，e2e 要点中某个按钮就得知道它画在哪。 */

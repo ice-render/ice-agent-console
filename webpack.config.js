@@ -1,4 +1,5 @@
 const path = require('path');
+const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
 const WORKSPACE = path.resolve(__dirname, '..');
@@ -29,6 +30,27 @@ const family = {
 
 module.exports = (env, argv) => {
   const isProd = argv.mode === 'production';
+
+  /**
+   * **演示模式**：`npm run build:demo`（= `webpack --mode production --env demo`）。
+   *
+   * 这时的产物**不连后端** —— 前端在浏览器里直接跑 `server/agents/scripted.ts`
+   * 那份剧本 agent（见 `src/domain/agui/local-agent.ts`），所以 `dist/` 可以扔到
+   * GitHub Pages 之类的纯静态托管上做演示站点，甚至 `file://` 双击打开。
+   * 运行期还能用 `?demo=0` 切回连后端（优先级见 `src/domain/agui/transport.ts`）。
+   *
+   * ## 为什么这里要引入 DefinePlugin（本仓此前没有任何构建期常量先例）
+   *
+   * 既有的"切行为"手段有三类：`argv.mode`（构建期，但只有 prod/dev 两档）、
+   * URL 查询参数（`?theme=`）、`globalThis` 覆盖（`ICE_AGENT_API`）。
+   * **"是不是演示产物"与"prod/dev"是正交的两维** —— 演示站点要用 production 构建，
+   * 所以 `argv.mode` 表达不了这件事。而另外两类都是**运行期**的，
+   * 定不了默认值（演示站点裸链不能要求用户先加个 `?demo=1`）。
+   *
+   * 只剩构建期常量这一条路，DefinePlugin 就是它。**别因为"以前没有"就绕开** ——
+   * 绕开的代价是要么多一份 entry、要么在产物里塞个假 URL。
+   */
+  const demo = Boolean(env && env.demo);
 
   return {
     entry: {
@@ -64,6 +86,10 @@ module.exports = (env, argv) => {
         filename: 'index.html',
         chunks: ['boot'],
       }),
+      // 注入构建期常量（读取处与说明见 `src/domain/agui/transport.ts`）。
+      // `JSON.stringify` 是必须的：DefinePlugin 做的是**源码文本替换**，
+      // 直接给 `false` 会替换成字面量 `false`（碰巧对），但给字符串就会漏掉引号。
+      new webpack.DefinePlugin({ __ICE_DEMO__: JSON.stringify(demo) }),
     ],
     // 打进来的是引擎 + 图表 + DSL 三个库，体积天然大，别刷警告
     performance: { hints: false },

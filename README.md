@@ -82,6 +82,54 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 npm run serve        # 只跑静态产物（仍需后端在跑）
 ```
 
+### 1.0 演示模式：**不需要后端**（纯静态托管）
+
+上面那套要两个进程（前端 8100 + 后端 8099）。但"演示给别人看"这件事不该要求对方跑起后端，
+所以有一条**纯前端**的路：
+
+```bash
+npm run build:demo   # 产物不连后端
+npx http-server dist -p 8200 -c-1
+```
+
+打开 http://localhost:8200 —— **后端没起也照样能用**。`dist/` 是自包含的，
+可以整个扔到 GitHub Pages、对象存储、或者任何静态托管上：
+
+```bash
+# 发到 GitHub Pages（推到 gh-pages 分支即可，不需要额外依赖）
+cd dist && git init -b gh-pages && git add -A \
+  && git commit -m "demo site" \
+  && git push -f git@github.com:<你>/<仓库>.git gh-pages
+```
+
+产物用的是**相对路径**，所以子路径部署（`https://<你>.github.io/<仓库>/`）直接用。
+它也是自包含的单个 JS —— 连 `file://` 双击打开都能跑（只是那样聊天要能输入网址才行）。
+
+#### 它不是"另一个 mock 实现"
+
+演示模式在浏览器里跑的是**同一份** `server/agents/scripted.ts` ——
+同一批剧本、同一套事件序列、同一个播放节奏、同一条自修复回路。
+`src/domain/agui/local-agent.ts` 只做一件事：把它的 `AsyncIterable` 事件流喂给上层，
+和远端那条 `fetch + SSE` 的路径**共用同一个签名**（`RunTransport`）。
+
+所以这里**没有第二份 mock 要维护** —— 哪天 `scenarios.ts` 改了，演示站点跟着变。
+
+代价说清楚：那份 agent 代码会**打进主包**（约 +2%），普通构建也背着它。
+换来的是产物自包含（动态 `import()` 那条路会让 `file://` 打不开）。
+
+#### 开关：构建期定默认，运行期可覆盖
+
+| 来源 | 怎么表达 | 说明 |
+|---|---|---|
+| 构建期默认 | `npm run build:demo` | 产物默认走演示模式 |
+| 运行期覆盖 | `?demo=0` / `?demo=1` | 同一份产物里临时切回去 |
+
+普通 `npm run build` 的默认是**连后端**（与加这个开关之前完全一致）。
+非法值（`?demo=whatever`）落回构建期默认，不报错 —— 分享链接手抖打错一个参数不该白屏。
+
+演示模式下顶栏会显示 **演示模式纯前端**。这一条是刻意留的：它走的是内置剧本、
+没有任何模型参与，不标出来的话第一次看到的人会以为"模型模式坏了"。
+
 ### 1.1 接自己的大模型
 
 **只要接口兼容 OpenAI 的 `/chat/completions` 就行** —— 官方、DeepSeek、通义、本地的 ollama /
@@ -280,7 +328,7 @@ ice-agent-console · 大模型配置自检
 
 - **缩放是相对的，不是绝对倍率**。agent 并不知道当前倍率，给 `scale: 1.5` 这种绝对值
   很容易一跳跳到底、或者看不出变化。`reset` 也不回到 1 倍，而是回到**初始视野**
-  （按 DSL 的 `viewport.focus` 适配的那一屏）—— 对一张 1460 宽的世界坐标图，
+  （按 DSL 的 `viewport.focus` 适配的那一屏）—— 对一张 4820 宽的世界坐标图，
   1 倍意味着"看不清全貌"，不是用户要的"复位"。
 - **闪烁用引擎原生的声明式动画**（`direction: 'alternate'` + `iterationCount`），
   不是应用层手写的逐帧补间。轮数必须是**偶数**：交替方向下奇数轮会停在最暗处，
@@ -831,8 +879,8 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **226 passed** / 10 suites |
-| e2e | **40 passed** / 8 specs |
+| 单测 | **241 passed** / 11 suites |
+| e2e | **44 passed** / 9 specs |
 | 生产包 | 约 1.33 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
 > 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，

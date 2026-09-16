@@ -381,7 +381,7 @@ function waterProcessPlan(): ToolCardPlan {
       {
         text:
           '整张图是 `ice-entity-designer` 画的，不是图片。滚轮可以缩放、空白处拖拽可以平移 —— ' +
-          '世界尺寸约 1900×1800，是拖着看而不是缩略图。',
+          '世界尺寸约 4800×2300，是拖着看而不是缩略图。',
         zoom: { direction: 'to', scale: VIEW_ALL },
       },
     ],
