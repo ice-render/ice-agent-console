@@ -204,6 +204,59 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
     expect(toolOf(fallback)).toBe(RENDER_CHART_TOOL);
   });
 
+  it('缩放问法 → 走缩放剧本，节拍里有 zoom 指令', () => {
+    const plan = buildPlan({ message: '把工艺图放大', hasDiagnostics: false }) as ToolCallCardPlan;
+    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+    const zooms = (plan.beats || []).map((b) => b.zoom).filter(Boolean);
+    expect(zooms.length).toBeGreaterThan(0);
+    // 必须是**相对**语义（含 reset），不是绝对倍率
+    expect(zooms.some((z: any) => z.direction === 'in')).toBe(true);
+    expect(zooms.some((z: any) => z.direction === 'reset')).toBe(true);
+  });
+
+  it('★ 「把工艺图放大」不能被"重画一张工艺图"抢走', () => {
+    // 回归：缩放分支必须排在 isWaterAsk **之前**。
+    // 排后面的话这一句会被 waterProcessPlan 收走 —— 用户要点"放大"，
+    // 看到的却是一张重画的图（而且这轮根本没有 zoom 指令）。
+    for (const text of ['把工艺图放大', '放大一点', '缩小', '复位', '推近看']) {
+      const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
+      expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+      expect((plan.beats || []).some((b) => !!b.zoom)).toBe(true);
+    }
+  });
+
+  it('缩小 / 复位也是缩放剧本', () => {
+    const out = buildPlan({ message: '缩小', hasDiagnostics: false }) as ToolCallCardPlan;
+    expect((out.beats || []).some((b: any) => b.zoom?.direction === 'out')).toBe(true);
+  });
+
+  it('闪烁问法 → 图卡 + 节拍里 pointAt 带 blink', () => {
+    const plan = buildPlan({ message: '让图元闪烁', hasDiagnostics: false }) as ToolCallCardPlan;
+    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+    const blinked = (plan.beats || []).filter((b) => b.blink);
+    expect(blinked.length).toBeGreaterThan(0);
+    // 闪的必须同时有指的地方（否则就是"闪一个没被指到的东西"）
+    for (const b of blinked) {
+      expect(b.pointAt).toBeDefined();
+    }
+  });
+
+  it('★ 「让工艺图闪烁」也要排在 isWaterAsk 之前', () => {
+    for (const text of ['让图元闪烁', '工艺图闪一下', '闪一闪']) {
+      const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
+      expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
+      expect((plan.beats || []).some((b) => !!b.blink)).toBe(true);
+    }
+  });
+
+  it('闪烁节的点都在图里存在（id 对得上）', () => {
+    const plan = buildPlan({ message: '让图元闪烁', hasDiagnostics: false }) as ToolCallCardPlan;
+    const ids = new Set(payloadOf(plan).units.map((u: any) => u.id));
+    for (const b of plan.beats || []) {
+      if (b.blink) expect(ids.has(b.pointAt as string)).toBe(true);
+    }
+  });
+
   it('readDiagnosticsTool 读出「哪个工具失败了」', () => {
     const withTool = input({
       context: [{ description: DSL_TOOL_CONTEXT_KEY, value: RENDER_DIAGRAM_TOOL }] as any,

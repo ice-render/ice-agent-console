@@ -424,10 +424,21 @@ export class CardView {
     this.formLayer?.markSubmitted();
   }
 
-  pointAt(value: any): boolean {
+  pointAt(value: any, opts: { blink?: boolean } = {}): boolean {
     // 图卡走自己的高亮（引擎没有通用的高亮原语，见 diagram-layer 的注释）
-    if (this.diagramLayer) return this.diagramLayer.pointAt(value);
+    if (this.diagramLayer) return this.diagramLayer.pointAt(value, opts);
     return this.adapter.pointAt(value);
+  }
+
+  /**
+   * 缩放视图（agent 的命令）。目前只有图卡能响应。
+   *
+   * 图表卡**静默返回 false** 而不是报错：图表走的是 `ice-chart` 自己的 resize /
+   * 悬停路径，没有对等的"缩放视图"概念。为它编一个错误出来只会让 agent 以为自己说错了话。
+   */
+  zoomView(cmd: { direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number }): boolean {
+    if (this.diagramLayer) return this.diagramLayer.zoomBy(cmd);
+    return false;
   }
 
   clearPoint(): void {
@@ -485,6 +496,16 @@ export class CardView {
   /** 图卡：视口与内容屏幕范围（调试 / e2e 用；断言"fit 生效且没被裁"）。 */
   diagramViewport(): ReturnType<DiagramLayer['viewportInfo']> | null {
     return this.diagramLayer ? this.diagramLayer.viewportInfo() : null;
+  }
+
+  /** 图卡：当前视口 + 上一次缩放命令（调试 / e2e 用）。 */
+  diagramZoom(): ReturnType<DiagramLayer['zoomInfo']> | null {
+    return this.diagramLayer ? this.diagramLayer.zoomInfo() : null;
+  }
+
+  /** 图卡：最近一次闪烁的状态（调试 / e2e 用）。 */
+  diagramBlink(): ReturnType<DiagramLayer['blinkInfo']> | null {
+    return this.diagramLayer ? this.diagramLayer.blinkInfo() : null;
   }
 
   private showDiagnostics(text: string | null, asWarning = false): void {

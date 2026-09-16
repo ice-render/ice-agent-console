@@ -197,12 +197,21 @@ function applyEffects(effects: Effect[]): string | null {
         break;
       }
       case 'point-at': {
-        // 「指着讲」：作用在最后一张活着的图表卡片上
-        view.lastCard()?.pointAt(effect.value);
+        // 「指着讲」：作用在最后一张活着的卡片上（图卡会自己收下，图表卡走悬停）
+        view.lastCard()?.pointAt(effect.value, { blink: effect.blink === true });
         break;
       }
       case 'clear-point': {
         view.lastCard()?.clearPoint();
+        break;
+      }
+      case 'zoom': {
+        // 缩放视图：只有图卡会响应（图表卡返回 false，静默）。这是"查看"动作，不是编辑。
+        view.lastCard()?.zoomView({
+          direction: effect.direction,
+          ...(effect.factor !== undefined ? { factor: effect.factor } : {}),
+          ...(effect.steps !== undefined ? { steps: effect.steps } : {}),
+        });
         break;
       }
       default:
@@ -323,6 +332,8 @@ const CHIPS = [
   '看看新控件都能用吗',
   '故意画错',
   '故意画错工艺图',
+  '把工艺图放大',
+  '让图元闪烁',
   '今天天气怎么样',
 ];
 
@@ -391,6 +402,10 @@ window.addEventListener('resize', () => view.resizeAll());
    * canvas 里没有 DOM 目标，"有没有被裁到框外"只能靠它算。
    */
   diagramViewport: () => view.lastCard()?.diagramViewport() ?? null,
+  /** 最后一张图卡的视口 + 上一次缩放命令（e2e 断言"缩放落在哪、在不在动"）。 */
+  diagramZoom: () => view.lastCard()?.diagramZoom() ?? null,
+  /** 最后一张图卡的闪烁状态（opacity / 是否在动）。 */
+  diagramBlink: () => view.lastCard()?.diagramBlink() ?? null,
 };
 
 inputEl.focus();

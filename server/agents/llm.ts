@@ -40,8 +40,17 @@ import { REPAIR_HINT, SYSTEM_PROMPT, TOOL_DEFINITIONS } from './tools';
 import type { AgentRun } from './types';
 import { DEFAULT_PACE, lastUserMessage, delayFor, type Pace } from './scripted';
 
-/** 前端按工具名分派卡片，所以这两个名字必须与协议层的定义一致。 */
+/** 前端按工具名分派卡片，所以这些名字必须与协议层的定义一致。 */
 const POINT_AT_TOOL = 'point_at';
+const ZOOM_VIEW_TOOL = 'zoom_view';
+
+/**
+ * **画完之后**才允许模型调的工具（"看图说话"那一类）。
+ *
+ * 单独列出来是因为第二次调用**不能**放开 `render_*`：给了它就会接着又画一张，
+ * 变成没完没了地画图。这两个不改图、只动镜头与高亮，所以放得开。
+ */
+const POST_RENDER_TOOLS = [POINT_AT_TOOL, ZOOM_VIEW_TOOL];
 
 /** 把 AG-UI 的消息历史转成模型要的形状。 */
 function toChatMessages(input: RunAgentInput): ChatMessage[] {
@@ -88,6 +97,27 @@ function contextNotes(input: RunAgentInput): string[] {
 }
 
 /**
+ * 读模型给的缩放指令。方向非法就当没给（不编一个默认方向出来 ——
+ * 那会让"模型说了个没用的方向"变成"画面莫名其妙动了一下"）。
+ */
+function readZoomCommand(call: { name: string; args: any } | null | undefined): {
+  direction: 'in' | 'out' | 'reset';
+  factor?: number;
+  steps?: number;
+} | null {
+  if (!call || call.name !== ZOOM_VIEW_TOOL) return null;
+  const direction = call.args?.direction;
+  if (direction !== 'in' && direction !== 'out' && direction !== 'reset') return null;
+  const factor = Number(call.args?.factor);
+  const steps = Number(call.args?.steps);
+  return {
+    direction,
+    ...(Number.isFinite(factor) && factor > 0 ? { factor } : {}),
+    ...(Number.isFinite(steps) && steps > 0 ? { steps: Math.floor(steps) } : {}),
+  };
+}
+
+/**
  * 一次模型调用 + 工具执行之后，攒出 `ToolCardPlan`。
  *
  * 拆成纯函数是为了能单测：喂进"模型的两次回复"，断言产出的计划长什么样。
@@ -125,6 +155,8 @@ export function buildLlmPlan(
   // 名字 → {工具, stateKey} 的映射表，**不是**二元分支。
   // 写成 `isForm ? 表单 : 图表` 的话，模型调 `render_diagram` 会被当成图表卡渲染
   // —— 卡片类型错了、stateKey 也错，而两次都"看起来成功了"，最难查的那种。
+  // 只列**会画卡片**的工具。`point_at` / `zoom_view` 是画完之后的动作，由第二次调用处理，
+  // 不在这里（它们不产生卡片，落到下面的兜底分支也只会被当成图表卡）。
   const TOOL_ROUTES: Record<string, { tool: string; stateKey: string }> = {
     [COLLECT_INPUT_TOOL]: { tool: COLLECT_INPUT_TOOL, stateKey: STATE_FORM_KEY },
     [RENDER_DIAGRAM_TOOL]: { tool: RENDER_DIAGRAM_TOOL, stateKey: STATE_DIAGRAM_KEY },
@@ -135,16 +167,23 @@ export function buildLlmPlan(
   const tool = route.tool;
   const stateKey = route.stateKey;
 
-  // ---- 第二次调用的产出：结论（可能顺带指着某个点）----
+  // ---- 第二次调用的产出：结论（可能顺带指着某个点 / 缩放视图）----
   const beats: ToolCardPlan['beats'] = [];
   if (second) {
+    const call2 = second.toolCall;
     const pointAt =
-      second.toolCall?.name === POINT_AT_TOOL && typeof second.toolCall.args?.xValue === 'string'
-        ? second.toolCall.args.xValue
-        : undefined;
+      call2?.name === POINT_AT_TOOL && typeof call2.args?.xValue === 'string' ? call2.args.xValue : undefined;
+    // blink 只在同时有 pointAt 时才有意义（闪的前提是已经指到某处）
+    const blink = pointAt !== undefined && call2?.args?.blink === true;
+    const zoom = readZoomCommand(call2);
     const text = second.text.trim();
-    if (text || pointAt) {
-      beats.push({ text, ...(pointAt ? { pointAt } : {}) });
+    if (text || pointAt || zoom) {
+      beats.push({
+        text,
+        ...(pointAt ? { pointAt } : {}),
+        ...(blink ? { blink: true } : {}),
+        ...(zoom ? { zoom } : {}),
+      });
     }
   }
   if (!beats.length) {
@@ -241,10 +280,10 @@ export class LlmAgent implements AgentRun {
           content: '{"status":"rendered","note":"已交给渲染端"}' ,
         },
       ],
-      // 第二次**不给它工具**：这一步只要一句话（以及可选的 point_at）。
-      // 给了它就可能接着又调 render_chart，变成没完没了的画图。
-      // 唯一的例外是 point_at —— "画完之后指着讲"要发生在这里。
-      TOOL_DEFINITIONS.filter((t) => t.function.name === POINT_AT_TOOL),
+      // 第二次只给"看图说话"那一类工具：这一步要的是**一句话 + 可选的动作**。
+      // 绝不能放开 `render_*` —— 给了它就会接着又画一张，变成没完没了地画图。
+      // 允许的是 point_at（指着讲，可带 blink）与 zoom_view（缩放视图），都不改图。
+      TOOL_DEFINITIONS.filter((t) => POST_RENDER_TOOLS.includes(t.function.name)),
       signal
     );
 

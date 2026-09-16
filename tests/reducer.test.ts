@@ -18,7 +18,7 @@ import {
   type ToolItem,
 } from '../src/domain/agui/reducer';
 import { CHART_ROWS_PATH } from '../src/domain/agui/state-patch';
-import { EVT_POINT_AT, EVT_POINT_CLEAR } from '../shared/contract';
+import { EVT_POINT_AT, EVT_POINT_CLEAR, EVT_ZOOM } from '../shared/contract';
 
 /** 折叠一串动作，顺便收集所有 effect。 */
 function run(actions: Action[]) {
@@ -215,6 +215,68 @@ describe('自定义事件 / 叙事', () => {
     expect(state.pointAt).toBeNull();
     expect(effects).toEqual([]);
     expect(state.status).toBe('idle');
+  });
+
+  it('point-at 的 blink 透传进 effect；没带就不编一个', () => {
+    const withBlink = run([
+      { type: EventType.CUSTOM, name: EVT_POINT_AT, value: { value: 'ana', blink: true } },
+    ]);
+    expect(withBlink.effects[0]).toEqual({ type: 'point-at', value: 'ana', blink: true });
+
+    const withoutBlink = run([
+      { type: EventType.CUSTOM, name: EVT_POINT_AT, value: { value: 'ana' } },
+    ]);
+    expect(withoutBlink.effects[0]).toEqual({ type: 'point-at', value: 'ana' });
+    expect('blink' in withoutBlink.effects[0]).toBe(false);
+  });
+
+  it('zoom 递增 seq 并吐出 effect（连发两条 in 要真的放大两次）', () => {
+    const { state, effects } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'in' } },
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'in' } },
+    ]);
+    expect(state.zoom).toEqual({ direction: 'in', seq: 2 });
+    expect(effects).toEqual([
+      { type: 'zoom', direction: 'in' },
+      { type: 'zoom', direction: 'in' },
+    ]);
+  });
+
+  it('zoom 的 factor / steps 原样透传，没给就不带', () => {
+    const { state, effects } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'out', factor: 1.5, steps: 3 } },
+    ]);
+    expect(state.zoom).toEqual({ direction: 'out', factor: 1.5, steps: 3, seq: 1 });
+    expect(effects[0]).toEqual({ type: 'zoom', direction: 'out', factor: 1.5, steps: 3 });
+  });
+
+  it('zoom 的 reset 也是合法方向', () => {
+    const { state, effects } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'reset' } },
+    ]);
+    expect(state.zoom).toEqual({ direction: 'reset', seq: 1 });
+    expect(effects[0]).toEqual({ type: 'zoom', direction: 'reset' });
+  });
+
+  it('非法的缩放方向不产生 effect、也不破坏已有指令', () => {
+    const { state, effects } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'in' } },
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'sideways' } },
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: undefined },
+    ]);
+    // 只有第一条生效；后两条当没来过
+    expect(state.zoom).toEqual({ direction: 'in', seq: 1 });
+    expect(effects).toHaveLength(1);
+  });
+
+  it('缩放不会被 point-at 的 seq 影响，反之亦然（两条通道各记各的）', () => {
+    const { state } = run([
+      { type: EventType.CUSTOM, name: EVT_POINT_AT, value: { value: 'ana' } },
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'in' } },
+      { type: EventType.CUSTOM, name: EVT_POINT_AT, value: { value: 'ana' } },
+    ]);
+    expect(state.pointAt).toEqual({ value: 'ana', seq: 2 });
+    expect(state.zoom).toEqual({ direction: 'in', seq: 1 });
   });
 });
 

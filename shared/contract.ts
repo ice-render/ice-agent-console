@@ -57,6 +57,12 @@ export const STATE_DIAGRAM_KEY = 'diagram';
  *
  * 不走 tool call：它不是一次工具执行，没有参数、没有结果。
  * 不走 state：它是瞬时的演示动作，不是需要恢复的状态。
+ *
+ * 载荷：`{ value, blink? }`
+ * - `value` —— 指哪儿。图表卡是 x 刻度；图卡是单元 id 或位号；
+ * - `blink?` —— 要不要**闪一下**。它不是另一个工具，而是"强调"的强度：
+ *   `point_at` 保持高亮，"闪"是在高亮之上再叠一层引得注意的动效。
+ *   两者共用同一份"定位 + 建高亮"的实现，所以闪烁天然跟随定位，不会各指各的。
  */
 export const EVT_POINT_AT = 'ice/point-at';
 
@@ -65,6 +71,20 @@ export const EVT_POINT_AT = 'ice/point-at';
  * 单独一条是因为"讲完了要收手"，跟"指到某处"是两件事。
  */
 export const EVT_POINT_CLEAR = 'ice/point-clear';
+
+/**
+ * 「缩放视图」的画布指令，同样走 CUSTOM。
+ *
+ * 与上面两条同性质：瞬时的查看动作，不是需要恢复的状态 ——
+ * 刷新页面之后"当时放大到 1.4 倍"没有意义（`state` 里存的是图 DSL，不是视口）。
+ *
+ * 载荷：`{ direction: 'in' | 'out' | 'reset', factor?, steps? }`
+ * - `direction` —— 相对方向。**相对**而不是绝对倍率：agent 并不知道当前倍率，
+ *   给绝对值很容易一跳跳到底或看不出变化；
+ * - `reset` —— 回到**初始视野**（按 DSL 里 `viewport.focus` 适配的那一屏），不是 `scale = 1`。
+ *   回到 1 倍对一张 1460 宽的图没有意义。
+ */
+export const EVT_ZOOM = 'ice/zoom';
 
 /**
  * 诊断回灌的 context 键。

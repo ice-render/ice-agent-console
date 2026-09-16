@@ -30,6 +30,9 @@
  */
 import { ICE, ICERect } from 'ice-render';
 import { WaterProcessDesigner, WATER_SYMBOL_PRESETS } from 'ice-entity-designer';
+// 视口补间用库里的 tween：它走 `resolveICEAnimationDuration()`，
+// 于是 `prefers-reduced-motion` / `setICEReducedMotion()` 自动生效 —— 自己写 rAF 就拿不到这个。
+import { tween, type ICETweenHandle } from 'ice-web-components';
 import { Layer } from '../domain/ice/layer';
 import { applyThemeToIce } from '../domain/theme';
 import { compileDiagramDsl, type DiagramOp } from '../domain/diagram/compile';
@@ -65,6 +68,52 @@ const HIGHLIGHT_LINE_WIDTH = 3;
 /** 高亮底块的四周外扩（世界坐标），让框比符号略大一圈 */
 const HIGHLIGHT_PADDING = 8;
 
+/**
+ * 一次"闪一下"：几轮 yoyo、每轮多久、最低暗到多少。
+ *
+ * ⚠️ `BLINK_ROUNDS` **必须是偶数**。
+ *
+ * 配合 `direction: 'alternate'` 时，奇偶轮的方向是反的：偶数轮 1→0.2、奇数轮 0.2→1。
+ * 引擎的 `shouldRepeat()` 是在**每一轮跑完时**判断还要不要继续，所以轮数用完的那一刻
+ * 停在哪一半，取决于最后一轮是奇是偶：
+ * - 5 轮（奇）：最后一轮 1→0.2 → **停在最暗处**，闪烁结束后高亮框一直是半透明的；
+ * - 6 轮（偶）：最后一轮 0.2→1 → 停在最亮处，高亮框恢复正常。
+ *
+ * 实测踩过：5 轮时 `blinkInfo().opacity` 终值是 0.2，底块看着像没画出来。
+ */
+const BLINK_ROUNDS = 6;
+const BLINK_MS = 160;
+const BLINK_MIN_OPACITY = 0.2;
+/** 视口补间时长。够看出"在动"，又不至于让人等。 */
+const ZOOM_ANIMATION_MS = 220;
+/** 一"步"缩放的默认倍率。 */
+const DEFAULT_ZOOM_STEP = 1.35;
+/** 一次命令最多走几步（挡住 `steps: 100` 这种把图缩成一点的请求）。 */
+const MAX_ZOOM_STEPS = 6;
+/** 缩放倍率的夹取范围（与滚轮缩放同一对边界）。 */
+const ZOOM_FACTOR_MIN = 0.2;
+const ZOOM_FACTOR_MAX = 4;
+
+/**
+ * 一次闪烁的动画配置。**每次都要新建一个对象**，不能抽成共享常量。
+ *
+ * 两个理由，都是引擎的实现细节决定的：
+ * 1. `AnimationManager.shouldRepeat()` 会 **`animation.iterationCount--`** ——
+ *    复用同一份配置的话，第一次闪烁把它减到 1，第二次就不重复了（表现为"第二次不闪"）；
+ * 2. `startTime` / `__iteration` / `finished` 都存在配置对象上，共享会让两个 overlay 互相干扰。
+ */
+function blinkAnimation(): any {
+  return {
+    from: 1,
+    to: BLINK_MIN_OPACITY,
+    duration: BLINK_MS,
+    // alternate = 奇偶轮反向，也就是 yoyo；配合 iterationCount 就是"闪几下"
+    direction: 'alternate',
+    iterationCount: BLINK_ROUNDS,
+    easing: 'easeInOut',
+  };
+}
+
 export class DiagramLayer {
   readonly canvas: HTMLCanvasElement;
   readonly layer: Layer;
@@ -98,9 +147,18 @@ export class DiagramLayer {
    */
   private highlightBackup: any = null;
   private highlightNode: any = null;
-  /** 盖在高亮符号上的半透明底块（`addTool` 的 UI 覆盖层，不参与序列化）。 */
+  /**
+   * 盖在高亮符号上的半透明底块（`addTool` 的 UI 覆盖层，不参与序列化）。
+   *
+   * 带上 `__iceDiagramHighlight` 标记 —— 用来把"本层建的底块"从引擎自己的工具节点里认出来。
+   */
   private highlightOverlay: any = null;
   private highlightColor = '#61D9FB';
+
+  /** 正在跑的视口补间。新命令与 `destroy()` 都要取消它。 */
+  private zoomTween: ICETweenHandle | null = null;
+  /** 上一次缩放命令（`zoomInfo()` 给 e2e 用）。 */
+  private lastZoom: { direction: string; from: number; to: number } | null = null;
 
   // 拖拽平移的临时状态
   private panning = false;
@@ -245,7 +303,7 @@ export class DiagramLayer {
    * @param value 单元业务 id 或位号（`tag`），两者都认 —— agent 措辞里更常出现位号
    * @returns 是否找到了这个单元
    */
-  pointAt(value: any): boolean {
+  pointAt(value: any, opts: { blink?: boolean } = {}): boolean {
     const target = this.__findNode(value);
     if (!target) return false;
 
@@ -263,7 +321,7 @@ export class DiagramLayer {
     // `WaterSymbol.applyPatch` 不置 dirty（与 FlowNode 不同），必须自己置
     this.ice.dirty = true;
 
-    this.__showOverlay(target);
+    this.__showOverlay(target, opts.blink === true);
     this.__centerOn(target);
     return true;
   }
@@ -274,7 +332,159 @@ export class DiagramLayer {
     this.ice.dirty = true;
   }
 
+  /**
+   * 缩放视图（agent 的命令）。
+   *
+   * 三个方向：`in` 放大、`out` 缩小、`reset` 回到**初始视野**。
+   *
+   * 为什么 `reset` 不是 `scale = 1`：这张图是世界坐标里一张 1460 宽的图，
+   * 1 倍根本装不进卡片（那是"回到一个看不清全貌的状态"）。用户说"复位"要的是
+   * "回到刚画出来时的样子"，也就是按 DSL 的 `viewport.focus` 适配的那一屏。
+   *
+   * @returns 是否作用在了一张图上（图表卡走到这里会返回 false，不报错）
+   */
+  zoomBy(cmd: { direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number }): boolean {
+    if (!this.cssWidth || !this.cssHeight) return false;
+
+    const current = this.__viewport();
+    let next: { scale: number; tx: number; ty: number };
+
+    if (cmd.direction === 'reset') {
+      const box = this.__focusBox();
+      if (!box) return false;
+      const scale = this.__initialScaleFor(box);
+      next = { scale, tx: this.__centerTx(box, scale), ty: this.__centerTy(box, scale) };
+    } else {
+      const rawFactor = Number(cmd.factor);
+      const factor = Number.isFinite(rawFactor) && rawFactor > 0 ? rawFactor : DEFAULT_ZOOM_STEP;
+      const rawSteps = Number(cmd.steps);
+      const steps = Number.isFinite(rawSteps) && rawSteps > 0 ? Math.min(Math.floor(rawSteps), MAX_ZOOM_STEPS) : 1;
+      const base = cmd.direction === 'in' ? factor : 1 / factor;
+      const wanted = current.scale * Math.pow(base, steps);
+      const scale = Math.max(this.options.minScale, Math.min(this.options.maxScale, wanted));
+      if (Math.abs(scale - current.scale) < 1e-6) return true; // 已经到头了：不算失败，但也没必要动
+      // 锚点 = 画布中心：让"当前在中心的世界点"缩放后仍在中心。
+      // 与 `ICE.zoomAt()` 同口径（它反解平移保锚点），只是锚点固定在中心而不是光标处。
+      next = {
+        scale,
+        tx: this.cssWidth / 2 - this.__worldAtCenterX(current) * scale,
+        ty: this.cssHeight / 2 - this.__worldAtCenterY(current) * scale,
+      };
+    }
+
+    this.__animateViewport(current, next, cmd.direction);
+    return true;
+  }
+
+  /** 当前视口与上一次缩放命令（调试 / e2e 用）。 */
+  zoomInfo(): {
+    scale: number;
+    tx: number;
+    ty: number;
+    animating: boolean;
+    last: { direction: string; from: number; to: number } | null;
+  } {
+    const viewport = this.__viewport();
+    return { scale: viewport.scale, tx: viewport.tx, ty: viewport.ty, animating: this.zoomTween !== null, last: this.lastZoom };
+  }
+
+  /**
+   * 最近一次闪烁的状态（调试 / e2e 用）。没在闪时 `id` 为 null。
+   *
+   * 带上 `overlays`（当前工具层里的节点数）：**每次闪烁都换一个新的底块**，
+   * 所以这个数不能随闪烁次数增长 —— 它是"有没有泄漏"的直接读数
+   * （漏掉 `removeTool` 的话，每闪一次就多留一层半透明块，画面会越来越糊）。
+   */
+  blinkInfo(): { id: string | null; opacity: number; animating: boolean; overlays: number } {
+    const overlay = this.highlightOverlay;
+    const tools: any[] = Array.isArray(this.ice.toolNodes) ? this.ice.toolNodes : [];
+    // 只数**本层打的标记**，不数引擎自己的工具（见 `__showOverlay` 的注释）
+    const overlays = tools.filter((n) => n && n.__iceDiagramHighlight).length;
+    if (!overlay) return { id: null, opacity: 1, animating: false, overlays };
+    const opacity = overlay.state && typeof overlay.state.opacity === 'number' ? overlay.state.opacity : 1;
+    return {
+      id: this.highlightedId,
+      opacity,
+      animating: !!(this.ice.animationManager && this.ice.animationManager.isAnimating(overlay)),
+      overlays,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 视口内部
+  // -------------------------------------------------------------------------
+
+  private __viewport(): { scale: number; tx: number; ty: number } {
+    const v = this.ice.viewport || {};
+    const scale = Number(v.scale);
+    return {
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+      tx: Number(v.tx) || 0,
+      ty: Number(v.ty) || 0,
+    };
+  }
+
+  /** 视口下"画布中心"对应的世界坐标（锚点反解用）。`screen = world × scale + t`。 */
+  private __worldAtCenterX(v: { scale: number; tx: number }): number {
+    return (this.cssWidth / 2 - v.tx) / v.scale;
+  }
+  private __worldAtCenterY(v: { scale: number; ty: number }): number {
+    return (this.cssHeight / 2 - v.ty) / v.scale;
+  }
+
+  /** 把某块世界坐标居中到画布上（给定 scale）。 */
+  private __centerTx(box: { minX: number; maxX: number }, scale: number): number {
+    return this.cssWidth / 2 - ((box.minX + box.maxX) / 2) * scale;
+  }
+  private __centerTy(box: { minY: number; maxY: number }, scale: number): number {
+    return this.cssHeight / 2 - ((box.minY + box.maxY) / 2) * scale;
+  }
+
+  /**
+   * 平滑地把视口推过去。
+   *
+   * 补间的是 **scale + tx + ty 三元组**而不是每帧反解锚点 —— 因为锚点固定时
+   * `tx` 对 `scale` 是**线性**的（`tx = cx - wx·scale`，`wx` 是常量），
+   * 所以线性插值与"每帧重算锚点"数学上等价，前者更简单也更好断言。
+   */
+  private __animateViewport(
+    from: { scale: number; tx: number; ty: number },
+    to: { scale: number; tx: number; ty: number },
+    direction: string
+  ): void {
+    this.__cancelZoom();
+    this.lastZoom = { direction, from: from.scale, to: to.scale };
+
+    // 已经到位（或减少动效把时长解析成 0）就不补间
+    if (from.scale === to.scale && from.tx === to.tx && from.ty === to.ty) return;
+
+    this.zoomTween = tween({
+      from: 0,
+      to: 1,
+      duration: ZOOM_ANIMATION_MS,
+      easing: 'easeOut',
+      onUpdate: (t) => {
+        this.ice.setViewport(
+          from.scale + (to.scale - from.scale) * t,
+          from.tx + (to.tx - from.tx) * t,
+          from.ty + (to.ty - from.ty) * t
+        );
+      },
+      onFinish: () => {
+        this.zoomTween = null;
+      },
+    });
+  }
+
+  private __cancelZoom(): void {
+    if (!this.zoomTween) return;
+    this.zoomTween.cancel();
+    this.zoomTween = null;
+  }
+
   destroy(): void {
+    // 先取消补间：否则会留一个 rAF 句柄往已销毁的实例上写视口
+    this.__cancelZoom();
     this.__hideOverlay();
     for (const dispose of this.disposers) dispose();
     this.disposers.length = 0;
@@ -448,7 +658,7 @@ export class DiagramLayer {
    * 不会被序列化、不参与命中测试、不参与布局。正好是"瞬时的演示动作"该待的地方
    * （与归约器对「指着讲」的定位一致：不是需要恢复的状态）。
    */
-  private __showOverlay(target: any): void {
+  private __showOverlay(target: any, blink = false): void {
     this.__hideOverlay();
     const box = this.__boxOf(target);
     if (!box) return;
@@ -469,8 +679,22 @@ export class DiagramLayer {
     // 压在符号**下面**：盖在上面会把位号与名称糊掉，而那两个正是要读的东西。
     // 同一个 ICE 里靠 zIndex 排序，给一个很小的负值最省事也最稳。
     overlay.setState({ zIndex: -1 });
+    // 打个标记：`ice.toolNodes` 是**引擎共用的工具层**，里面本来就有对齐引导线、
+    // 控制面板、连线插槽等一大堆引擎自己的东西（实测基线 7~9 个）。
+    // 想数"我自己的底块有没有泄漏"就只能认自己打的标记，数 toolNodes 总数是在数引擎。
+    (overlay as any).__iceDiagramHighlight = true;
     this.ice.addTool(overlay);
     this.highlightOverlay = overlay;
+
+    if (blink) {
+      // ⚠️ 顺序是承重的：`setAnimation()` 内部是
+      // `if (this.ice && this.ice.animationManager) add(this)`，而 `this.ice`
+      // 是 `addTool()` 赋的 —— addTool 又**不**自己注册动画（只有 `addChild` 才会探测
+      // `props.animations`）。所以在 addTool 之前调 setAnimation 会静默不跑：
+      // 动画配置进去了、管理器里却没有这个组件，既不报错也不闪。
+      overlay.setAnimation('opacity', blinkAnimation());
+    }
+
     this.ice.dirty = true;
   }
 

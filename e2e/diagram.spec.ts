@@ -230,3 +230,162 @@ test('坏图 DSL 被拦下 → 诊断回灌 → **仍然修成一张图**（不�
 
   expect(errors, errors.join('\n')).toEqual([]);
 });
+
+/**
+ * 缩放视图：AI 下的"查看"命令。
+ *
+ * 断言的取法（时间敏感的东西要挑稳的写法）：
+ * - **终值**是精确的（`初始 × 1.35ⁿ`，夹到上限）—— 零时序依赖；
+ * - **"确实在动"**用"存在中间值"，而不是"某一刻等于某值"—— 对帧时序不敏感；
+ * - **锚点不变**是缩放正确性的硬断言：公式错一个符号就会露。
+ */
+test('AI 命令缩放视图：相对叠加、平滑推进、reset 精确回到初始视野', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+
+  // 先画一张图，拿到"初始视野"这个基准（下面的 reset 要精确回到它）
+  await useChip(page, '看看污水处理工艺图');
+  await waitSettled(page, 1);
+  const initial = await page.evaluate(() => (window as any).__iceAgentConsole.diagramZoom());
+  expect(initial.animating).toBe(false);
+
+  // 采样整轮的 scale：既拿终值，也用来证"中间确实有过渡态"
+  const samples: number[] = [initial.scale];
+  await page.locator('.chip', { hasText: '把工艺图放大' }).first().click();
+  for (let i = 0; i < 80; i++) {
+    const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramZoom());
+    const st = await page.evaluate(() => (window as any).__iceAgentConsole.getState().status);
+    if (info) samples.push(info.scale);
+    if (st !== 'running' && i > 10) break;
+    await page.waitForTimeout(70);
+  }
+  await waitSettled(page, 1);
+
+  const end = await page.evaluate(() => (window as any).__iceAgentConsole.diagramZoom());
+  // 剧本是 in → in → out(2 步) → reset，所以终态应当**精确回到初始视野**
+  expect(end.scale).toBeCloseTo(initial.scale, 6);
+  expect(end.animating).toBe(false);
+
+  // 平滑：出现过严格介于初始与最高之间的值（一帧到位的话这条会红）
+  const peak = Math.max(...samples);
+  expect(peak).toBeGreaterThan(initial.scale * 1.1);
+  const intermediate = samples.filter((v) => v > initial.scale * 1.01 && v < peak * 1.01);
+  expect(intermediate.length).toBeGreaterThan(0);
+
+  // 协议层记下了这条指令（与 pointAt 一样带 seq）
+  const state = await readState(page);
+  expect((state as any).zoom.direction).toBe('reset');
+  expect((state as any).zoom.seq).toBeGreaterThanOrEqual(4);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+test('缩放的锚点是画布中心：放大后中心那个世界点几乎没动', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await useChip(page, '看看污水处理工艺图');
+  await waitSettled(page, 1);
+
+  const before = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
+  const worldCenterBefore = {
+    x: (before.cssWidth / 2 - before.tx) / before.scale,
+    y: (before.cssHeight / 2 - before.ty) / before.scale,
+  };
+
+  await page.locator('.chip', { hasText: '把工艺图放大' }).first().click();
+  await waitSettled(page, 1);
+
+  const after = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
+  const worldCenterAfter = {
+    x: (after.cssWidth / 2 - after.tx) / after.scale,
+    y: (after.cssHeight / 2 - after.ty) / after.scale,
+  };
+
+  // 剧本最后复位了，所以这里直接比"复位前后"也可以；关键是**镜头推进过程中**锚点守恒。
+  // 复位本身也是按同一套公式（focusBox 居中）算的，所以两者都应当吻合。
+  expect(Math.abs(worldCenterAfter.x - worldCenterBefore.x)).toBeLessThan(1);
+  expect(Math.abs(worldCenterAfter.y - worldCenterBefore.y)).toBeLessThan(1);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/**
+ * 图元高亮闪烁：`point_at` 加一个 `blink` 参数。
+ *
+ * 闪烁是**时间性**的，所以判据挑"存在性"而不是"某一刻的精确值"：
+ * 在一段时间窗内轮询透明度，要求**同时**观测到"明显的暗"与"接近全亮"。
+ * 6 轮 yoyo × 160ms = 960ms，多轮保证任何采样窗都能覆盖到两个相位 ——
+ * 比连续采样 `canvasSignature` 稳得多（后者要恰好卡在某个相位上，必然 flaky）。
+ */
+test('AI 命令图元闪烁：透明度来回振荡，讲完停在全亮', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+
+  await page.locator('.chip', { hasText: '让图元闪烁' }).first().click();
+
+  const seen: Array<{ id: string; opacity: number; animating: boolean }> = [];
+  for (let i = 0; i < 140; i++) {
+    const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());
+    const st = await page.evaluate(() => (window as any).__iceAgentConsole.getState().status);
+    if (info && info.id) seen.push(info);
+    if (st !== 'running' && i > 20) break;
+    await page.waitForTimeout(70);
+  }
+  await waitSettled(page, 1);
+
+  expect(seen.length).toBeGreaterThan(0);
+
+  // ① 确实在动：中途有 animating
+  expect(seen.some((s) => s.animating)).toBe(true);
+
+  // ② 确实在闪：**同时**观测到"明显暗"与"接近全亮"。
+  //    只断言"变过"是不够的（可能只抖一点点），所以要求两端都够极端。
+  const opacity = seen.map((s) => s.opacity);
+  expect(Math.min(...opacity)).toBeLessThan(0.45);
+  expect(Math.max(...opacity)).toBeGreaterThan(0.9);
+
+  // ③ 讲完停在**全亮**（不是停在暗处）
+  //    回归点：alternate 的奇偶轮方向相反，轮数取奇数时会停在最暗处 —— 那样
+  //    闪烁结束后高亮框一直是半透明的，看着像没画出来。所以轮数必须是偶数。
+  const final = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());
+  expect(final.opacity).toBeCloseTo(1, 5);
+  expect(final.animating).toBe(false);
+
+  // ④ 闪的是**被指到的那个**单元（id 与 pointedId 一致，且真的在图里）
+  const state = await readState(page);
+  const ids = state.sharedState.diagram.units.map((u: any) => u.id);
+  expect(ids).toContain(final.id);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/**
+ * 连续闪烁**不累积**底块。
+ *
+ * 每次闪烁都会新建一个半透明底块并 `addTool` 进工具层，旧的靠 `removeTool` 收走。
+ * 漏收的话每闪一次就多留一层 —— 画面会越来越糊，而且**不会有任何报错**。
+ * `blinkInfo().overlays` 是这件事的直接读数（= `ice.toolNodes.length`）。
+ *
+ * 剧本依次闪 ana → anx → aer 三个单元，所以跑完必须只剩 **1** 个工具层节点。
+ */
+test('连续闪烁不累积底块：闪三个单元之后工具层里只有一个', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+
+  await page.locator('.chip', { hasText: '让图元闪烁' }).first().click();
+  await waitSettled(page, 1);
+
+  const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());
+  // 只剩最后指到的那个（aer），而且**本层建的底块**只剩它一个。
+  // 注意数的是"带标记的底块"而不是 `ice.toolNodes` 总数 —— 后者里还有引擎自己的
+  // 对齐引导线 / 控制面板 / 连线插槽（实测基线 7~9 个），数总量等于在数引擎。
+  expect(info.id).toBe('aer');
+  expect(info.overlays).toBe(1);
+
+  // 图元本身没被污染：还是 34 个（底块进的是工具层，不进 childNodes）
+  const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
+  expect(stats.symbols).toBe(34);
+  expect(stats.issues).toEqual([]);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});

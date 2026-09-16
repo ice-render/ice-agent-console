@@ -26,6 +26,14 @@
    数元素个数会永远通过、等于没测
    （`e2e/helpers.ts` 的 `CHART_CANVAS` / `WIDGET_CANVAS` / `FORM_CANVAS` / `DIAGRAM_CANVAS`）。
    层之间是**并排**的，不需要 `linkViewport` / `setInputPassthrough`。
+5a. **画布命令走 CUSTOM，不走 tool call、不进 state。** 目前三条：`ice/point-at`
+   （指着讲，`{ value, blink? }`）、`ice/point-clear`、`ice/zoom`
+   （缩放视图，`{ direction: 'in'|'out'|'reset', factor?, steps? }`）。
+   判据是"瞬时的演示动作，不是需要恢复的状态"—— 刷新页面后"当时放大到 1.4 倍"没有意义。
+   **加一条命令 = 加一个事件名 + 一个 Effect + `applyEffects` 里一个 case**，
+   与"加一种卡片"是两条独立的扩展路径（卡片改 state，命令不改）。
+   两个已知的取舍：缩放是**相对**语义（agent 不知道当前倍率）、`reset` 回的是**初始视野**
+   而不是 `scale = 1`；`blink` 与 `pointAt` 打在**同一条**事件上（拆两条会闪一帧）。
 5b. **图卡的 DSL 守卫在本仓**（`src/domain/diagram/`）。上游 `ice-entity-designer-dsl`
    **没有** water 编译器，所以那套 kind-first 的 DSL 定义在这里。
    它的校验器与另两张卡同口径：**永不抛、只给结构化诊断** —— 自修复回路靠这个文本。

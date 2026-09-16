@@ -12,7 +12,9 @@
  */
 import * as core from '@ag-ui/core';
 import { EventType } from '@ag-ui/core';
-import { chunkString, planToEvents, type ToolCardPlan, type ToolCallCardPlan } from '../server/agents/dsl-to-events';
+import { chunkString, planToEvents, type ToolCardPlan, type ToolCallCardPlan,
+  EVT_ZOOM,
+} from '../server/agents/dsl-to-events';
 import {
   COLLECT_INPUT_TOOL,
   EVT_POINT_AT,
@@ -237,6 +239,54 @@ describe('增量补丁', () => {
     const custom = events.find((e) => e.type === EventType.CUSTOM);
     expect(custom.name).toBe(EVT_POINT_AT);
     expect(custom.value).toEqual({ value: '3月' });
+  });
+
+  it('blink 与 pointAt 打在**同一条**事件上（拆成两条会闪一帧）', () => {
+    const events = planToEvents(chartPlan({ beats: [{ text: 'x', pointAt: 'ana', blink: true }] }), CTX);
+    const customs = events.filter((e) => e.type === EventType.CUSTOM);
+    // 这一拍只应产出一条 CUSTOM
+    expect(customs).toHaveLength(1);
+    expect(customs[0].name).toBe(EVT_POINT_AT);
+    expect(customs[0].value).toEqual({ value: 'ana', blink: true });
+  });
+
+  it('不闪时不带 blink 字段（保持载荷最小、也便于断言"没闪"）', () => {
+    const events = planToEvents(chartPlan({ beats: [{ text: 'x', pointAt: 'ana' }] }), CTX);
+    const custom = events.find((e) => e.type === EventType.CUSTOM);
+    expect(custom.value).toEqual({ value: 'ana' });
+    expect('blink' in custom.value).toBe(false);
+  });
+
+  it('缩放事件用约定的 CUSTOM 名字，且只带显式给的字段', () => {
+    const events = planToEvents(chartPlan({ beats: [{ text: 'x', zoom: { direction: 'in' } }] }), CTX);
+    const custom = events.find((e) => e.type === EventType.CUSTOM);
+    expect(custom.name).toBe(EVT_ZOOM);
+    // 没给 factor / steps 就不编一个进去 —— 默认值是客户端的决定，服务端不替它定
+    expect(custom.value).toEqual({ direction: 'in' });
+  });
+
+  it('缩放事件带 factor / steps 时原样透传', () => {
+    const events = planToEvents(
+      chartPlan({ beats: [{ text: 'x', zoom: { direction: 'out', factor: 1.5, steps: 2 } }] }),
+      CTX
+    );
+    const custom = events.find((e) => e.type === EventType.CUSTOM);
+    expect(custom.value).toEqual({ direction: 'out', factor: 1.5, steps: 2 });
+  });
+
+  it('缩放与指点可以在同一拍里连着发生（先指过去、再放大看）', () => {
+    const events = planToEvents(
+      chartPlan({ beats: [{ text: 'x', pointAt: 'ana', blink: true, zoom: { direction: 'in' } }] }),
+      CTX
+    );
+    const customs = events.filter((e) => e.type === EventType.CUSTOM);
+    expect(customs.map((e) => e.name)).toEqual([EVT_POINT_AT, EVT_ZOOM]);
+  });
+
+  it('reset 是合法的缩放方向（回到初始视野）', () => {
+    const events = planToEvents(chartPlan({ beats: [{ text: 'x', zoom: { direction: 'reset' } }] }), CTX);
+    const custom = events.find((e) => e.type === EventType.CUSTOM);
+    expect(custom.value.direction).toBe('reset');
   });
 });
 

@@ -287,6 +287,53 @@ function waterProcessPlan(): ToolCardPlan {
   });
 }
 
+/**
+ * 剧本：**让 AI 下命令缩放视图**。
+ *
+ * 演示的是"查看"这一类命令 —— 不改图、不改 state，只是把镜头推近/拉远。
+ * 节拍刻意排成"放大 → 再放大 → 缩小 → 复位"，这样一眼能看出
+ * **相对**语义（每一下都在当前基础上叠）与 `reset`（回到刚画出来的那一屏）。
+ */
+function zoomPlan(): ToolCardPlan {
+  return diagramCard(WATER_PROCESS_DSL, {
+    intro: '好，我把镜头推近一点看生化段 —— 这是相对缩放，每一下都在当前倍率上叠。',
+    beats: [
+      { text: '先整体放大一档，看主流程那一行：', zoom: { direction: 'in' } },
+      { text: '再放大一档 —— 注意左边进水的位号还看得清，说明锚点在画布中心、没有把内容甩出去：', zoom: { direction: 'in' } },
+      { text: '反过来缩小一档：', zoom: { direction: 'out', steps: 2 } },
+      { text: '复位，回到初始视野（按 DSL 里 `viewport.focus` 适配的那一屏，不是 1 倍）：', zoom: { direction: 'reset' } },
+      {
+        text:
+          '这四下都不是新的 tool call —— 缩放是**瞬时查看动作**，走的是 CUSTOM 事件通道，' +
+          '跟「指着讲」同一类。所以它不进 `state`：刷新页面后"当时放大到几倍"并不需要被恢复。',
+      },
+    ],
+  });
+}
+
+/**
+ * 剧本：**让 AI 下命令把某个图元高亮闪烁**。
+ *
+ * 闪烁是 `point_at` 的一个参数（`blink: true`），不是另一个工具 ——
+ * "定位 + 强调"本来就是一次动作，拆成两个工具会出现"闪一个没被指到的东西"。
+ */
+function blinkPlan(): ToolCardPlan {
+  return diagramCard(WATER_PROCESS_DSL, {
+    intro: '我把三个关键的池子依次点出来、各闪一下 —— 用的是同一个 `point_at`，只是多带一个 `blink`。',
+    beats: [
+      { text: '厌氧池：聚磷菌在这里释磷，是生物除磷的前提 —— 看这个在闪的框：', pointAt: 'ana', blink: true },
+      { text: '缺氧池：内回流把硝态氮带过来还原成氮气，脱氮的主战场：', pointAt: 'anx', blink: true },
+      { text: '好氧池：硝化与有机物降解都在这儿，也是耗氧最多的一段：', pointAt: 'aer', blink: true },
+      { text: '这三个池子合起来就是 AAO，顺序不能颠倒 —— 颠倒了两边都做不成：' },
+      {
+        text:
+          '闪的是盖在符号上的那层底块：它的透明度用引擎原生的**声明式动画**驱动' +
+          '（`alternate` + 5 轮 yoyo），不是应用层手写的逐帧补间。',
+      },
+    ],
+  });
+}
+
 /** 默认剧本：柱状图 + 画完之后指着 3 月讲。 */
 function salesPlan(): ToolCardPlan {
   return chartCard(SALES_DSL, {
@@ -427,7 +474,9 @@ function textOnlyPlan(message: string): ToolCardPlan {
           `  · 看看各渠道的月度销量\n` +
           `  · 看一下实时吞吐量\n` +
           `  · 要下发指令（走一遍中断 → 填表 → resume 的人机回环）\n` +
-          `  · 故意画错（走一遍诊断回灌的自修复回路）`,
+          `  · 故意画错（走一遍诊断回灌的自修复回路）\n` +
+          `  · 把工艺图放大（让 AI 下命令缩放视图）\n` +
+          `  · 让图元闪烁（让 AI 下命令高亮闪烁）`,
       },
     ],
   };
@@ -604,6 +653,12 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
   if (/控件|组件|演示|第二批|字段类型|都能用/.test(text)) return showcasePlan();
   // ⚠️ 水务这条必须排在「实时|趋势|流」之前：「工艺流程」里含「流」，
   // 排在后面的话问工艺图会被流式剧本抢走（这个坑踩过一次）
+  // ⚠️ 缩放 / 闪烁这两条必须排在 `isWaterAsk` **之前**：
+  // 「把工艺图放大」里既有"工艺图"也有"放大"，而这一句的意图是**缩放**不是重新画图。
+  // 排在后面的话会被 waterProcessPlan 抢走，用户看到的是一张重画的图而不是放大的图。
+  // 顺序上这两条也不用再判 isWaterAsk —— 它们是图卡专用的命令（图表卡会静默忽略）。
+  if (/放大|缩小|缩放|复位|推近|拉远/.test(text)) return zoomPlan();
+  if (/闪烁|闪一下|闪两下|闪一闪|闪烁一下/.test(text)) return blinkPlan();
   if (isWaterAsk(text)) return waterProcessPlan();
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
   if (/销量|渠道|柱|卖/.test(text)) return salesPlan();

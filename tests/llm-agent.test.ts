@@ -187,6 +187,67 @@ describe('buildLlmPlan：模型的选择 → 计划（纯函数，不碰网络�
     expect(plan.beats[0]).toMatchObject({ pointAt: 'ana' });
   });
 
+  it('★ 模型调 zoom_view → 那一拍带上 zoom（不是卡片、也不要新工具）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_diagram', args: { kind: 'water-process', units: [] }, id: 'd1' } },
+      { text: '我把镜头推近一点。', toolCall: { name: 'zoom_view', args: { direction: 'in' }, id: 'z1' } },
+      'r1'
+    );
+    // 仍然是**图卡**（zoom_view 不改卡片形态）
+    expect(plan.tool).toBe('render_diagram');
+    expect(plan.stateKey).toBe('diagram');
+    expect(plan.beats[0].zoom).toEqual({ direction: 'in' });
+  });
+
+  it('zoom_view 的 factor / steps 原样透传', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_diagram', args: { kind: 'water-process', units: [] }, id: 'd1' } },
+      { text: '', toolCall: { name: 'zoom_view', args: { direction: 'out', factor: 1.5, steps: 2 }, id: 'z2' } },
+      'r1'
+    );
+    expect(plan.beats[0].zoom).toEqual({ direction: 'out', factor: 1.5, steps: 2 });
+  });
+
+  it('zoom_view 的非法方向当没给（不编一个默认方向出来）', () => {
+    for (const bad of ['sideways', '', undefined, 42]) {
+      const plan: any = buildLlmPlan(
+        { text: '', toolCall: { name: 'render_diagram', args: {}, id: 'd1' } },
+        { text: '好的。', toolCall: { name: 'zoom_view', args: { direction: bad }, id: 'z3' } },
+        'r1'
+      );
+      expect(plan.beats[0].zoom).toBeUndefined();
+    }
+  });
+
+  it('★ point_at 带 blink → 那一拍同时有 pointAt 与 blink', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_diagram', args: { kind: 'water-process', units: [] }, id: 'd1' } },
+      { text: '厌氧池在这儿。', toolCall: { name: 'point_at', args: { xValue: 'ana', blink: true }, id: 'p1' } },
+      'r1'
+    );
+    expect(plan.beats[0]).toMatchObject({ pointAt: 'ana', blink: true });
+  });
+
+  it('blink 只在同时有 pointAt 时才带上（闪的前提是指到了某处）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_diagram', args: {}, id: 'd1' } },
+      // 只有 blink 没有 xValue：模型给了个自相矛盾的组合
+      { text: '看这里。', toolCall: { name: 'point_at', args: { blink: true }, id: 'p2' } },
+      'r1'
+    );
+    expect(plan.beats[0].blink).toBeUndefined();
+    expect(plan.beats[0].pointAt).toBeUndefined();
+  });
+
+  it('指着讲 + 缩放可以在同一拍里并存（先指过去、再放大看）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'render_diagram', args: {}, id: 'd1' } },
+      { text: '看这个池子。', toolCall: { name: 'point_at', args: { xValue: 'ana', blink: true }, id: 'p3' } },
+      'r1'
+    );
+    expect(plan.beats[0]).toMatchObject({ pointAt: 'ana', blink: true });
+  });
+
   it('认不出来的工具名 → 退回图表卡（与加图卡之前的行为一致）', () => {
     const plan: any = buildLlmPlan(
       { text: '', toolCall: { name: 'render_pie_in_the_sky', args: { kind: 'bar' }, id: 'x1' } },
@@ -230,8 +291,13 @@ describe('LlmAgent 真去调那个假接口', () => {
       const second = api.calls[1].body.messages;
       expect(second.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_1' });
       expect(second.at(-2).tool_calls[0].function.name).toBe('render_chart');
-      // 第二次**只给 point_at**：不给全量工具，否则模型可能接着又画一张
-      expect(api.calls[1].body.tools.map((t: any) => t.function.name)).toEqual(['point_at']);
+      // 第二次只给"看图说话"那一类工具（point_at / zoom_view），
+      // **绝不能**给 render_*：否则模型会接着又画一张，变成没完没了地画图。
+      // 断言写成"白名单恰好是这两个 + 不含任何 render_*"，这样以后再加一个
+      // 后置动作工具时，这条用例只需要改一处、而且改的时候会被迫想一次"它是 render_ 吗"。
+      const secondTools = api.calls[1].body.tools.map((t: any) => t.function.name);
+      expect(secondTools).toEqual(['point_at', 'zoom_view']);
+      expect(secondTools.some((n: string) => n.startsWith('render_'))).toBe(false);
 
       // ---- 事件序列与剧本模式同一个骨架 ----
       const types = events.map((e) => e.type);

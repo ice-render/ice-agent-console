@@ -238,12 +238,50 @@ export const TOOL_DEFINITIONS = [
       description:
         '**画完之后**，如果你想指着某个地方讲，用它把高亮落上去。' +
         '图表：xValue 是 x 轴刻度之一；工艺图：xValue 是单元 id 或位号（如 ana / AE-101）——' +
-        '指图里的单元时还会把镜头移过去。一次只指一处。',
+        '指图里的单元时还会把镜头移过去。一次只指一处。' +
+        '想让对方**更容易注意到**这一处时，带上 blink: true 让它闪几下。',
       parameters: {
         type: 'object',
         required: ['xValue'],
         properties: {
           xValue: { type: 'string', description: '要指的地方：图表的 x 值（如 "3月"）或图里的单元 id / 位号（如 ana / AE-101）' },
+          blink: {
+            type: 'boolean',
+            description:
+              '高亮之后再闪几下（引注意）。适合「这个位置很关键」这类强调；' +
+              '只是顺带提一句就别开，闪多了会吵。目前只有工艺图支持。',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'zoom_view',
+      description:
+        '**画完之后**，如果你想让对方看得更近或更远，用它缩放视图。' +
+        '方向是**相对**的：in 放大、out 缩小（都在当前倍率上叠），reset 回到刚画出来时的初始视野。' +
+        '你不需要知道当前倍率 —— 说"放大一点"就用 in。' +
+        '适合「看细节」/「看全貌」这类诉求，也常和 point_at 连着用（先指过去、再放大看）。' +
+        '目前只有工艺图支持；图表的缩放属于图表自身的坐标轴，不在这个工具的范围内。',
+      parameters: {
+        type: 'object',
+        required: ['direction'],
+        properties: {
+          direction: {
+            type: 'string',
+            enum: ['in', 'out', 'reset'],
+            description: 'in 放大 / out 缩小 / reset 回到初始视野',
+          },
+          factor: {
+            type: 'number',
+            description: '每一步的倍率，默认 1.35。一般不用给 —— 给大了会一步跳到底，看不出在动。',
+          },
+          steps: {
+            type: 'number',
+            description: '连走几步，默认 1，最多 6。想说"放大很多"时用 steps: 2 而不是把 factor 调很大。',
+          },
         },
       },
     },
@@ -265,6 +303,8 @@ export const SYSTEM_PROMPT = `你是 ice-agent-console 里的 agent。你的回�
 工作方式：
 1. 先想清楚用户要什么。要看数据 → 调 render_chart；要讲工艺流程/画图 → 调 render_diagram；
    需要用户提供信息 → 调 collect_input。
+   画完之后**看图说话**：想指哪儿 → 调 point_at（想强调就带 blink）；
+   想让对方看得更近/更远 → 调 zoom_view。这两个只在**画完那张图之后**才调。
 2. 需要调工具时，**先说一句你要做什么**（这句话会排在卡片前面），然后调工具。
 3. 工具调完（或本轮不需要工具）之后，**再给一句结论**。有图的话，结论要针对图里的
    具体数字讲，别只复述"图画好了"。

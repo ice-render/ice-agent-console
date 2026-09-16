@@ -18,7 +18,7 @@
  *    而 canvas 相关的脏活留在真正需要它的地方。
  */
 import { EventType } from '@ag-ui/core';
-import { EVT_POINT_AT, EVT_POINT_CLEAR } from '../../../shared/contract';
+import { EVT_POINT_AT, EVT_POINT_CLEAR, EVT_ZOOM } from '../../../shared/contract';
 import { CHART_ROWS_PATH, applyJsonPatch, detectRowAppend, type JsonPatchOp } from './state-patch';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +76,13 @@ export interface ThreadState {
    */
   pointAt: { value: any; seq: number } | null;
   /**
+   * 最近一次缩放视图的指令。
+   *
+   * 同样带 `seq`：连发两条 `in` 必须真的放大两次。没有 seq 的话视图侧只能看到
+   * "值没变"而忽略第二次（`pointAt` 那一处踩过同样的坑）。
+   */
+  zoom: { direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number; seq: number } | null;
+  /**
    * 渲染端诊断。由视图层校验 DSL 后回写，下一次 run 会带上它去触发自修复。
    * 这就是 AG-UI 双向语义的落点：协议的 `context` 字段。
    */
@@ -94,8 +101,10 @@ export interface ThreadState {
 export type Effect =
   | { type: 'mount-chart'; toolCallId: string; dsl: any }
   | { type: 'append-rows'; toolCallId: string; rows: any[][] }
-  | { type: 'point-at'; value: any }
-  | { type: 'clear-point' };
+  /** `blink` 是"高亮之后再闪一下"，与 `value` 同属一次定位动作（见 shared/contract.ts）。 */
+  | { type: 'point-at'; value: any; blink?: boolean }
+  | { type: 'clear-point' }
+  | { type: 'zoom'; direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number };
 
 export interface Reduction {
   state: ThreadState;
@@ -130,6 +139,7 @@ export function initialState(threadId: string): ThreadState {
     items: [],
     sharedState: null,
     pointAt: null,
+    zoom: null,
     diagnostics: null,
     interrupt: null,
     error: null,
@@ -375,10 +385,32 @@ export function reduce(state: ThreadState, action: Action): Reduction {
       if (action.name === EVT_POINT_AT) {
         // seq 递增：同一个值连指两次也要重新触发高亮
         next.pointAt = { value: action.value?.value, seq: (state.pointAt?.seq ?? 0) + 1 };
-        effects.push({ type: 'point-at', value: next.pointAt.value });
+        effects.push({
+          type: 'point-at',
+          value: next.pointAt.value,
+          // blink 原样透传（只在 `true` 时带上，保持 effect 形状最小）
+          ...(action.value?.blink === true ? { blink: true } : {}),
+        });
       } else if (action.name === EVT_POINT_CLEAR) {
         next.pointAt = null;
         effects.push({ type: 'clear-point' });
+      } else if (action.name === EVT_ZOOM) {
+        const direction = action.value?.direction;
+        if (direction === 'in' || direction === 'out' || direction === 'reset') {
+          next.zoom = {
+            direction,
+            ...(action.value?.factor !== undefined ? { factor: action.value.factor } : {}),
+            ...(action.value?.steps !== undefined ? { steps: action.value.steps } : {}),
+            seq: (state.zoom?.seq ?? 0) + 1,
+          };
+          effects.push({
+            type: 'zoom',
+            direction,
+            ...(next.zoom.factor !== undefined ? { factor: next.zoom.factor } : {}),
+            ...(next.zoom.steps !== undefined ? { steps: next.zoom.steps } : {}),
+          });
+        }
+        // 方向非法就当这条命令没来过：不破坏已有视口，也不报错
       }
       // 其它 CUSTOM 事件（别的应用、别的扩展）保持沉默地路过
       return { state: next, effects };

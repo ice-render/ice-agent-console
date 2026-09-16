@@ -15,19 +15,37 @@
  * 而"每两条事件之间停 40ms"这种播放节奏留给传输层。
  */
 import { EventType } from '@ag-ui/core';
-import { EVT_POINT_AT } from '../../shared/contract';
+import { EVT_POINT_AT, EVT_ZOOM } from '../../shared/contract';
 
 /** 事件在这里是"开放结构 + 必有 type"。字段名的正确性由 tests/ 里的官方 schema 校验兜底。 */
 export type AnyEvent = { type: EventType } & Record<string, any>;
 
-export { EVT_POINT_AT };
+export { EVT_POINT_AT, EVT_ZOOM };
 
-/** 一拍解说。文案播完之后可以顺带做一件事（指一个点 / 追加一批数据）。 */
+/** 缩放视图的指令（相对方向；`reset` = 回到初始视野）。 */
+export interface ZoomCommand {
+  direction: 'in' | 'out' | 'reset';
+  /** 每一"步"的倍率，默认 1.35。 */
+  factor?: number;
+  /** 连走几步，默认 1。 */
+  steps?: number;
+}
+
+/** 一拍解说。文案播完之后可以顺带做一件事（指一个点 / 追加一批数据 / 缩放视图）。 */
 export interface ChartBeat {
   /** 这一拍的解说文字，会被分片成 TEXT_MESSAGE_CONTENT。 */
   text: string;
   /** 这一拍播完后，让客户端把高亮点移到这个 x 值上。 */
   pointAt?: string | number;
+  /**
+   * 配合 `pointAt`：高亮之后**再闪一下**（引注意）。
+   *
+   * 单独一个字段而不是另开一个 `blinkAt`：闪烁的前提是"已经定位到某处"，
+   * 分开写会出现"闪一个没被指到的东西"这种自相矛盾的组合。
+   */
+  blink?: boolean;
+  /** 这一拍播完后，缩放视图（`in` 放大 / `out` 缩小 / `reset` 回到初始视野）。 */
+  zoom?: ZoomCommand;
   /** 这一拍播完后，像流式数据那样往表里追加行（走标准的 JSON Patch）。 */
   appendRows?: any[][];
 }
@@ -173,7 +191,24 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
     // 解说播完的瞬间做动作——这正是"文字和图同拍"的关键：
     // 用户读到哪里，图就指到哪里。
     if (beat.pointAt !== undefined) {
-      push({ type: EventType.CUSTOM, name: EVT_POINT_AT, value: { value: beat.pointAt } });
+      push({
+        type: EventType.CUSTOM,
+        name: EVT_POINT_AT,
+        // blink 与 pointAt 打在**同一条**事件上而不是两条：它们是"定位到某处并强调"
+        // 的一次动作，拆成两条会让客户端先高亮、再补一次闪烁，中间闪一帧。
+        value: { value: beat.pointAt, ...(beat.blink ? { blink: true } : {}) },
+      });
+    }
+    if (beat.zoom) {
+      push({
+        type: EventType.CUSTOM,
+        name: EVT_ZOOM,
+        value: {
+          direction: beat.zoom.direction,
+          ...(beat.zoom.factor !== undefined ? { factor: beat.zoom.factor } : {}),
+          ...(beat.zoom.steps !== undefined ? { steps: beat.zoom.steps } : {}),
+        },
+      });
     }
     if (beat.appendRows) {
       // 标准 JSON Patch（RFC 6902）：往 DSL 的 data.rows 末尾追加。
