@@ -117,20 +117,46 @@ npx http-server dist -p 8200 -c-1     # 只是起个静态服务器，没有后�
 
 #### 发到 GitHub Pages
 
-`dist/` 是自包含的静态目录（一个 `index.html` + 一个 JS），**用相对路径**，
-所以子路径部署（`https://<你>.github.io/<仓库>/`）直接用。推到 `gh-pages` 分支即可：
+本仓的演示站点在 **https://ice-render.github.io/ice-agent-console/** —— 它就是下面这条命令的产物。
 
 ```bash
-npm run build:demo
-cd dist
-git init -b gh-pages
-git add -A && git commit -m "demo site"
-git push -f git@github.com:<你>/<仓库>.git gh-pages
+npm run deploy:pages            # 构建演示产物 → 自检 → 推 origin-github 的 gh-pages
+npm run deploy:pages -- --dry   # 只构建 + 自检，停在本地（先看看产物有没有问题）
 ```
 
-然后在仓库的 **Settings → Pages** 里把 Source 选成 `gh-pages` 分支、根目录。
-不需要 `gh-pages` 这个 npm 包，也不需要 Actions —— 演示站点是**构建产物**，
-没有"每次 push 都重跑一遍流水线"的必要。
+`dist/` 是自包含的静态目录（一个 `index.html` + 一个 JS），**用相对路径**，
+所以子路径部署（`https://<你>.github.io/<仓库>/`）直接用 —— 不需要设 `publicPath`。
+演示站点是**构建产物**，所以既不需要 `gh-pages` 这个 npm 包，也不需要 Actions。
+
+这个脚本存在的原因是那几步里有**四个做错了不报错**的地方（`scripts/deploy-pages.mjs` 里逐条写了）：
+
+1. **必须是 `build:demo` 的产物。** 普通 `npm run build` 的产物默认连后端，
+   推上去开页就找 8099、页面白屏。脚本会**读产物自证**再继续（见下面那条注）。
+2. **`.nojekyll` 不能省。** GitHub Pages 默认拿 Jekyll 处理一遍，
+   而 Jekyll **会忽略下划线开头的文件/目录**。当前产物没有这种文件，
+   但这是零成本的保险 —— 哪天 asset 命名带上 `_`，就会**静默少一个文件**、页面白屏，
+   而构建日志是绿的。
+3. **推送必须 force。** `gh-pages` 每次装的是一整份新产物，旧历史没有意义
+   （上一版的 `boot.<hash>.js` 留在分支上只是白占体积）。
+4. **远端是 `origin-github`，不是 `origin`。** 本仓 `origin` 指向 gitee。
+
+> **自检判据为什么不是"有没有 `__ICE_DEMO__` 残留"**：那是错的。
+> `DefinePlugin` 在**两种**构建里都会把它替换掉（普通构建换成 `false`），
+> 所以"无残留"对普通构建同样成立，等于没检；"演示模式"那串文案也留在源码里
+> （一行永远走不到的三元分支）。第一版就是这么写的，实测拿普通构建的产物去喂它，
+> 它照样说"通过"。**唯一的区别**是 `resolveRunMode` 那个默认参数编译成了 `!0` 还是 `!1` ——
+> 现在按这个判，而且锚点找不到时**直接失败**而不是放过。
+
+**还有一件脚本管不了的事**：仓库 **Settings → Pages** 里的 Source 必须是
+**Deploy from a branch** / `gh-pages` / `/(root)`。如果它停在 **GitHub Actions**、
+而仓库里又没有对应的 workflow，那么**一次构建都不会发生** —— 分支推上去了、
+Pages 也配着，站点却一直 404，且没有任何报错。
+（本仓第一次就是这个状态：`build_type: workflow` + 零个 workflow + 零次构建记录。
+改成分支之后第一次构建 21 秒就过了。）
+
+顺带一句：**这个仓库天生不适合 Actions 构建** —— 它要六个兄弟仓的 `dist/` 才能打包
+（见 §8.1，家族包走 alias 指向同级目录，`node_modules` 里一个都没有），
+CI 里得先把六个仓库全 clone + build 一遍。直接推产物比修那条流水线划算得多。
 
 它也自包含到**单个 JS**，所以连 `file://` 双击打开都能跑
 （代价见下面"为什么不用动态 `import()`"）。
@@ -903,7 +929,8 @@ ice-agent-console/
 ├── scripts/
 │   ├── dev.mjs              一条命令起两个进程
 │   ├── llm-check.ts         npm run llm:check —— 配完模型先跑这个
-│   └── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图（含演示模式那张）
+│   ├── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图（含演示模式那张）
+│   └── deploy-pages.mjs     npm run deploy:pages —— 构建演示产物 + 自检 + 推 gh-pages
 ├── tests/  e2e/             jest 单测 + playwright
 ├── docs/images/             README 里的截图（2× 采集；绘图区整幅 / 对话面板整块）
 └── docs/upstream-gaps.md    对上游的观察
@@ -959,10 +986,11 @@ SSE 经中间层容易被缓冲，出问题时很难判断是协议问题还是�
 ## 9. 验证
 
 ```bash
-npm run verify        # types:check(两个 tsconfig) + jest + build
-npm run verify:full   # 上面 + playwright
-npm run llm:check     # 模型配置自检（不懂模型也能跑：没配就报"当前是剧本模式"）
-npm run shoot         # 重拍 docs/images 里的截图（需先 npm run dev）
+npm run verify             # types:check(两个 tsconfig) + jest + build
+npm run verify:full        # 上面 + playwright
+npm run llm:check          # 模型配置自检（不懂模型也能跑：没配就报"当前是剧本模式"）
+npm run shoot              # 重拍 docs/images 里的截图（需先 npm run dev）
+npm run deploy:pages -- --dry   # 演示产物构建 + 自检（不发；发就去掉 --dry，见 §1.0）
 ```
 
 > ⚠️ **`npm run shoot` 拍的是"给人看的那一版"，不是"能跑就行的那一版"。**
