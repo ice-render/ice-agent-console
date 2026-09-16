@@ -316,9 +316,14 @@ export class StageView {
    * 图表**静默返回 false** 而不是报错：图表走的是 `ice-chart` 自己的 resize / 悬停路径，
    * 没有对等的"缩放视图"概念。为它编一个错误出来只会让 agent 以为自己说错了话。
    */
-  zoomView(cmd: { direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number }): boolean {
+  zoomView(cmd: { direction: 'in' | 'out' | 'reset' | 'to'; factor?: number; steps?: number; scale?: number }): boolean {
     if (this.active !== 'diagram') return false;
     return this.diagram()?.zoomBy(cmd) ?? false;
+  }
+
+  /** 整图适配（"看整张图纸"）。只有工艺图有这个概念。 */
+  fitAll(): boolean {
+    return this.diagram()?.fitAll() ?? false;
   }
 
   /** 表单层：标记为已提交（界面侧的终态）。 */

@@ -22,13 +22,23 @@ export type AnyEvent = { type: EventType } & Record<string, any>;
 
 export { EVT_POINT_AT, EVT_ZOOM };
 
-/** 缩放视图的指令（相对方向；`reset` = 回到初始视野）。 */
+/**
+ * 缩放视图的指令。
+ *
+ * - `in` / `out` —— 相对当前倍率叠（`factor` / `steps`）；
+ * - `reset` —— 回到初始视野；
+ * - `to` —— **绝对**倍率（`scale`），讲解脚本用它（幂等，不累积）。
+ *
+ * 详细取舍见 `shared/contract.ts` 的 `EVT_ZOOM`。
+ */
 export interface ZoomCommand {
-  direction: 'in' | 'out' | 'reset';
-  /** 每一"步"的倍率，默认 1.35。 */
+  direction: 'in' | 'out' | 'reset' | 'to';
+  /** 每一"步"的倍率，默认 1.35。仅 `in` / `out` 用。 */
   factor?: number;
-  /** 连走几步，默认 1。 */
+  /** 连走几步，默认 1。仅 `in` / `out` 用。 */
   steps?: number;
+  /** 目标绝对倍率。仅 `to` 用，必填。 */
+  scale?: number;
 }
 
 /** 一拍解说。文案播完之后可以顺带做一件事（指一个点 / 追加一批数据 / 缩放视图）。 */
@@ -44,7 +54,13 @@ export interface ChartBeat {
    * 分开写会出现"闪一个没被指到的东西"这种自相矛盾的组合。
    */
   blink?: boolean;
-  /** 这一拍播完后，缩放视图（`in` 放大 / `out` 缩小 / `reset` 回到初始视野）。 */
+  /**
+   * 这一拍播完后，缩放视图。
+   *
+   * ⚠️ 顺序：`pointAt` 先于 `zoom` 发出，而缩放锚点是**可视区中心** ——
+   * 于是"先指着讲把目标移到中心、再缩放"正好把目标留在原地。
+   * 反过来（先缩放再指）也对，但那样中间会有一帧目标在屏幕外。所以别调换这两行的顺序。
+   */
   zoom?: ZoomCommand;
   /** 这一拍播完后，像流式数据那样往表里追加行（走标准的 JSON Patch）。 */
   appendRows?: any[][];
@@ -207,6 +223,7 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
           direction: beat.zoom.direction,
           ...(beat.zoom.factor !== undefined ? { factor: beat.zoom.factor } : {}),
           ...(beat.zoom.steps !== undefined ? { steps: beat.zoom.steps } : {}),
+          ...(beat.zoom.scale !== undefined ? { scale: beat.zoom.scale } : {}),
         },
       });
     }

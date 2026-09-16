@@ -256,32 +256,125 @@ function isWaterAsk(text: string): boolean {
 }
 
 /**
- * **内置案例：污水处理工艺流程图**（`ice-entity-designer` 画的图卡）。
+ * 讲解用的三档倍率。
  *
- * 为什么这是最合适的第一个例子：这份数据把给排水工艺图的记号系统整个跑了一遍 ——
- * 34 个单元 / 37 段管线，用满 `ice-entity-designer` 的 **31 种符号、9 种介质**。
- * 不是挑几个符号摆一摆，而是真的一张图。
+ * 为什么是**绝对**倍率而不是"放大一档"：一条十几拍的解说里叠三次相对缩放，
+ * 倍率就飘到不可预期；而写死档位之后，讲稿的任何一拍停在哪一屏都是确定的
+ * —— 单测与 e2e 也才断言得了。
  *
- * 节拍里的 `pointAt` 除了高亮还会**把该单元移到视野中央** ——
- * 图比卡片宽得多，镜头不跟过去的话，高亮发生在看不见的地方，等于没讲。
+ * | 档 | 倍率 | 用在哪 |
+ * |---|---|---|
+ * | 全貌 | 0.42 | 开场：整张图（含污泥线与事故支路）都在视野里 |
+ * | 分段 | 0.85 | 讲一条工艺段（预处理 / 生化 / 深度处理） |
+ * | 单格 | 1.5 | 讲一个池子：位号、名称、进出管线都读得清 |
+ *
+ * 三个数与 `WATER_PROCESS_DSL` 的世界尺寸（约 1900×1800）配着调 ——
+ * 改动坐标之后**回来重算一遍**，否则"单格"那档可能连一个池子都装不下。
+ */
+const VIEW_ALL = 0.42;
+const VIEW_STAGE = 0.85;
+const VIEW_UNIT = 1.5;
+
+/**
+ * **内置案例：污水处理工艺流程图**（`ice-entity-designer` 画的工艺图）。
+ *
+ * ## 这是"讲到哪里，镜头推到哪里"的那一条
+ *
+ * 它和另两条水务剧本的区别是**它自己带着图**（`diagramCard`），而另两条只带讲解
+ * —— 见下面 `zoomPlan` / `blinkPlan` 的注释。
+ *
+ * 节拍排成"**远看 → 推近看**"：
+ *
+ * 1. 先 `to: VIEW_ALL` 把整张图收进视野（开页那一屏是按 focus 取的近景，看不到污泥线）；
+ * 2. 然后**按工艺段推进**：预处理 → 生化 → 二沉 → 深度处理 → 污泥 → 事故水；
+ *    每进一段先把倍率放到"分段"档，讲到具体池子时再推"单格"档；
+ * 3. 每一拍都 `pointAt` 到讲的那个单元 —— 于是镜头**平移**过去（`pointAt` 会居中）
+ *    并且**高亮**它。两者叠起来就是"镜头跟着讲解走"。
+ *
+ * ⚠️ 每一拍都写 `zoom` 是刻意的，不是冗余：`to` 是幂等的，写了就等于"这一拍之后
+ * 一定在 0.85 档"，不用去数前面发生过什么。加拍、删拍、调换顺序都不用重算倍率。
+ *
+ * 收尾回到"全貌"档：讲完了让图纸整体留在视野里，比停在一个池子的特写上更像个结尾。
  */
 function waterProcessPlan(): ToolCardPlan {
   return diagramCard(WATER_PROCESS_DSL, {
     intro:
       '这是某 10 万 m³/d 市政污水厂的全流程：AAO + 混凝沉淀 + 滤布滤池 + 消毒。' +
-      '34 个单元、37 段管线，用满了 31 种工艺符号与 9 种介质线型。',
+      '34 个单元、37 段管线，用满了 31 种工艺符号与 9 种介质线型。我按工艺段走一遍，镜头会跟着推近。',
     beats: [
-      { text: '先看全貌。主流程在最上面一行，从最左边的进水一路往右走：' },
-      { text: '预处理段：进水泵 → 止回阀 → 细格栅 → 曝气沉砂池 → 初沉池，把大颗粒和漂浮物先拿掉。', pointAt: 'grit' },
-      { text: '进生化段。厌氧池是释磷的地方 —— 聚磷菌在这里把磷放出来：', pointAt: 'ana' },
-      { text: '缺氧池靠内回流把硝态氮还原成氮气，这是脱氮的主战场：', pointAt: 'anx' },
-      { text: '好氧池完成硝化与有机物降解，鼓风机通过空气管给它供氧：', pointAt: 'aer' },
-      { text: '二沉池做泥水分离。上清液去深度处理，污泥一路回流、一路去浓缩脱水：', pointAt: 'sec' },
-      { text: '深度处理把关：混凝沉淀除磷 → 滤布滤池控 SS → 消毒 → 在线监测计量后排放。', pointAt: 'disinfect' },
+      {
+        text:
+          '先把整张图框进来 —— 上面那条是水线主线，中间一条是深度处理，' +
+          '最下面是污泥线，右边还有一条事故水支路。',
+        zoom: { direction: 'to', scale: VIEW_ALL },
+      },
+      {
+        text: '从最左边开始。厂外进水进来先加压，出口接止回阀、再进细格栅挡大颗粒：',
+        pointAt: 'inlet',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      {
+        text:
+          '接着是曝气沉砂池去掉砂粒，再到初沉池把悬浮物沉下去 —— ' +
+          '这两格是预处理段的主体：',
+        pointAt: 'primary',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+      },
+      {
+        text:
+          '进生化段。厌氧池是释磷的地方 —— 聚磷菌在这里把磷放出来，' +
+          '这是后面能生物除磷的前提：',
+        pointAt: 'ana',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      {
+        text:
+          '缺氧池靠内回流把硝态氮还原成氮气，这是脱氮的主战场。' +
+          '注意上方那个内回流调节阀，混合液就是从好氧池经它回到这里的：',
+        pointAt: 'anx',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      {
+        text: '好氧池完成硝化与有机物降解，鼓风机从最上面通过空气管给它供氧：',
+        pointAt: 'aer',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      {
+        text:
+          '二沉池做泥水分离。上清液去深度处理，污泥一路回流到厌氧池、' +
+          '一路去浓缩脱水 —— 池子底下那三根管子就是这三路：',
+        pointAt: 'sec',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      {
+        text: '深度处理段从左到右：加药 → 混凝沉淀 → 滤布滤池 → 消毒接触池，除磷、控 SS、杀菌：',
+        pointAt: 'coag',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+      },
+      {
+        text: '出水前必须过在线水质监测与计量，然后经出水阀从排放口排出去：',
+        pointAt: 'analyzer',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+      },
+      {
+        text:
+          '再看最下面那条污泥线：浓缩 → 脱水 → 螺杆泵输送 → 料仓 → 外运，' +
+          '脱水机房的臭气由除臭装置抽走：',
+        pointAt: 'thickener',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+      },
+      {
+        text:
+          '最后是右边那条事故水支路：出水一旦超标就切进事故池，' +
+          '再由回流泵打回厌氧池重来一遍 —— 所以它绕回的是生化段，不是排放口：',
+        pointAt: 'accidentTank',
+        zoom: { direction: 'to', scale: VIEW_STAGE },
+      },
       {
         text:
           '整张图是 `ice-entity-designer` 画的，不是图片。滚轮可以缩放、空白处拖拽可以平移 —— ' +
-          '图的世界尺寸约 1454×985，是拖着看而不是缩略图。',
+          '世界尺寸约 1900×1800，是拖着看而不是缩略图。',
+        zoom: { direction: 'to', scale: VIEW_ALL },
       },
     ],
   });
@@ -290,48 +383,73 @@ function waterProcessPlan(): ToolCardPlan {
 /**
  * 剧本：**让 AI 下命令缩放视图**。
  *
- * 演示的是"查看"这一类命令 —— 不改图、不改 state，只是把镜头推近/拉远。
- * 节拍刻意排成"放大 → 再放大 → 缩小 → 复位"，这样一眼能看出
- * **相对**语义（每一下都在当前基础上叠）与 `reset`（回到刚画出来的那一屏）。
+ * ⚠️ 它**不画图** —— `TextOnlyCardPlan`（没有 `tool` / `payload`）。
+ * 这是这次改动的一条硬规矩：**与工艺图有关的示例都作用在那一张已经画好的图上**，
+ * 不再各自吐一份 DSL。理由有两条：
+ *
+ * 1. 那份图在 boot 时就已经画好了，重发一遍纯属浪费（虽然按内容比对不会重建，
+ *    但 tool call 本身要流式传 8KB 参数、还会在对话里多一条条目）；
+ * 2. "缩放/闪烁"本来就是**查看动作**，跟"画一张图"不是一回事。让它们挤在
+ *    一次 tool call 里，等于说"想放大就得重画一遍" —— 那正是这次布局反转要否掉的东西。
+ *
+ * 所以这三条水务剧本的分工是：`waterProcessPlan` 带图（演示 DSL 流式传进来），
+ * 另两条只带讲解 + 画布命令（演示**命令作用在已有的图上**）。
  */
 function zoomPlan(): ToolCardPlan {
-  return diagramCard(WATER_PROCESS_DSL, {
-    intro: '好，我把镜头推近一点看生化段 —— 这是相对缩放，每一下都在当前倍率上叠。',
+  return {
+    intro: '好，我把镜头推近一点看几个关键段 —— 注意我没有重新画图，动的是同一张。',
     beats: [
-      { text: '先整体放大一档，看主流程那一行：', zoom: { direction: 'in' } },
-      { text: '再放大一档 —— 注意左边进水的位号还看得清，说明锚点在画布中心、没有把内容甩出去：', zoom: { direction: 'in' } },
-      { text: '反过来缩小一档：', zoom: { direction: 'out', steps: 2 } },
-      { text: '复位，回到初始视野（按 DSL 里 `viewport.focus` 适配的那一屏，不是 1 倍）：', zoom: { direction: 'reset' } },
+      { text: '先推到全貌，看看整张图纸的骨架：', zoom: { direction: 'to', scale: VIEW_ALL } },
+      {
+        text: '进到生化段 —— AAO 这三格是全厂的核心，顺序不能颠倒：',
+        pointAt: 'ana',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      {
+        text: '再往右推到二沉池。注意它是最高的一个符号，因为泥水分离在这里发生：',
+        pointAt: 'sec',
+        zoom: { direction: 'to', scale: VIEW_UNIT },
+      },
+      { text: '拉回分段档，看深度处理那一整条线：', pointAt: 'coag', zoom: { direction: 'to', scale: VIEW_STAGE } },
+      {
+        text: '复位，回到刚画出来时的那一屏（按 DSL 里 `viewport.focus` 适配的取景，不是 1 倍）：',
+        zoom: { direction: 'reset' },
+      },
       {
         text:
-          '这四下都不是新的 tool call —— 缩放是**瞬时查看动作**，走的是 CUSTOM 事件通道，' +
+          '这几下都不是新的 tool call —— 缩放是**瞬时查看动作**，走的是 CUSTOM 事件通道，' +
           '跟「指着讲」同一类。所以它不进 `state`：刷新页面后"当时放大到几倍"并不需要被恢复。',
       },
     ],
-  });
+  };
 }
 
 /**
  * 剧本：**让 AI 下命令把某个图元高亮闪烁**。
  *
- * 闪烁是 `point_at` 的一个参数（`blink: true`），不是另一个工具 ——
- * "定位 + 强调"本来就是一次动作，拆成两个工具会出现"闪一个没被指到的东西"。
+ * 同样不画图（理由见 `zoomPlan`）。闪烁是 `point_at` 的一个参数（`blink: true`），
+ * 不是另一个工具 —— "定位 + 强调"本来就是一次动作，拆成两个工具会出现"闪一个没被指到的东西"。
+ *
+ * 高亮是**鲜黄**的，不是家族品牌冰蓝：图纸本身就是蓝的（水线浅蓝、出水青绿），
+ * 主色叠上去跟"某种介质管线"长得一样，读图的人分不出哪个是强调。
  */
 function blinkPlan(): ToolCardPlan {
-  return diagramCard(WATER_PROCESS_DSL, {
-    intro: '我把三个关键的池子依次点出来、各闪一下 —— 用的是同一个 `point_at`，只是多带一个 `blink`。',
+  return {
+    intro:
+      '我把 AAO 的三个池子依次点出来、各闪一下 —— 用的是同一个 `point_at`，只是多带一个 `blink`。' +
+      '高亮用的是鲜黄，因为这张图上蓝绿青都被介质占用完了。',
     beats: [
-      { text: '厌氧池：聚磷菌在这里释磷，是生物除磷的前提 —— 看这个在闪的框：', pointAt: 'ana', blink: true },
-      { text: '缺氧池：内回流把硝态氮带过来还原成氮气，脱氮的主战场：', pointAt: 'anx', blink: true },
-      { text: '好氧池：硝化与有机物降解都在这儿，也是耗氧最多的一段：', pointAt: 'aer', blink: true },
-      { text: '这三个池子合起来就是 AAO，顺序不能颠倒 —— 颠倒了两边都做不成：' },
+      { text: '厌氧池：聚磷菌在这里释磷，是生物除磷的前提 —— 看这个在闪的黄框：', pointAt: 'ana', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
+      { text: '缺氧池：内回流把硝态氮带过来还原成氮气，脱氮的主战场：', pointAt: 'anx', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
+      { text: '好氧池：硝化与有机物降解都在这儿，也是耗氧最多的一段：', pointAt: 'aer', blink: true, zoom: { direction: 'to', scale: VIEW_UNIT } },
+      { text: '这三个池子合起来就是 AAO，顺序不能颠倒 —— 颠倒了两边都做不成：', zoom: { direction: 'to', scale: VIEW_STAGE } },
       {
         text:
           '闪的是盖在符号上的那层底块：它的透明度用引擎原生的**声明式动画**驱动' +
-          '（`alternate` + 5 轮 yoyo），不是应用层手写的逐帧补间。',
+          '（`alternate` + 偶数轮 yoyo），不是应用层手写的逐帧补间。',
       },
     ],
-  });
+  };
 }
 
 /** 默认剧本：柱状图 + 画完之后指着 3 月讲。 */

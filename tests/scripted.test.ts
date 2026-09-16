@@ -16,6 +16,7 @@ import {
   readDiagnosticsTool,
 } from '../server/agents/scripted';
 import { buildPlan, resumeValues } from '../server/agents/scenarios';
+import { WATER_PROCESS_DSL } from '../shared/water-process-case';
 import { planToEvents, type ToolCallCardPlan } from '../server/agents/dsl-to-events';
 import {
   COLLECT_INPUT_TOOL,
@@ -206,33 +207,42 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
 
   it('缩放问法 → 走缩放剧本，节拍里有 zoom 指令', () => {
     const plan = buildPlan({ message: '把工艺图放大', hasDiagnostics: false }) as ToolCallCardPlan;
-    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
     const zooms = (plan.beats || []).map((b) => b.zoom).filter(Boolean);
     expect(zooms.length).toBeGreaterThan(0);
-    // 必须是**相对**语义（含 reset），不是绝对倍率
-    expect(zooms.some((z: any) => z.direction === 'in')).toBe(true);
+    // 讲稿用**绝对**倍率（`to`）—— 相对倍率在十几拍的解说里会累积到不可预期。
+    // 只有 `reset` 是例外：它回的是"初始视野"，没有对应的绝对数。
+    expect(zooms.some((z: any) => z.direction === 'to' && z.scale > 0)).toBe(true);
     expect(zooms.some((z: any) => z.direction === 'reset')).toBe(true);
+  });
+
+  it('★ 缩放 / 闪烁剧本**不重新画图**（纯文字计划，作用在已有那张图上）', () => {
+    // 这是布局反转之后定下来的一条硬规矩：水务相关的示例都作用在**那一张**图上面。
+    // 违反它的症状是"想放大一下，结果又画了一遍图"（tool call 里塞 8KB DSL、
+    // 对话里多一条条目、图纸上的视口被重置）—— 而没有 payload 就没有这一切。
+    for (const text of ['把工艺图放大', '放大一点', '缩小', '复位', '推近看', '让图元闪烁', '闪一闪']) {
+      const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
+      expect({ text, tool: toolOf(plan) }).toEqual({ text, tool: undefined });
+      expect({ text, units: payloadOf(plan).units }).toEqual({ text, units: undefined });
+      const beats = plan.beats || [];
+      expect({ text, beats: beats.length > 0 }).toEqual({ text, beats: true });
+      // 但必须真的下了命令（否则就是一段没有动作的独白）
+      expect({ text, cmd: beats.some((b) => !!b.zoom || !!b.blink) }).toEqual({ text, cmd: true });
+    }
   });
 
   it('★ 「把工艺图放大」不能被"重画一张工艺图"抢走', () => {
     // 回归：缩放分支必须排在 isWaterAsk **之前**。
     // 排后面的话这一句会被 waterProcessPlan 收走 —— 用户要点"放大"，
-    // 看到的却是一张重画的图（而且这轮根本没有 zoom 指令）。
+    // 看到的却是一张重画的图（而且这一轮根本没有 zoom 指令）。
     for (const text of ['把工艺图放大', '放大一点', '缩小', '复位', '推近看']) {
       const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
-      expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
-      expect((plan.beats || []).some((b) => !!b.zoom)).toBe(true);
+      expect({ text, tool: toolOf(plan) }).toEqual({ text, tool: undefined });
+      expect({ text, zoom: (plan.beats || []).some((b) => !!b.zoom) }).toEqual({ text, zoom: true });
     }
   });
 
-  it('缩小 / 复位也是缩放剧本', () => {
-    const out = buildPlan({ message: '缩小', hasDiagnostics: false }) as ToolCallCardPlan;
-    expect((out.beats || []).some((b: any) => b.zoom?.direction === 'out')).toBe(true);
-  });
-
-  it('闪烁问法 → 图卡 + 节拍里 pointAt 带 blink', () => {
+  it('闪烁问法 → 节拍里 pointAt 带 blink', () => {
     const plan = buildPlan({ message: '让图元闪烁', hasDiagnostics: false }) as ToolCallCardPlan;
-    expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
     const blinked = (plan.beats || []).filter((b) => b.blink);
     expect(blinked.length).toBeGreaterThan(0);
     // 闪的必须同时有指的地方（否则就是"闪一个没被指到的东西"）
@@ -244,17 +254,53 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
   it('★ 「让工艺图闪烁」也要排在 isWaterAsk 之前', () => {
     for (const text of ['让图元闪烁', '工艺图闪一下', '闪一闪']) {
       const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
-      expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
-      expect((plan.beats || []).some((b) => !!b.blink)).toBe(true);
+      expect({ text, tool: toolOf(plan) }).toEqual({ text, tool: undefined });
+      expect({ text, blink: (plan.beats || []).some((b) => !!b.blink) }).toEqual({ text, blink: true });
     }
   });
 
-  it('闪烁节的点都在图里存在（id 对得上）', () => {
-    const plan = buildPlan({ message: '让图元闪烁', hasDiagnostics: false }) as ToolCallCardPlan;
-    const ids = new Set(payloadOf(plan).units.map((u: any) => u.id));
-    for (const b of plan.beats || []) {
-      if (b.blink) expect(ids.has(b.pointAt as string)).toBe(true);
+  it('闪烁 / 讲解节里指到的 id 都在图里存在（对得上）', () => {
+    // 图不在这两个计划里（它们不重发 DSL），所以拿**内置案例**当参照物
+    const known = new Set(WATER_PROCESS_DSL.units.map((u) => u.id));
+    for (const text of ['让图元闪烁', '把工艺图放大', '看看污水处理工艺图', '故意画错工艺图']) {
+      const plan = buildPlan({ message: text, hasDiagnostics: false }) as ToolCallCardPlan;
+      for (const b of plan.beats || []) {
+        if (b.pointAt === undefined) continue;
+        expect({ text, at: String(b.pointAt), known: known.has(String(b.pointAt)) }).toEqual({
+          text,
+          at: String(b.pointAt),
+          known: true,
+        });
+      }
     }
+  });
+
+  it('★ 第一个例子：每一拍都推镜头，且每一拍都指到位', () => {
+    // 需求原话是"要随着讲解放大画布，并且把对应的元件高亮"。
+    // 两条都按"每一拍"钉住：漏一拍就会出现"讲了半天画面没动"。
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    const beats = plan.beats || [];
+    expect(beats.length).toBeGreaterThanOrEqual(8);
+    for (const [i, b] of beats.entries()) {
+      expect({ i, zoom: !!b.zoom }).toEqual({ i, zoom: true });
+    }
+    // 除了开场（先给全貌）与收尾，中间每一拍都要指着某个单元
+    const pointed = beats.filter((b) => b.pointAt !== undefined);
+    expect(pointed.length >= beats.length - 2).toBe(true);
+  });
+
+  it('★ 第一个例子的镜头是"远看 → 推近 → 回到全貌"', () => {
+    const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
+    const scales = (plan.beats || []).map((b) => b.zoom?.scale).filter((n): n is number => typeof n === 'number');
+    expect(scales.length).toBeGreaterThan(0);
+    // 首尾都是全貌档（最远），中间比它近 —— 不然"随着讲解放大"就没有发生
+    const first = scales[0];
+    const last = scales[scales.length - 1];
+    const peak = Math.max(...scales);
+    expect(peak).toBeGreaterThan(first * 1.5);
+    expect(last).toBeCloseTo(first, 6);
+    // 只有一个"全貌"档，其余都比它近
+    expect(scales.filter((s) => s === first).length).toBeLessThanOrEqual(2);
   });
 
   it('readDiagnosticsTool 读出「哪个工具失败了」', () => {

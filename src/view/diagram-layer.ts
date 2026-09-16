@@ -100,6 +100,23 @@ const HIGHLIGHT_LINE_WIDTH = 3;
 const HIGHLIGHT_PADDING = 8;
 
 /**
+ * 高亮颜色：**鲜艳的黄**。
+ *
+ * 为什么不取引擎主题的主色（家族品牌冰蓝 `#61D9FB`）——**因为图纸本身就是蓝的**。
+ * 工艺图的水线是浅蓝、出水线是青绿、空气线是浅蓝虚线，主色往上一叠就糊进图里了，
+ * 而且"高亮"和"某种介质"看起来一样，读图的人分不出哪个是强调。
+ *
+ * 黄是这张图上**唯一没被介质占用的醒目色**（9 种介质里没有黄系），
+ * 所以它天然是"这是被指的东西，不是管线"。
+ *
+ * 硬编码而不是进主题表：它是**语义色**（"强调"），不是品牌色 —— 两套主题下都该是同一个黄。
+ * 混色时用极低的不透明度做"洗底"，够看出范围又不遮住位号。
+ */
+const HIGHLIGHT_COLOR = '#FFD400';
+/** 底块的洗底色不透明度。0.18 在多介质叠加处仍能看清轮廓。 */
+const HIGHLIGHT_WASH_ALPHA = 0.18;
+
+/**
  * 一次"闪一下"：几轮 yoyo、每轮多久、最低暗到多少。
  *
  * ⚠️ `BLINK_ROUNDS` **必须是偶数**。
@@ -191,7 +208,11 @@ export class DiagramLayer {
    * 带上 `__iceDiagramHighlight` 标记 —— 用来把"本层建的底块"从引擎自己的工具节点里认出来。
    */
   private highlightOverlay: any = null;
-  private highlightColor = '#61D9FB';
+  /**
+   * 高亮色。**不取主题主色**（见文件上方 `HIGHLIGHT_COLOR` 的注释）——
+   * 图纸本身就是蓝的，主色叠上去跟"某种介质管线"长得一样。
+   */
+  private readonly highlightColor = HIGHLIGHT_COLOR;
 
   /** 正在跑的视口补间。新命令与 `destroy()` 都要取消它。 */
   private zoomTween: ICETweenHandle | null = null;
@@ -224,7 +245,6 @@ export class DiagramLayer {
     applyThemeToIce(this.ice);
 
     this.designer = new WaterProcessDesigner(this.ice);
-    this.highlightColor = this.__readHighlightColor();
 
     // 与另两层一样：画布 + ICE 实例交给 `Layer` 统一管"按显示尺寸对齐 / 一起销毁"
     this.layer = new Layer('diagram', this.canvas, this.ice);
@@ -302,6 +322,32 @@ export class DiagramLayer {
     this.__cancelZoom();
     if (!this.viewportReady || this.cssWidth <= 0 || this.cssHeight <= 0) return;
     this.__applyInitialViewport();
+  }
+
+  /**
+   * **整图适配**：把全部图元（不是 `viewport.focus` 那一段）框进可视区。
+   *
+   * 与默认初始视野的分工：
+   * - 默认按 `focus` 适配 —— 那是"开页先看主流程"的取景，字大、但看不到全貌；
+   * - 这个按**全部图元**适配 —— 是"看整张图纸"的取景，必然字小，用来建立全局印象。
+   *
+   * 两个都需要：铺开坐标之后整图约 1900×1800，按 focus 取景看不到污泥线与事故支路；
+   * 而只看整图又读不出位号。所以一个当"远看"、一个当"近看"。
+   */
+  fitAll(padding = 24): boolean {
+    if (this.cssWidth <= 0 || this.cssHeight <= 0) return false;
+    const box = this.__contentBoxOfAll();
+    if (!box) return false;
+    const r = this.__region();
+    const availableW = Math.max(1, r.width - padding * 2);
+    const availableH = Math.max(1, r.height - padding * 2);
+    const contentW = Math.max(1, box.maxX - box.minX);
+    const contentH = Math.max(1, box.maxY - box.minY);
+    const fit = Math.min(availableW / contentW, availableH / contentH);
+    const scale = Math.max(this.options.minScale, Math.min(this.options.maxScale, fit));
+    this.__cancelZoom();
+    this.ice.setViewport(scale, this.__centerTx(box, scale), this.__centerTy(box, scale));
+    return true;
   }
 
   /**
@@ -418,15 +464,27 @@ export class DiagramLayer {
   /**
    * 缩放视图（agent 的命令）。
    *
-   * 三个方向：`in` 放大、`out` 缩小、`reset` 回到**初始视野**。
+   * 四个方向：
+   * - `in` / `out` —— **相对**当前倍率叠（`factor^steps`，夹在 min/max 之间）；
+   * - `reset` —— 回到**初始视野**（按 DSL 的 `viewport.focus` 适配的那一屏）；
+   * - `to` —— **绝对**倍率，给一个目标 `scale`。
    *
-   * 为什么 `reset` 不是 `scale = 1`：这张图是世界坐标里一张 1460 宽的图，
-   * 1 倍根本装不进卡片（那是"回到一个看不清全貌的状态"）。用户说"复位"要的是
+   * 为什么 `reset` 不是 `scale = 1`：这张图是世界坐标里一张 1900 宽的图，
+   * 1 倍根本装不进可视区（那是"回到一个看不清全貌的状态"）。用户说"复位"要的是
    * "回到刚画出来时的样子"，也就是按 DSL 的 `viewport.focus` 适配的那一屏。
    *
-   * @returns 是否作用在了一张图上（图表卡走到这里会返回 false，不报错）
+   * 为什么还要 `to`：**讲解脚本需要"讲到哪里放大到哪一档"**。相对缩放会累积 ——
+   * 一段十拍的解说里叠三次 `in`，倍率就飘到 2.5 倍且不可预期；而 `to: 1.4` 是幂等的，
+   * 无论前面发生过什么，这一拍之后就是 1.4。所以讲稿用 `to`，人/模型的手势用 `in`/`out`。
+   *
+   * @returns 是否作用在了一张图上（图表图层走到这里会返回 false，不报错）
    */
-  zoomBy(cmd: { direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number }): boolean {
+  zoomBy(cmd: {
+    direction: 'in' | 'out' | 'reset' | 'to';
+    factor?: number;
+    steps?: number;
+    scale?: number;
+  }): boolean {
     if (!this.cssWidth || !this.cssHeight) return false;
 
     const current = this.__viewport();
@@ -437,6 +495,12 @@ export class DiagramLayer {
       if (!box) return false;
       const scale = this.__initialScaleFor(box);
       next = { scale, tx: this.__centerTx(box, scale), ty: this.__centerTy(box, scale) };
+    } else if (cmd.direction === 'to') {
+      const raw = Number(cmd.scale);
+      if (!Number.isFinite(raw) || raw <= 0) return false; // 非法目标倍率：当作没来过
+      const scale = Math.max(this.options.minScale, Math.min(this.options.maxScale, raw));
+      if (Math.abs(scale - current.scale) < 1e-6) return true;
+      next = { scale, tx: this.__centerTxOfCurrent(current, scale), ty: this.__centerTyOfCurrent(current, scale) };
     } else {
       const rawFactor = Number(cmd.factor);
       const factor = Number.isFinite(rawFactor) && rawFactor > 0 ? rawFactor : DEFAULT_ZOOM_STEP;
@@ -448,11 +512,7 @@ export class DiagramLayer {
       if (Math.abs(scale - current.scale) < 1e-6) return true; // 已经到头了：不算失败，但也没必要动
       // 锚点 = 可视区中心：让"当前在中心的世界点"缩放后仍在中心。
       // 与 `ICE.zoomAt()` 同口径（它反解平移保锚点），只是锚点固定在中心而不是光标处。
-      next = {
-        scale,
-        tx: this.__regionCx() - this.__worldAtCenterX(current) * scale,
-        ty: this.__regionCy() - this.__worldAtCenterY(current) * scale,
-      };
+      next = { scale, tx: this.__centerTxOfCurrent(current, scale), ty: this.__centerTyOfCurrent(current, scale) };
     }
 
     this.__animateViewport(current, next, cmd.direction);
@@ -539,6 +599,19 @@ export class DiagramLayer {
   }
 
   /**
+   * 「保持当前视口中心那个世界点不动」地把 scale 换掉 —— `in` / `out` / `to` 都走它。
+   *
+   * 与 `__worldAtCenter*` 是同一件事的两半：先反解出中心的世界点，再按新 scale 正解回平移。
+   * 抽出来是因为三个方向都要这一步，而这里少乘或多乘一次 scale，内容就会"甩出去"。
+   */
+  private __centerTxOfCurrent(current: { scale: number; tx: number; ty: number }, scale: number): number {
+    return this.__regionCx() - this.__worldAtCenterX(current) * scale;
+  }
+  private __centerTyOfCurrent(current: { scale: number; tx: number; ty: number }, scale: number): number {
+    return this.__regionCy() - this.__worldAtCenterY(current) * scale;
+  }
+
+  /**
    * 平滑地把视口推过去。
    *
    * 补间的是 **scale + tx + ty 三元组**而不是每帧反解锚点 —— 因为锚点固定时
@@ -621,13 +694,6 @@ export class DiagramLayer {
         });
       }
     }
-  }
-
-  /** 高亮色取引擎主题的主色（与设计器外壳同源）。 */
-  private __readHighlightColor(): string {
-    const theme: any = typeof this.ice.getTheme === 'function' ? this.ice.getTheme() : null;
-    const semantic: any = (theme && theme.semantic) || {};
-    return semantic.primary || semantic.info || '#61D9FB';
   }
 
   /**
@@ -805,9 +871,9 @@ export class DiagramLayer {
     this.ice.dirty = true;
   }
 
-  /** 高亮底块的颜色：主色压到很低的不透明度，够看出范围又不遮内容。 */
+  /** 高亮底块的颜色：黄压到很低的不透明度，够看出范围又不遮位号。 */
   private __highlightWash(): string {
-    return hexToRgba(this.highlightColor, 0.18) || 'rgba(97,217,251,0.18)';
+    return hexToRgba(this.highlightColor, HIGHLIGHT_WASH_ALPHA) || 'rgba(255,212,0,0.18)';
   }
 
   /**

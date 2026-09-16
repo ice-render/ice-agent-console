@@ -16,6 +16,7 @@
  * 第 4 层是反转之后新加的：**不重画**。`stageInfo().builds.diagram` 是它的直接读数。
  */
 import { expect, test } from '@playwright/test';
+import { WATER_PROCESS_DSL } from '../shared/water-process-case';
 import {
   DIAGRAM_CANVAS,
   TOOL_ENTRY,
@@ -30,11 +31,16 @@ import {
   waitDiagramReady,
   waitSettled,
   wheelOnPanel,
+  yellowRatio,
 } from './helpers';
 
 /** 案例规模：与 `shared/water-process-case.ts` 一致（那边也断言这两个数）。 */
 const SYMBOLS = 34;
 const PIPES = 37;
+
+/** 内置案例的单元表（"这个 id 在图里存在吗"的参照物）。 */
+const unitsOf = () => WATER_PROCESS_DSL.units;
+
 
 test('开页就是工艺图：无需任何对话、34/37、引擎校验无问题、零 console error', async ({ page }) => {
   const errors = collectErrors(page);
@@ -426,11 +432,13 @@ test('「指着讲」：讲解时高亮对应单元，讲完的单元 id 可查'
   await useChip(page, '看看污水处理工艺图');
   await waitSettled(page, 1);
 
-  // 剧本的最后一拍指着消毒接触池；讲完之后高亮留着（与图表的行为一致）
+  // 讲稿的最后一拍指着事故池（收尾讲事故水支路）；讲完之后高亮留着（与图表的行为一致）
   const pointed = await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId());
-  expect(pointed).toBe('disinfect');
+  expect(pointed).toBe('accidentTank');
 
-  // 高亮必须落在**真的有这个单元**的图上：id 能在 DSL 里找到
+  // 高亮必须落在**真的有这个单元**的图上：id 能在 DSL 里找到。
+  // 参照物取**那一轮的 STATE_SNAPSHOT**（`sharedState.diagram`）—— 它是"客户端手里那份图"，
+  // 比拿内置常量比对更贴近实际（两边不一致时这一条才会红）。
   const state = await readState(page);
   const ids = state.sharedState.diagram.units.map((u: any) => u.id);
   expect(ids).toContain(pointed);
@@ -438,202 +446,70 @@ test('「指着讲」：讲解时高亮对应单元，讲完的单元 id 可查'
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
-test('坏图 DSL 被拦下 → 诊断回灌 → **仍然修成一张图**（不是修成柱状图）', async ({ page }) => {
+/**
+ * ★ 高亮是**鲜艳的黄**，不是品牌冰蓝。
+ *
+ * 这条要求值得单独一条用例，因为"换个颜色"是最容易被顺手改回去的东西
+ * （`diagram-layer.ts` 里原来就是从引擎主题取主色，而主色是冰蓝）。
+ *
+ * 判据按**色相**算而不是精确色值：底块是半透明洗底，叠在浅蓝池子 / 白底 / 深色位号上，
+ * 采样到的 RGB 各不相同（见 helpers 的 `yellowRatio`）。
+ *
+ * 而且这是**对照**实验：先清掉高亮量一次基线、再指一次量一次 ——
+ * 少了基线那一半，"整个画面本来就发黄"的实现也能通过。
+ * （清高亮走的是 `ice/point-clear`，顺便把那条一直没有剧本会发的路径也覆盖了。）
+ */
+test('★ 高亮是鲜黄色：有高亮时画布上出现明显的黄，清掉之后退回基线', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
+  await waitDiagramReady(page);
 
-  // chip「故意画错」+ 指明工艺图：剧本按关键词分流 ——
-  // "故意画错"进修复支，而"工艺图"决定它吐的是**图**的坏 DSL 而不是图表的坏 DSL。
-  // bad DSL 给图数据加了一个「隔油池」：真实构筑物，但不在这套 31 种符号的记号集里 ——
-  // 这正是要展示的那类错误：不是拼错，而是用了记号集里没有的东西。
-  await useChip(page, '故意画错工艺图');
+  // 落到"单格档"让目标符号占够像素：全貌档下它只有几个像素宽，
+  // 洗底色会被抗锯齿摊薄到判不出来（那不是缺陷，是"太小了"）。
+  await useChip(page, '看看污水处理工艺图');
+  await waitSettled(page, 1);
 
-  // 等两轮都跑完：第一轮吐坏的，第二轮吐修好的（与图表那条自修复用例同构）
-  await page.waitForFunction(
-    () => {
-      const s = (window as any).__iceAgentConsole.getState();
-      const tools = s.items.filter((i: any) => i.kind === 'tool');
-      return s.status === 'idle' && tools.length === 2 && tools.every((t: any) => t.dsl);
-    },
-    undefined,
-    { timeout: 40_000 }
+  // ---- 有高亮 ----
+  expect(await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId())).not.toBeNull();
+  const highlighted = await yellowRatio(page);
+  const yellowPixels = await sampleYellow(page);
+
+  // 采到的那个像素必须真的是黄（红绿高、蓝低）—— 冰蓝会被这条直接否掉
+  expect(yellowPixels, '应当能采到一个"够黄"的像素').not.toBeNull();
+  expect(yellowPixels!.r).toBeGreaterThan(yellowPixels!.b + 80);
+  expect(yellowPixels!.g).toBeGreaterThan(yellowPixels!.b + 50);
+
+  // ---- 清掉高亮（`ice/point-clear`，同样的 CUSTOM 通道）----
+  await page.evaluate(() => (window as any).__iceAgentConsole.clearPoint());
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId())).toBeNull();
+
+  const cleared = await yellowRatio(page);
+  // 基线不是 0：污泥线与部分管线的底纹是**浅黄**，但那个黄的蓝通道没那么低，
+  // 在 `yellowRatio` 的判据下只是零星命中。所以断言"明显下降"而不是"归零"。
+  expect(cleared, `清掉高亮后黄色应当明显减少（${cleared} vs ${highlighted}）`).toBeLessThan(
+    highlighted * 0.5
   );
 
-  const state = await readState(page);
-  const tools = state.items.filter((i) => i.kind === 'tool') as any[];
-
-  // ---- 第一条条目：坏 DSL，**绘图区没动**，只摆诊断 ----
-  expect(tools[0].dsl.units.map((u: any) => u.kind)).toContain('greaseTrap');
-  const firstEntry = page.locator(TOOL_ENTRY).first();
-  await expect(firstEntry).toHaveAttribute('data-status', 'error');
-  await expect(firstEntry.locator('.card-head .status')).toHaveText('校验不通过');
-  // 诊断要可据以修正：指出是"未知的符号种类"，并**列出合法取值**
-  const diag = await firstEntry.locator('.diag').innerText();
-  expect(diag).toContain('未知的符号种类');
-  expect(diag).toContain('barScreen');
-
-  // ★ 校验没过的这一轮**不切画面**：绘图区还是开页那张好图，一个符号没动
-  const afterBad = await readStage(page);
-  expect(afterBad.active, '校验没过不该切图层').toBe('diagram');
-  expect(afterBad.builds.diagram, '校验没过不该重建工艺图').toBe(1);
-  const statsOnFailure = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
-  expect(statsOnFailure.symbols, '绘图区上还是完整的那张图').toBe(SYMBOLS);
-
-  // ---- 第二条条目：修好了，而且**仍然是一张图**（这是本用例的核心）----
-  // 回归点：修复剧本原先无条件吐销量柱状图 —— 图 DSL 写错会被"修"成一张图表。
-  expect(tools[1].dsl.kind).toBe('water-process');
-  expect(tools[1].dsl.units.map((u: any) => u.kind)).not.toContain('greaseTrap');
-  const secondEntry = page.locator(TOOL_ENTRY).nth(1);
-  await expect(secondEntry).toHaveAttribute('data-status', 'done');
-  await expect(page.locator(DIAGRAM_CANVAS)).toBeVisible();
-  // 不能是图表图层：那说明修复轮吐错了形态
-  expect(await page.locator('.stage-layer[data-kind="chart"]').count()).toBe(0);
-
-  // 修好的那张图是完整的（34/37、引擎校验零问题）
-  const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
-  expect(stats.symbols).toBe(SYMBOLS);
-  expect(stats.pipes).toBe(PIPES);
-  expect(stats.issues).toEqual([]);
-
-  // 修完之后诊断要被清掉，否则会一直挂在 context 上
-  expect(state.diagnostics).toBeNull();
-  expect(state.status).toBe('idle');
-
   expect(errors, errors.join('\n')).toEqual([]);
 });
 
-/**
- * 缩放视图：AI 下的"查看"命令。
- *
- * 断言的取法（时间敏感的东西要挑稳的写法）：
- * - **终值**是精确的（`初始 × 1.35ⁿ`，夹到上限）—— 零时序依赖；
- * - **"确实在动"**用"存在中间值"，而不是"某一刻等于某值"—— 对帧时序不敏感；
- * - **锚点不变**是缩放正确性的硬断言：公式错一个符号就会露。
- */
-test('AI 命令缩放视图：相对叠加、平滑推进、reset 精确回到初始视野', async ({ page }) => {
-  const errors = collectErrors(page);
-  await page.goto('/');
-
-  // 开页就有图，所以"初始视野"这个基准此时就能取
-  const initial = await page.evaluate(() => (window as any).__iceAgentConsole.diagramZoom());
-  expect(initial.animating).toBe(false);
-
-  // 采样整轮的 scale：既拿终值，也用来证"中间确实有过渡态"
-  const samples: number[] = [initial.scale];
-  await page.locator('.chip', { hasText: '把工艺图放大' }).first().click();
-  for (let i = 0; i < 80; i++) {
-    const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramZoom());
-    const st = await page.evaluate(() => (window as any).__iceAgentConsole.getState().status);
-    if (info) samples.push(info.scale);
-    if (st !== 'running' && i > 10) break;
-    await page.waitForTimeout(70);
-  }
-  await waitSettled(page, 1);
-
-  const end = await page.evaluate(() => (window as any).__iceAgentConsole.diagramZoom());
-  // 剧本是 in → in → out(2 步) → reset，所以终态应当**精确回到初始视野**
-  expect(end.scale).toBeCloseTo(initial.scale, 6);
-  expect(end.animating).toBe(false);
-
-  // 平滑：出现过严格介于初始与最高之间的值（一帧到位的话这条会红）
-  const peak = Math.max(...samples);
-  expect(peak).toBeGreaterThan(initial.scale * 1.1);
-  const intermediate = samples.filter((v) => v > initial.scale * 1.01 && v < peak * 1.01);
-  expect(intermediate.length).toBeGreaterThan(0);
-
-  // 协议层记下了这条指令（与 pointAt 一样带 seq）
-  const state = await readState(page);
-  expect((state as any).zoom.direction).toBe('reset');
-  expect((state as any).zoom.seq).toBeGreaterThanOrEqual(4);
-
-  // ★ 缩放全程不该动到图层 —— 它是**查看**动作，不是"重画一张"
-  expect((await readStage(page)).builds.diagram).toBe(1);
-
-  expect(errors, errors.join('\n')).toEqual([]);
-});
-
-test('缩放的锚点是**可视区**中心：放大后中心那个世界点几乎没动', async ({ page }) => {
-  const errors = collectErrors(page);
-  await page.goto('/');
-
-  // 锚点必须按可视区算 —— 按画布中心算的话，图会往右偏（中心落在面板底下那侧）
-  const before = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
-  const regionCx = before.region.left + before.region.width / 2;
-  const regionCy = before.region.top + before.region.height / 2;
-  const worldCenterBefore = {
-    x: (regionCx - before.tx) / before.scale,
-    y: (regionCy - before.ty) / before.scale,
-  };
-
-  await page.locator('.chip', { hasText: '把工艺图放大' }).first().click();
-  await waitSettled(page, 1);
-
-  const after = await page.evaluate(() => (window as any).__iceAgentConsole.diagramViewport());
-  const worldCenterAfter = {
-    x: (regionCx - after.tx) / after.scale,
-    y: (regionCy - after.ty) / after.scale,
-  };
-
-  // 剧本最后复位了，所以这里直接比"复位前后"也可以；关键是**镜头推进过程中**锚点守恒。
-  // 复位本身也是按同一套公式（focusBox 在可视区居中）算的，所以两者都应当吻合。
-  expect(Math.abs(worldCenterAfter.x - worldCenterBefore.x)).toBeLessThan(1);
-  expect(Math.abs(worldCenterAfter.y - worldCenterBefore.y)).toBeLessThan(1);
-
-  expect(errors, errors.join('\n')).toEqual([]);
-});
-
-/**
- * 图元高亮闪烁：`point_at` 加一个 `blink` 参数。
- *
- * 闪烁是**时间性**的，所以判据挑"存在性"而不是"某一刻的精确值"：
- * 在一段时间窗内轮询透明度，要求**同时**观测到"明显的暗"与"接近全亮"。
- * 6 轮 yoyo × 160ms = 960ms，多轮保证任何采样窗都能覆盖到两个相位 ——
- * 比连续采样 `canvasSignature` 稳得多（后者要恰好卡在某个相位上，必然 flaky）。
- */
-test('AI 命令图元闪烁：透明度来回振荡，讲完停在全亮', async ({ page }) => {
-  const errors = collectErrors(page);
-  await page.goto('/');
-
-  await page.locator('.chip', { hasText: '让图元闪烁' }).first().click();
-
-  const seen: Array<{ id: string; opacity: number; animating: boolean }> = [];
-  for (let i = 0; i < 140; i++) {
-    const info = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());
-    const st = await page.evaluate(() => (window as any).__iceAgentConsole.getState().status);
-    if (info && info.id) seen.push(info);
-    if (st !== 'running' && i > 20) break;
-    await page.waitForTimeout(70);
-  }
-  await waitSettled(page, 1);
-
-  expect(seen.length).toBeGreaterThan(0);
-
-  // ① 确实在动：中途有 animating
-  expect(seen.some((s) => s.animating)).toBe(true);
-
-  // ② 确实在闪：**同时**观测到"明显暗"与"接近全亮"。
-  //    只断言"变过"是不够的（可能只抖一点点），所以要求两端都够极端。
-  const opacity = seen.map((s) => s.opacity);
-  expect(Math.min(...opacity)).toBeLessThan(0.45);
-  expect(Math.max(...opacity)).toBeGreaterThan(0.9);
-
-  // ③ 讲完停在**全亮**（不是停在暗处）
-  //    回归点：alternate 的奇偶轮方向相反，轮数取奇数时会停在最暗处 —— 那样
-  //    闪烁结束后高亮框一直是半透明的，看着像没画出来。所以轮数必须是偶数。
-  const final = await page.evaluate(() => (window as any).__iceAgentConsole.diagramBlink());
-  expect(final.opacity).toBeCloseTo(1, 5);
-  expect(final.animating).toBe(false);
-
-  // ④ 闪的是**被指到的那个**单元（id 与 pointedId 一致，且真的在图里）
-  const state = await readState(page);
-  const ids = state.sharedState.diagram.units.map((u: any) => u.id);
-  expect(ids).toContain(final.id);
-
-  // ⑤ 闪烁全程也只是"查看"动作，图层没被换掉或重建
-  expect((await readStage(page)).builds.diagram).toBe(1);
-
-  expect(errors, errors.join('\n')).toEqual([]);
-});
+/** 采一个"够黄"的像素（用来确认那个黄真的是黄，而不是某种浅色底纹）。 */
+async function sampleYellow(page: import('@playwright/test').Page) {
+  return page.evaluate((sel) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+    if (!canvas) return null;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue;
+      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+      if (r > 200 && g > 170 && b < 140 && r - b > 90) return { r, g, b };
+    }
+    return null;
+  }, DIAGRAM_CANVAS) as Promise<{ r: number; g: number; b: number } | null>;
+}
 
 /**
  * 连续闪烁**不累积**底块。

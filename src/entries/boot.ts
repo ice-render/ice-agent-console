@@ -251,10 +251,15 @@ function applyEffects(effects: Effect[]): string | null {
       }
       case 'zoom': {
         // 缩放视图：只有工艺图会响应（图表返回 false，静默）。这是"查看"动作，不是编辑。
+        //
+        // ⚠️ 每个可选字段都要**逐个转交**（`undefined` 不能进去）——
+        // 有一次加 `scale` 时漏了这一行，结果是 `to` 命令到了视图层却没有目标倍率、
+        // 被当作非法整条丢掉，症状是"讲稿里推镜头的那几拍画面纹丝不动"（而且不报错）。
         stage.zoomView({
           direction: effect.direction,
           ...(effect.factor !== undefined ? { factor: effect.factor } : {}),
           ...(effect.steps !== undefined ? { steps: effect.steps } : {}),
+          ...(effect.scale !== undefined ? { scale: effect.scale } : {}),
         });
         break;
       }
@@ -536,6 +541,21 @@ inputEl.addEventListener('keydown', (event) => {
   diagramZoom: () => stage.diagramZoom(),
   /** 工艺图的闪烁状态（opacity / 是否在动）。 */
   diagramBlink: () => stage.diagramBlink(),
+  /**
+   * 清掉「指着讲」的高亮。
+   *
+   * 这条走的是协议里已有的 `ice/point-clear`（`EVT_POINT_CLEAR`），
+   * 但**没有任何剧本会发它**（讲完留着高亮是刻意的）—— 于是这条路径一直没被走过。
+   * 把这个口子开出来，测试才能做"有高亮 / 没高亮"的对照，而不是只能断言"有"。
+   */
+  clearPoint: () => stage.clearPoint(),
+  /**
+   * 整图适配：把**全部**图元框进可视区（"看整张图纸"）。
+   *
+   * 和开页那一屏（按 DSL 的 `viewport.focus` 取景）是两个不同的取景：
+   * 这个是远看、那个是近看。截图脚本与"图有没有被裁掉"的断言都要它。
+   */
+  fitAll: () => stage.fitAll(),
 };
 
 inputEl.focus();

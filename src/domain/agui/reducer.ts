@@ -80,8 +80,17 @@ export interface ThreadState {
    *
    * 同样带 `seq`：连发两条 `in` 必须真的放大两次。没有 seq 的话视图侧只能看到
    * "值没变"而忽略第二次（`pointAt` 那一处踩过同样的坑）。
+   *
+   * `'to'` 是**绝对**倍率（给 `scale`），讲解脚本用它 —— 相对倍率在一段十几拍的
+   * 解说里会累积，而绝对倍率是幂等的。见 `shared/contract.ts` 的 `EVT_ZOOM`。
    */
-  zoom: { direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number; seq: number } | null;
+  zoom: {
+    direction: 'in' | 'out' | 'reset' | 'to';
+    factor?: number;
+    steps?: number;
+    scale?: number;
+    seq: number;
+  } | null;
   /**
    * 渲染端诊断。由视图层校验 DSL 后回写，下一次 run 会带上它去触发自修复。
    * 这就是 AG-UI 双向语义的落点：协议的 `context` 字段。
@@ -104,7 +113,7 @@ export type Effect =
   /** `blink` 是"高亮之后再闪一下"，与 `value` 同属一次定位动作（见 shared/contract.ts）。 */
   | { type: 'point-at'; value: any; blink?: boolean }
   | { type: 'clear-point' }
-  | { type: 'zoom'; direction: 'in' | 'out' | 'reset'; factor?: number; steps?: number };
+  | { type: 'zoom'; direction: 'in' | 'out' | 'reset' | 'to'; factor?: number; steps?: number; scale?: number };
 
 export interface Reduction {
   state: ThreadState;
@@ -396,11 +405,16 @@ export function reduce(state: ThreadState, action: Action): Reduction {
         effects.push({ type: 'clear-point' });
       } else if (action.name === EVT_ZOOM) {
         const direction = action.value?.direction;
-        if (direction === 'in' || direction === 'out' || direction === 'reset') {
+        // `'to'` 还要求一个有限正数 `scale` —— 少了它这条命令没有意义，
+        // 而"补一个默认值"会让视图侧跳到某个谁也想不到的倍率上，所以宁可整条丢掉。
+        const toScale = Number(action.value?.scale);
+        const toValid = direction === 'to' && Number.isFinite(toScale) && toScale > 0;
+        if (direction === 'in' || direction === 'out' || direction === 'reset' || toValid) {
           next.zoom = {
             direction,
             ...(action.value?.factor !== undefined ? { factor: action.value.factor } : {}),
             ...(action.value?.steps !== undefined ? { steps: action.value.steps } : {}),
+            ...(toValid ? { scale: toScale } : {}),
             seq: (state.zoom?.seq ?? 0) + 1,
           };
           effects.push({
@@ -408,9 +422,10 @@ export function reduce(state: ThreadState, action: Action): Reduction {
             direction,
             ...(next.zoom.factor !== undefined ? { factor: next.zoom.factor } : {}),
             ...(next.zoom.steps !== undefined ? { steps: next.zoom.steps } : {}),
+            ...(next.zoom.scale !== undefined ? { scale: next.zoom.scale } : {}),
           });
         }
-        // 方向非法就当这条命令没来过：不破坏已有视口，也不报错
+        // 方向/参数非法就当这条命令没来过：不破坏已有视口，也不报错
       }
       // 其它 CUSTOM 事件（别的应用、别的扩展）保持沉默地路过
       return { state: next, effects };

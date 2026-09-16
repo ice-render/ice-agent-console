@@ -288,6 +288,37 @@ describe('增量补丁', () => {
     const custom = events.find((e) => e.type === EventType.CUSTOM);
     expect(custom.value.direction).toBe('reset');
   });
+
+  it('`to` 带绝对倍率 `scale`（讲稿用它：幂等，不会一路累积）', () => {
+    const events = planToEvents(
+      chartPlan({ beats: [{ text: 'x', zoom: { direction: 'to', scale: 1.5 } }] }),
+      CTX
+    );
+    const custom = events.find((e) => e.type === EventType.CUSTOM);
+    expect(custom.value).toEqual({ direction: 'to', scale: 1.5 });
+  });
+
+  it('`to` 不带 factor / steps，`in` 不带 scale —— 字段不串台', () => {
+    const only = (zoom: any) => {
+      const events = planToEvents(chartPlan({ beats: [{ text: 'x', zoom }] }), CTX);
+      return events.find((e) => e.type === EventType.CUSTOM).value;
+    };
+    expect(only({ direction: 'to', scale: 0.8 })).toEqual({ direction: 'to', scale: 0.8 });
+    expect(only({ direction: 'in', factor: 1.2 })).toEqual({ direction: 'in', factor: 1.2 });
+  });
+
+  it('★ 一条讲稿的每一拍都"先指到、再推镜头"（顺序是承重的）', () => {
+    // 缩放锚点是**可视区中心**，所以"先 pointAt 把目标移到中心、再 zoom"正好把目标留在原地。
+    // 反过来的话缩放会锚在旧的中心上，目标被推走一帧。
+    const beats = [
+      { text: 'a', pointAt: 'inlet', zoom: { direction: 'to' as const, scale: 1.5 } },
+      { text: 'b', pointAt: 'ana', zoom: { direction: 'to' as const, scale: 1.5 } },
+    ];
+    const events = planToEvents(chartPlan({ beats }), CTX);
+    const customs = events.filter((e) => e.type === EventType.CUSTOM);
+    expect(customs.map((e) => e.name)).toEqual([EVT_POINT_AT, EVT_ZOOM, EVT_POINT_AT, EVT_ZOOM]);
+    expect(customs.map((e) => e.value.direction ?? e.value.value)).toEqual(['inlet', 'to', 'ana', 'to']);
+  });
 });
 
 describe('确定性', () => {

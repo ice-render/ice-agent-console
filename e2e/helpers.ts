@@ -457,6 +457,38 @@ export async function wheelOnPanel(page: Page, deltaY = -400): Promise<void> {
   await page.mouse.wheel(0, deltaY);
 }
 
+/**
+ * 画布上"够黄"的像素占比。
+ *
+ * 为什么要按**色相**判而不是按精确色值：高亮底块是半透明洗底，叠在浅蓝的池子上、
+ * 白底上、深色位号上，采样到的 RGB 各不相同；再去抠抗锯齿边缘根本没有意义。
+ * 但"黄"这件事在色相上是稳定的 —— 红绿高、蓝很低。
+ *
+ * 这个读数用来钉"高亮是鲜艳的黄色"这条要求（而不是品牌冰蓝）：
+ * 冰蓝的红绿低、蓝高，在下面这套判据里会被判成 0。
+ */
+export async function yellowRatio(page: Page, selector = DIAGRAM_CANVAS): Promise<number> {
+  return page.evaluate((sel) => {
+    const canvas = document.querySelector(sel) as HTMLCanvasElement | null;
+    if (!canvas) return -1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return -1;
+    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let total = 0;
+    let yellow = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue; // 透明像素不算
+      total++;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      // 黄 = R、G 都显著高于 B，且自身够亮（挡住灰与浅黄底纹）
+      if (r > 200 && g > 170 && b < 140 && r - b > 90 && g - b > 60) yellow++;
+    }
+    return total > 0 ? yellow / total : 0;
+  }, selector);
+}
+
 /** 折叠 / 展开对话面板，并等绘图区把尺寸与视野重新摆好。 */
 export async function togglePanel(page: Page, collapsed: boolean): Promise<void> {
   const before = await readStage(page);

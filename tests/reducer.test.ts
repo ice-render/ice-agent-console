@@ -258,13 +258,44 @@ describe('自定义事件 / 叙事', () => {
     expect(effects[0]).toEqual({ type: 'zoom', direction: 'reset' });
   });
 
+  it('zoom 的 `to` 是绝对倍率，带 scale', () => {
+    const { state, effects } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'to', scale: 1.5 } },
+    ]);
+    expect(state.zoom).toEqual({ direction: 'to', scale: 1.5, seq: 1 });
+    expect(effects[0]).toEqual({ type: 'zoom', direction: 'to', scale: 1.5 });
+  });
+
+  it('★ `to` 的 scale 非法时整条丢掉（不补默认值）', () => {
+    // 补默认值的后果是"视图跳到某个谁也想不到的倍率上"，比什么都不做更难查。
+    // `null` 也在里面：`Number(null)` 是 0，不满足"> 0"，所以同样被挡掉。
+    for (const scale of [undefined, null, 0, -1, NaN, Infinity, '']) {
+      const { state, effects } = run([
+        { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'to', scale } },
+      ]);
+      expect({ scale, zoom: state.zoom }).toEqual({ scale, zoom: null });
+      expect({ scale, n: effects.length }).toEqual({ scale, n: 0 });
+    }
+  });
+
+  it('`to` 的数字字符串会被转成数字（与其余数值参数同一套 `Number()` 口径）', () => {
+    // 不是"顺便"：JSON 里数字写成字符串很常见，而整个 reducer 对数值入参都用
+    // `Number(x)` + `Number.isFinite` 这一套。这里单独钉一下，免得以后有人把它改严了
+    // 反而与 `factor` / `steps` 的行为不一致。
+    const { state } = run([
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'to', scale: '1.5' } },
+    ]);
+    expect(state.zoom).toEqual({ direction: 'to', scale: 1.5, seq: 1 });
+  });
+
   it('非法的缩放方向不产生 effect、也不破坏已有指令', () => {
     const { state, effects } = run([
       { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'in' } },
       { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'sideways' } },
       { type: EventType.CUSTOM, name: EVT_ZOOM, value: undefined },
+      { type: EventType.CUSTOM, name: EVT_ZOOM, value: { direction: 'to' } },
     ]);
-    // 只有第一条生效；后两条当没来过
+    // 只有第一条生效；后三条当没来过
     expect(state.zoom).toEqual({ direction: 'in', seq: 1 });
     expect(effects).toHaveLength(1);
   });

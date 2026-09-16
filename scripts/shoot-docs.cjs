@@ -85,9 +85,13 @@ const VIEW = { width: 1440, height: 900 };
       if (maxX < 0) return null;
       const box = canvas.getBoundingClientRect();
       const scale = box.width > 0 ? canvas.width / box.width : 1;
+      // ⚠️ 右边界要夹到**可视区**（= 画布宽度 - 面板遮盖），不能夹到 window.innerWidth ——
+      // 后者会把浮在画布上的对话面板切一条进来（第一版拍出来右边挂着一块面板圆角）。
+      const viewport = window.__iceAgentConsole.diagramViewport();
+      const usableRight = viewport ? viewport.region.width : box.width;
       const left = Math.max(0, box.left + minX / scale - pad);
       const top = Math.max(0, box.top + minY / scale - pad);
-      const right = Math.min(window.innerWidth, box.left + (maxX + 1) / scale + pad);
+      const right = Math.min(usableRight, box.left + (maxX + 1) / scale + pad);
       const bottom = Math.min(window.innerHeight, box.top + (maxY + 1) / scale + pad);
       return { x: left, y: top, width: right - left, height: bottom - top };
     }, padding);
@@ -98,6 +102,34 @@ const VIEW = { width: 1440, height: 900 };
     }
     await page.screenshot({ path: path.join(OUT, `${name}.png`), clip });
     console.log('  →', `${name}.png`, `(${Math.round(clip.width)}×${Math.round(clip.height)})`);
+  };
+
+  /**
+   * 拍**被高亮的那个图元**的特写。
+   *
+   * 为什么单独一个：`pointAt` 会把目标移到**可视区中心**，所以中心那一块就是它 ——
+   * 而这个"跟着讲解推近 + 高亮"的效果正是这次要展示的东西，
+   * 截成整幅的话框只占几个像素，看不出是个"鲜黄的框"。
+   */
+  const shootHighlightCloseUp = async (name, size = 520) => {
+    const clip = await page.evaluate((half) => {
+      const vp = window.__iceAgentConsole.diagramViewport();
+      if (!vp) return null;
+      const cx = vp.region.left + vp.region.width / 2;
+      const cy = vp.region.top + vp.region.height / 2;
+      const left = Math.max(0, cx - half);
+      const top = Math.max(0, cy - half * 0.62);
+      return {
+        x: left,
+        y: top,
+        width: Math.min(half * 2, vp.region.width - left),
+        height: Math.min(half * 1.24, vp.region.height - top),
+      };
+    }, size);
+
+    if (!clip) return shoot(name, stage());
+    await page.screenshot({ path: path.join(OUT, `${name}.png`), clip });
+    console.log('  →', `${name}.png`, `(${Math.round(clip.width)}×${Math.round(clip.height)} 特写)`);
   };
 
   /** 只拍绘图区（不带对话面板）—— 用在"图本身才是重点"的那几张。 */
@@ -157,7 +189,14 @@ const VIEW = { width: 1440, height: 900 };
   });
   await page.waitForTimeout(500);
   await shoot('hero');
-  // 单独拍一份"只有图"的，README 的工艺图那一节用它 —— 裁到内容，不然六成是白边
+  // 单独拍一份"只有图"的，README 的工艺图那一节用它 —— 裁到内容，不然六成是白边。
+  // 这一步等的是第一个例子（它会一路推镜头，收尾回到**全貌档**），所以拍到的是整张图纸。
+  await chip('看看污水处理工艺图');
+  await onLayer('diagram');
+  // 讲完镜头停在"全貌档"（0.42），直接拍会偏小 —— 主动做一次**整图适配**，
+  // 让图纸按可视区铺满再拍（这才是"这张图的定妆照"，跟开页那一屏不是一回事）。
+  await page.evaluate(() => window.__iceAgentConsole.fitAll());
+  await page.waitForTimeout(400);
   await shootStage('water-process');
   // 折叠起来的那一份：最能说明"图才是主体"
   await page.locator('#chat-collapse').click();
@@ -165,6 +204,26 @@ const VIEW = { width: 1440, height: 900 };
   await shootStage('full-bleed');
   await page.locator('#chat-toggle').click();
   await page.waitForTimeout(300);
+
+  // ---- 1b. 指着讲 + 鲜黄高亮（推到单格档，让高亮的框占够像素）----
+  // 这一张是"随讲解放大 + 把对应图元高亮"那条要求的直接证据：
+  // 画面是**推近过的**（不是全貌），而被讲的那个池子套着鲜黄的框。
+  await page.locator('.chip', { hasText: '让图元闪烁' }).first().click();
+  // 闪烁是有时限的（6 轮 × 160ms），所以**等它把高亮打上去就立刻拍**，
+  // 不能等整轮跑完 —— 那时候三拍已经闪过去了。
+  await page.waitForFunction(() => !!window.__iceAgentConsole?.diagramPointedId?.(), undefined, {
+    timeout: 30_000,
+  });
+  // 等这一拍的推镜头补间走完（220ms）再加一点余量，否则拍到的是中间态
+  await page.waitForTimeout(600);
+  await shootHighlightCloseUp('highlight');
+
+  // ⚠️ 拍完必须**等这一轮真的跑完**再往下走：闪烁剧本还有两拍，
+  //    而应用有 `if (running) return` 的护栏 —— 抢跑的下一次点击会被静默吞掉，
+  //    后面就卡在 `onLayer('chart')` 上等到超时（第一版就是这么挂的）。
+  await page.waitForFunction(() => window.__iceAgentConsole.getState().status === 'idle', undefined, {
+    timeout: 30_000,
+  });
 
   // ---- 2. 图表 + 「指着讲」（主链路）----
   await chip('看看各渠道的月度销量');
