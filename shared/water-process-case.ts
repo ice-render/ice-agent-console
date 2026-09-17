@@ -7,8 +7,25 @@
  * 加药间多点加药、提标改造的臭氧 + 活性炭 + 膜池、污泥干化、两套除臭、
  * 以及每段都有的在线仪表。
  *
- * 数据规模：**68 个单元 / 81 段管线**，用到 `ice-entity-designer` 的
+ * 数据规模：**78 个单元 / 100 段管线**，用到 `ice-entity-designer` 的
  * **全部 31 种符号种类与全部 9 种介质**。
+ *
+ * ## 2026-09-17 补的三组"现实里必有的回路"
+ *
+ * 之前这张图是"主流程一条线 + 各自独立的辅助带"，缺了三处真实厂站**必须有**的东西 ——
+ * 补齐之后图才经得起一句"这不像真图"：
+ *
+ * | 补什么 | 为什么现实里一定有 | 图上是什么 |
+ * |---|---|---|
+ * | **中间提升泵**（两台互备，`P-111`/`P-112`） | 二沉池出水高程不够，进深度处理前必须提升一次；原来的图等于"二沉出水自己爬上滤池" | `sec1/sec2 → 提升泵 → coag`，原来的两根直连管线被替换 |
+ * | **滤池反冲洗回路**（`P-301`/`MOV-301`） | 滤布滤池每运行若干小时要反洗，反洗水回用 | `filter → 反洗泵 → 反洗阀 → distribution`（回到配水井） |
+ * | **污泥线回流水** | 浓缩上清液与脱水滤液都要回前端，否则水量算不平 | `thickener → distribution`、`dewater → distribution` |
+ *
+ * 另外按真实厂的"一用一备 / 一泵一点"补齐：进水泵 B（`P-102`）、剩余污泥泵 B（`P-SB-302`）、
+ * 混合液回流泵 A/B（`P-104`/`P-204`，原来只有回流**阀**没有**泵**）、PAC/PAM 计量泵（`P-401`/`P-402`）。
+ *
+ * ⚠️ 布局的松紧**没动**：`tests/diagram-layout.test.ts` 有一条"每单元摊到的世界面积 ≥ 300k"，
+ * 那是"不要把图摆得太小气"的落点；这一轮只**加内容**，不加密度。
  *
  * ## 判定"真实"的标准不是"看着热闹"，而是**图上可判定的工艺约束**
  *
@@ -76,6 +93,8 @@ export const MAIN_FLOW_IDS = [
   'inlet', 'coarseScreen', 'inletPump', 'checkValve', 'fineScreen', 'grit', 'primary',
   'distribution',
   'ana1', 'anx1', 'aer1', 'sec1',
+  // 二沉出水先经**中间提升泵**再进深度处理（真实厂的高程要求）
+  'midPumpA',
   // ⚠️ 提标改造段的 ozone / carbon / membrane **不在这里** —— 它们不在基准图里，
   //    是 `UPGRADE_UNITS` 后面补上去的。写进来会被校验器判成"引用了不存在的单元"
   //    （`viewport.focus` 是校验项之一，这一条是实测踩到的）。
@@ -168,6 +187,7 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     { id: 'inlet', kind: 'inlet', name: '厂外进水', tag: 'IN', left: 105, top: 105 },
     { id: 'coarseScreen', kind: 'barScreen', name: '粗格栅', tag: 'GR-101', left: 420, top: 105 },
     { id: 'inletPump', kind: 'pump', name: '进水泵', tag: 'P-101', left: 755, top: 115 },
+    { id: 'inletPumpB', kind: 'pump', name: '进水泵 B（备用）', tag: 'P-102', left: 755, top: 285 },
     { id: 'checkValve', kind: 'checkValve', name: '出水止回阀', tag: 'CV-101', left: 945, top: 120 },
     { id: 'fineScreen', kind: 'barScreen', name: '细格栅', tag: 'GR-102', left: 1140, top: 105 },
     { id: 'grit', kind: 'gritChamber', name: '曝气沉砂池', tag: 'GC-101', left: 1470, top: 105 },
@@ -192,6 +212,7 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     // ================= 回流 / 剩余污泥 / 超越（y = 560） =================
     // 两组各一台回流泵（各自回到自己那组厌氧池）+ 一台共用的剩余污泥泵
     { id: 'returnPump1', kind: 'submersiblePump', name: '回流污泥泵 A', tag: 'P-SB-101', left: 2730, top: 980 },
+    { id: 'wastePumpB', kind: 'submersiblePump', name: '剩余污泥泵 B（备用）', tag: 'P-SB-302', left: 4235, top: 1150 },
     { id: 'returnPump2', kind: 'submersiblePump', name: '回流污泥泵 B', tag: 'P-SB-201', left: 3130, top: 980 },
     { id: 'wastePump', kind: 'submersiblePump', name: '剩余污泥泵', tag: 'P-SB-301', left: 4235, top: 980 },
     { id: 'bypassValve', kind: 'valve', name: '初沉池超越阀', tag: 'V-102', left: 1680, top: 995 },
@@ -199,8 +220,21 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     // ================= 深度处理 + 提标改造段（y = 900） =================
     // ⚠️ 位置在生化段**右侧**，图纸上是一条继续往右的线 —— 深度处理在二沉池之后，
     //    摆到左边会让出水线倒着走（第一版就是这么摆的，看起来很别扭）。
+    /**
+     * **中间提升泵**（两台互为备用）—— 真实厂站里**必有**：二沉池出水高程不够，
+     * 进深度处理（混凝 / 滤池 / 臭氧 / 膜）之前必须先提升一次。
+     * 早先的图把它省了，等于"二沉出水自己爬上滤池"，工艺上是错的。
+     */
+    { id: 'midPumpA', kind: 'pump', name: '中间提升泵 A', tag: 'P-111', left: 4180, top: 1575 },
+    { id: 'midPumpB', kind: 'pump', name: '中间提升泵 B（备用）', tag: 'P-112', left: 4180, top: 1755 },
     { id: 'coag', kind: 'coagulationTank', name: '混凝沉淀池', tag: 'CO-101', left: 4550, top: 1575 },
     { id: 'filter', kind: 'filterBed', name: '滤布滤池', tag: 'FL-101', left: 5075, top: 1575 },
+    /**
+     * **滤池反冲洗**：滤布滤池每运行若干小时要反洗一次，反洗水回**配水井**回用 ——
+     * 真图上的典型回路，也解释了"配水井为什么不是只接初沉出水"。
+     */
+    { id: 'backwashPump', kind: 'pump', name: '反冲洗泵', tag: 'P-301', left: 5075, top: 1770 },
+    { id: 'backwashValve', kind: 'motorValve', name: '反洗进水阀', tag: 'MOV-301', left: 5275, top: 1770 },
     // ⚠️ 提标改造把 ozone / carbon / membrane 插在这一格（见 UPGRADE_UNITS），
     //    并把 filter → disinfect 的直连管线换成绕经它们的四条。
     //    这段空白是**刻意留的**：改造要加的东西得先有位子。
@@ -241,7 +275,9 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
 
     // ================= 加药间（四个加药点，真实厂就是这四个系统） =================
     { id: 'pacDosing', kind: 'dosingUnit', name: 'PAC 加药装置', tag: 'DU-101', left: 4550, top: 2190 },
+    { id: 'pacPump', kind: 'pump', name: 'PAC 计量泵', tag: 'P-401', left: 4760, top: 2190 },
     { id: 'pamDosing', kind: 'dosingUnit', name: 'PAM 加药装置', tag: 'DU-102', left: 3030, top: 3325 },
+    { id: 'pamPump', kind: 'pump', name: 'PAM 计量泵', tag: 'P-402', left: 3420, top: 3325 },
     { id: 'naoclDosing', kind: 'dosingUnit', name: '次氯酸钠加药', tag: 'DU-103', left: 6965, top: 1855 },
     { id: 'carbonDosing', kind: 'dosingUnit', name: '碳源投加装置', tag: 'DU-104', left: 2545, top: 315 },
 
@@ -263,7 +299,9 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
 
     // ================= 内回流阀（两组各一个，卡在好氧池上方） =================
     { id: 'recycleValve1', kind: 'motorValve', name: '内回流调节阀 A', tag: 'MOV-102', left: 3060, top: -315 },
+    { id: 'recyclePumpA', kind: 'pump', name: '混合液回流泵 A', tag: 'P-104', left: 2900, top: -315 },
     { id: 'recycleValve2', kind: 'motorValve', name: '内回流调节阀 B', tag: 'MOV-202', left: 3270, top: 350 },
+    { id: 'recyclePumpB', kind: 'pump', name: '混合液回流泵 B', tag: 'P-204', left: 3090, top: 350 },
 
     // ================= 过程在线仪表（每段一个） =================
     { id: 'phInlet', kind: 'analyzer', name: '进水 pH 计', tag: 'AIT-105', left: 525, top: -105 },
@@ -275,6 +313,8 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     // ---- 预处理：一路左到右 ----
     { id: 'pipe-inlet-coarse', sourceId: 'inlet', targetId: 'coarseScreen', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-coarse-pump', sourceId: 'coarseScreen', targetId: 'inletPump', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
+    { id: 'pipe-coarse-pumpB', sourceId: 'coarseScreen', targetId: 'inletPumpB', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
+    { id: 'pipe-pumpB-check', sourceId: 'inletPumpB', targetId: 'checkValve', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-pump-check', sourceId: 'inletPump', targetId: 'checkValve', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-check-fine', sourceId: 'checkValve', targetId: 'fineScreen', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-fine-grit', sourceId: 'fineScreen', targetId: 'grit', medium: 'sewage', dn: 'DN1000', sourcePort: 'R', targetPort: 'L' },
@@ -290,7 +330,9 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     { id: 'pipe-anx1-aer1', sourceId: 'anx1', targetId: 'aer1', medium: 'sewage', dn: 'DN700', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-aer1-sec1', sourceId: 'aer1', targetId: 'sec1', medium: 'sewage', dn: 'DN700', sourcePort: 'R', targetPort: 'L' },
     // 二沉池 A 出来四路：出水（往下）、回流污泥、剩余污泥、混合液浓度监测
-    { id: 'pipe-sec1-coag', sourceId: 'sec1', targetId: 'coag', medium: 'effluent', dn: 'DN600', sourcePort: 'B', targetPort: 'T' },
+    // 二沉出水先到**中间提升泵**（两台互备），再并入深度处理进水管 —— 不经泵直连是工艺错误
+    { id: 'pipe-sec1-midpumpA', sourceId: 'sec1', targetId: 'midPumpA', medium: 'effluent', dn: 'DN600', sourcePort: 'B', targetPort: 'T' },
+    { id: 'pipe-midpumpA-coag', sourceId: 'midPumpA', targetId: 'coag', medium: 'effluent', dn: 'DN600', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-sec1-return1', sourceId: 'sec1', targetId: 'returnPump1', medium: 'returnSludge', dn: 'DN250', sourcePort: 'B', targetPort: 'R' },
     { id: 'pipe-return1-ana1', sourceId: 'returnPump1', targetId: 'ana1', medium: 'returnSludge', dn: 'DN250', sourcePort: 'T', targetPort: 'B' },
 
@@ -298,19 +340,26 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     { id: 'pipe-ana2-anx2', sourceId: 'ana2', targetId: 'anx2', medium: 'sewage', dn: 'DN700', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-anx2-aer2', sourceId: 'anx2', targetId: 'aer2', medium: 'sewage', dn: 'DN700', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-aer2-sec2', sourceId: 'aer2', targetId: 'sec2', medium: 'sewage', dn: 'DN700', sourcePort: 'R', targetPort: 'L' },
-    { id: 'pipe-sec2-coag', sourceId: 'sec2', targetId: 'coag', medium: 'effluent', dn: 'DN600', sourcePort: 'B', targetPort: 'L' },
+    { id: 'pipe-sec2-midpumpB', sourceId: 'sec2', targetId: 'midPumpB', medium: 'effluent', dn: 'DN600', sourcePort: 'B', targetPort: 'T' },
+    { id: 'pipe-midpumpB-coag', sourceId: 'midPumpB', targetId: 'coag', medium: 'effluent', dn: 'DN600', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-sec2-return2', sourceId: 'sec2', targetId: 'returnPump2', medium: 'returnSludge', dn: 'DN250', sourcePort: 'B', targetPort: 'R' },
     { id: 'pipe-return2-ana2', sourceId: 'returnPump2', targetId: 'ana2', medium: 'returnSludge', dn: 'DN250', sourcePort: 'T', targetPort: 'B' },
 
     // ---- 内回流（两组各一条，AAO 的必需项） ----
     { id: 'pipe-aer1-recycle1', sourceId: 'aer1', targetId: 'recycleValve1', medium: 'recycle', dn: 'DN350', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-aer1-recyclePumpA', sourceId: 'aer1', targetId: 'recyclePumpA', medium: 'recycle', dn: 'DN350', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-recyclePumpA-valve1', sourceId: 'recyclePumpA', targetId: 'recycleValve1', medium: 'recycle', dn: 'DN350', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-recycle1-anx1', sourceId: 'recycleValve1', targetId: 'anx1', medium: 'recycle', dn: 'DN350', sourcePort: 'B', targetPort: 'T' },
     { id: 'pipe-aer2-recycle2', sourceId: 'aer2', targetId: 'recycleValve2', medium: 'recycle', dn: 'DN350', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-aer2-recyclePumpB', sourceId: 'aer2', targetId: 'recyclePumpB', medium: 'recycle', dn: 'DN350', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-recyclePumpB-valve2', sourceId: 'recyclePumpB', targetId: 'recycleValve2', medium: 'recycle', dn: 'DN350', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-recycle2-anx2', sourceId: 'recycleValve2', targetId: 'anx2', medium: 'recycle', dn: 'DN350', sourcePort: 'B', targetPort: 'T' },
 
     // ---- 剩余污泥：两组二沉池都往剩余污泥泵汇 ----
     { id: 'pipe-sec1-waste', sourceId: 'sec1', targetId: 'wastePump', medium: 'sludge', dn: 'DN200', sourcePort: 'R', targetPort: 'T' },
     { id: 'pipe-sec2-waste', sourceId: 'sec2', targetId: 'wastePump', medium: 'sludge', dn: 'DN200', sourcePort: 'R', targetPort: 'B' },
+    { id: 'pipe-sec2-wasteB', sourceId: 'sec2', targetId: 'wastePumpB', medium: 'sludge', dn: 'DN200', sourcePort: 'B', targetPort: 'L' },
+    { id: 'pipe-wasteB-thickener', sourceId: 'wastePumpB', targetId: 'thickener', medium: 'sludge', dn: 'DN200', sourcePort: 'L', targetPort: 'B' },
     { id: 'pipe-waste-thickener', sourceId: 'wastePump', targetId: 'thickener', medium: 'sludge', dn: 'DN200', sourcePort: 'L', targetPort: 'T' },
 
     // ---- 深度处理 + 提标改造段 ----
@@ -318,6 +367,10 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
     // ⚠️ 这根就是提标改造要**删掉**的那根（见 UPGRADE_REMOVED_PIPE_IDS）：
     //    改了之后要绕经臭氧 → 活性炭 → 膜池。
     { id: 'pipe-filter-disinfect', sourceId: 'filter', targetId: 'disinfect', medium: 'effluent', dn: 'DN500', sourcePort: 'R', targetPort: 'L' },
+    // ---- 滤池反冲洗回路：清水侧取水加压反冲 → 反洗水回配水井（真图上的典型回路）----
+    { id: 'pipe-filter-backwash', sourceId: 'filter', targetId: 'backwashPump', medium: 'effluent', dn: 'DN300', sourcePort: 'B', targetPort: 'T' },
+    { id: 'pipe-backwash-valve', sourceId: 'backwashPump', targetId: 'backwashValve', medium: 'effluent', dn: 'DN300', sourcePort: 'R', targetPort: 'L' },
+    { id: 'pipe-backwash-dist', sourceId: 'backwashValve', targetId: 'distribution', medium: 'sewage', dn: 'DN300', sourcePort: 'T', targetPort: 'B' },
     { id: 'pipe-disinfect-analyzer', sourceId: 'disinfect', targetId: 'analyzer', medium: 'effluent', dn: 'DN500', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-analyzer-meter', sourceId: 'analyzer', targetId: 'meter', medium: 'effluent', dn: 'DN500', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-meter-valve', sourceId: 'meter', targetId: 'outletValve', medium: 'effluent', dn: 'DN500', sourcePort: 'R', targetPort: 'L' },
@@ -334,6 +387,9 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
 
     // ---- 污泥线：浓缩 → 脱水 → 干化 → 输送 → 料仓 → 外运 ----
     { id: 'pipe-thickener-dewater', sourceId: 'thickener', targetId: 'dewater', medium: 'sludge', dn: 'DN200', sourcePort: 'R', targetPort: 'L' },
+    // ---- 污泥线回流水：浓缩上清液与脱水滤液都回配水井（不画这条，前端水量算不平）----
+    { id: 'pipe-thickener-dist', sourceId: 'thickener', targetId: 'distribution', medium: 'sewage', dn: 'DN150', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-dewater-dist', sourceId: 'dewater', targetId: 'distribution', medium: 'sewage', dn: 'DN150', sourcePort: 'T', targetPort: 'B' },
     { id: 'pipe-dewater-dryer', sourceId: 'dewater', targetId: 'dryer', medium: 'sludge', dn: 'DN200', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-dryer-screw', sourceId: 'dryer', targetId: 'screwPump', medium: 'sludge', dn: 'DN150', sourcePort: 'R', targetPort: 'L' },
     { id: 'pipe-screw-silo', sourceId: 'screwPump', targetId: 'sludgeSilo', medium: 'sludge', dn: 'DN150', sourcePort: 'R', targetPort: 'L' },
@@ -342,7 +398,11 @@ export const WATER_PROCESS_DSL: WaterProcessDslDocument = {
 
     // ---- 加药：四个加药点各自接到投加点 ----
     { id: 'pipe-pac-coag', sourceId: 'pacDosing', targetId: 'coag', medium: 'chemical', dn: 'DN40', sourcePort: 'R', targetPort: 'B' },
+    { id: 'pipe-pac-pump', sourceId: 'pacDosing', targetId: 'pacPump', medium: 'chemical', dn: 'DN40', sourcePort: 'R', targetPort: 'L' },
+    { id: 'pipe-pacpump-coag', sourceId: 'pacPump', targetId: 'coag', medium: 'chemical', dn: 'DN40', sourcePort: 'T', targetPort: 'B' },
     { id: 'pipe-pam-dewater', sourceId: 'pamDosing', targetId: 'dewater', medium: 'chemical', dn: 'DN25', sourcePort: 'T', targetPort: 'B' },
+    { id: 'pipe-pam-pump', sourceId: 'pamDosing', targetId: 'pamPump', medium: 'chemical', dn: 'DN25', sourcePort: 'R', targetPort: 'L' },
+    { id: 'pipe-pampump-dewater', sourceId: 'pamPump', targetId: 'dewater', medium: 'chemical', dn: 'DN25', sourcePort: 'T', targetPort: 'B' },
     { id: 'pipe-naocl-disinfect', sourceId: 'naoclDosing', targetId: 'disinfect', medium: 'chemical', dn: 'DN25', sourcePort: 'T', targetPort: 'B' },
     // 碳源投加到缺氧池（补充反硝化需要的碳源，真实运行里很常见）
     { id: 'pipe-carbon-anx1', sourceId: 'carbonDosing', targetId: 'anx1', medium: 'chemical', dn: 'DN25', sourcePort: 'R', targetPort: 'T' },

@@ -156,7 +156,7 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
     expect((plan as ToolCallCardPlan).stateKey).toBe(STATE_DIAGRAM_KEY);
   });
 
-  it('载荷是一张真实厂站规模的图（68 单元 / 81 管线），且**从常量直接引**', () => {
+  it('载荷是一张真实厂站规模的图（78 单元 / 100 管线），且**从常量直接引**', () => {
     const plan = buildPlan({ message: '看看污水处理工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
     const payload = payloadOf(plan);
     expect(payload.kind).toBe('water-process');

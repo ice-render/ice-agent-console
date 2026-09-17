@@ -72,8 +72,8 @@ describe('工艺图布局：图元不许压住', () => {
   });
 
   it('单元数与种类没被布局改动弄丢', () => {
-    expect(BASE_UNITS.length).toBe(68);
-    expect(WATER_PROCESS_DSL.pipes.length).toBe(81);
+    expect(BASE_UNITS.length).toBe(78);
+    expect(WATER_PROCESS_DSL.pipes.length).toBe(100);
     // id 唯一：布局时复制粘贴最容易带出重复 id（那会让管线指向第一个）
     const ids = BASE_UNITS.map((u) => u.id);
     expect(new Set(ids).size).toBe(ids.length);

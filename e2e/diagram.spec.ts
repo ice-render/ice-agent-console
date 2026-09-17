@@ -175,7 +175,7 @@ test('问一句工艺图：不重建，只是复用（第二次挂同一份 DSL�
   const stage = await readStage(page);
   expect(stage.active).toBe('diagram');
   expect(stage.builds.diagram, '同一份 DSL 不该重建工艺图').toBe(1);
-  expect(stage.canvasCount, '还是只有那 68 个符号所在的这一块画布').toBe(1);
+  expect(stage.canvasCount, '还是只有工艺图所在的那一块画布').toBe(1);
 
   // 条目里明说了"没有重绘" —— 这是给人看的那条线索
   await expect(page.locator(`${TOOL_ENTRY} .hint`)).toContainText('没有重绘');

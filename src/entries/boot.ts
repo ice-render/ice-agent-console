@@ -434,7 +434,7 @@ class AgentConsolePage {
        * 工艺图的模型层事实：符号数 / 管线数 / 工艺校验问题。
        *
        * 为什么 e2e 需要它：canvas 里没有 DOM 目标，而"图对不对"是**模型层**的事实
-       * （68 个符号、81 段管线、`validateWater()` 零问题）。只数像素证明不了数量对。
+       * （78 个符号、100 段管线、`validateWater()` 零问题）。只数像素证明不了数量对。
        */
       diagramStats: () => this.stage.diagramStats(),
       /** 工艺图里被「指着讲」高亮的单元 id。 */
