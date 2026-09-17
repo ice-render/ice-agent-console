@@ -205,6 +205,10 @@
     另两条 collect 是 ERR_ABORTED）。`e2e/seo.spec.ts` 有一条用例钉住它。
 
 18. **应用层写法：一页 = 一个类（2026-09-17 确立）。**
+    > **契约正文不在本仓**：应用页面怎么写（一页一类、`onUpdate()` 由谁在什么时候调、
+    > 稳定结构的边界、入口决策表、验收清单、常见坑）单一来源是
+    > `ice-web-components/docs/guides/app-pages.md`。本仓只记**这一页特有**的部分。
+
     家族的应用层统一到这个形状（库侧是 `ice-web-components` 的 `ICEContainer` 契约，
     `ice-smart-water` 的 12 个页面、各仓示例页都这么写；游戏页见 `ice-game` 的 `GamePage`）。
     本仓**只有一屏**（绘图区铺满视口 + 对话面板浮着），所以**入口即页面**：
