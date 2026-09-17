@@ -86,8 +86,8 @@ describe('页面写法棘轮（一页一个类）', () => {
 /**
  * 成员顺序棘轮（2026-09-17 定，全家族同口径）。
  *
- * 契约：`static 常量/字段 → 实例字段 → 构造函数 → 访问器 → static 方法 → 实例方法`
- * —— 也就是这个正则：`S*F*C*A*T*M*`。
+ * 契约：`static 常量/字段 → static 方法 → 实例字段 → 构造函数 → 访问器 / 实例方法`
+ * —— 也就是这个正则：`S*T*F*C*(A|M)*`（静态的都在最前，这一页有 4 个静态常量）。
  *
  * 为什么只到这一层：Google Java Style §3.4.2 明确说 class 成员"**没有唯一正确的配方**"，
  * 要求的是每种顺序都讲得通、维护者能解释；Google 的 TypeScript 指南对顺序**完全沉默**
@@ -99,11 +99,15 @@ describe('页面写法棘轮（一页一个类）', () => {
  * class shape），所以挪字段必须逐个确认初始化表达式互不依赖。
  */
 describe('成员顺序棘轮（static 常量 → 实例字段 → 构造函数 → 方法）', () => {
-  it('AgentConsolePage 的成员序列符合 S*F*C*A*T*M*', () => {
+  it('AgentConsolePage 的成员序列符合 S*T*F*C*(A|M)*', () => {
     const text = source();
-    const body = text.slice(text.indexOf('class AgentConsolePage {')).split('\n').slice(1).join('\n');
+    // 必须是**行首的类声明**：注释里出现同名字样时 `indexOf('class …')` 会命中错的那一处，
+    // 扫出空序列然后"绿"下去 —— 那种假的绿比红更危险。
+    const at = text.search(/^[ \t]*(?:export\s+)?(?:abstract\s+)?class\s+[A-Za-z_$]/m);
+    expect(at).toBeGreaterThan(-1);
+    const body = text.slice(at).split('\n').slice(1).join('\n');
     const seq = memberSequence(body);
-    expect(seq).toMatch(/^S*F*C*A*T*M*$/);
+    expect(seq).toMatch(/^S*T*F*C*(?:A|M)*$/);
     // 自检：正则没扫到东西就得先修这条测试（否则它会永远绿）
     expect(seq.length).toBeGreaterThan(30);
   });
