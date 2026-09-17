@@ -231,6 +231,32 @@
 
 ---
 
+## 成员顺序（2026-09-17 定，全家族同口径）
+
+类里的成员按这个顺序排 —— 就是棘轮里那个正则 `S*F*C*A*T*M*`：
+
+```
+static 常量/字段  →  实例字段  →  构造函数  →  访问器 get/set  →  static 方法  →  实例方法
+```
+
+- **只到这一层**：不查 public/private 的先后，也不查同组内谁先谁后。理由不是偷懒 ——
+  Google Java Style §3.4.2 明确说 class 成员顺序"**没有唯一正确的配方**"（原文：
+  "there's no single correct recipe for how to do it… each class uses *some logical order,
+  which its maintainer could explain if asked*"），而 Google 的 TypeScript 指南对顺序
+  **完全沉默**（全文 "ordering" 出现 0 次，只要求构造函数上下各留一个空行）。
+  所以只把"讲得通"的骨架机器化，剩下的交给作者判断。
+- ⚠️ **TS 跟 Java 不一样，挪位置前先分清挪的是什么**：
+  **方法随便挪**（类定义时方法就全部装好，与文本顺序无关，静态方法同理）；
+  **字段的声明顺序是有语义的** —— 初始化按声明顺序执行，还影响 V8 的 class shape
+  （Google 的 TS 指南也专门点了这条）。所以挪 `static` 字段要确认它跟别的
+  `static` 字段/静态块之间没有顺序依赖，挪实例字段要确认初始化表达式互不依赖。
+  本仓这次只挪了 4 个互相独立的常量，外加一个注释归位，**归一化比对逐行一致**。
+- 棘轮：`tests/pageConvention.test.ts` 的最后一条（`AgentConsolePage` 的成员序列）。
+- 本仓的应用层就一个文件（`src/entries/boot.ts`），已经是这个形状；
+  `src/view/` 与 `src/domain/` 是图层与纯逻辑，不在此口径内。
+
+---
+
 ## 2. 分层与落点
 
 **纯逻辑放 `src/domain/`，命令式放 `src/view/`，协议编解码放 `server/`。**
