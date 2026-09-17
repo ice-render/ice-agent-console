@@ -334,6 +334,100 @@ const CASE_SCALE = {
  *
  * 收尾回到"全貌"档：讲完了让图纸整体留在视野里，比停在一个池子的特写上更像个结尾。
  */
+/**
+ * **工艺图讲解的节拍表**（导出是为了让测试能读它 —— 见 `tests/diagram-narration.test.ts`）。
+ *
+ * 唯一容易漂的地方是**覆盖**：图上有的、主流程上的处理单元，台词里必须点得到。
+ * 已经漂过两次 —— 粗格栅与配水井画在图上、11 站台词一次没点名；后来加了中间提升泵，
+ * 镜头走过去、嘴上也没提。所以把这份表抽出来，交给测试盯。
+ */
+export const WATER_WALK_BEATS: Array<{ text: string; pointAt?: string; blink?: boolean; zoom?: any }> = [
+    {
+      text:
+        '先把整张图框进来 —— 上面那条是水线主线，中间一条是深度处理，' +
+        '最下面是污泥线，右边还有一条事故水支路。',
+      zoom: { ...VIEW_ALL_FIT },
+    },
+    {
+      text: '从最左边开始。厂外进水先过粗格栅拦大块杂物，再经进水泵加压、出口接止回阀，然后进细格栅挡小颗粒：',
+      pointAt: 'inlet',
+      zoom: { direction: 'to', scale: VIEW_UNIT },
+    },
+    {
+      text:
+        '接着是曝气沉砂池去掉砂粒，再到初沉池把悬浮物沉下去 —— ' +
+        '这两格是预处理段的主体；出水进配水井，在那里一分为二给并联的两组生化线：',
+      pointAt: 'primary',
+      zoom: { direction: 'to', scale: VIEW_STAGE },
+    },
+    {
+      text:
+        '进生化段。厌氧池是释磷的地方 —— 聚磷菌在这里把磷放出来，' +
+        '这是后面能生物除磷的前提：',
+      pointAt: 'ana1',
+      zoom: { direction: 'to', scale: VIEW_UNIT },
+    },
+    {
+      text:
+        '缺氧池靠内回流把硝态氮还原成氮气，这是脱氮的主战场。' +
+        '注意上方那个内回流调节阀，混合液就是从好氧池经它回到这里的：',
+      pointAt: 'anx1',
+      zoom: { direction: 'to', scale: VIEW_UNIT },
+    },
+    {
+      text: '好氧池完成硝化与有机物降解，鼓风机房从最上面通过空气管给它供氧：',
+      pointAt: 'aer1',
+      zoom: { direction: 'to', scale: VIEW_UNIT },
+    },
+    {
+      text:
+        '二沉池做泥水分离。上清液去深度处理，污泥一路回流到厌氧池、' +
+        '一路去浓缩脱水 —— 池子底下那几根管子就是这几路：',
+      pointAt: 'sec1',
+      zoom: { direction: 'to', scale: VIEW_UNIT },
+    },
+    {
+      text:
+        '二沉池的上清液不能自己流进深度处理 —— 中间那几台中间提升泵（两台互备）把水头提上去，' +
+        '这也是全流程里唯一抬水头的一段：',
+      pointAt: 'midPumpA',
+      zoom: { direction: 'to', scale: VIEW_UNIT },
+    },
+    {
+      text:
+        '深度处理段从左到右：加药 → 混凝沉淀 → 滤布滤池 → 消毒接触池，除磷、控 SS、杀菌。' +
+        '滤池底下那台是反冲洗泵：滤池运行一段时间要反洗一次，反洗水回到配水井再利用：',
+      pointAt: 'coag',
+      zoom: { direction: 'to', scale: VIEW_STAGE },
+    },
+    {
+      text: '出水前必须过在线水质监测与计量，然后经出水阀从排放口排出去：',
+      pointAt: 'analyzer',
+      zoom: { direction: 'to', scale: VIEW_STAGE },
+    },
+    {
+      text:
+        '再看最下面那条污泥线：浓缩 → 脱水 → 螺杆泵输送 → 料仓 → 外运，' +
+        '脱水机房的臭气由除臭装置抽走。注意还有两条回流水 —— ' +
+        '浓缩上清液与脱水滤液都打回配水井，不然前端的水量算不平：',
+      pointAt: 'thickener',
+      zoom: { direction: 'to', scale: VIEW_STAGE },
+    },
+    {
+      text:
+        '最后是右边那条事故水支路：出水一旦超标就切进事故池，' +
+        '再由回流泵打回厌氧池重来一遍 —— 所以它绕回的是生化段，不是排放口：',
+      pointAt: 'accidentTank',
+      zoom: { direction: 'to', scale: VIEW_STAGE },
+    },
+    {
+      text:
+        '整张图是 `ice-entity-designer` 画的，不是图片。滚轮可以缩放、空白处拖拽可以平移 —— ' +
+        '世界尺寸约 8600×4200，是拖着看而不是缩略图。',
+      zoom: { ...VIEW_ALL_FIT },
+    },
+];
+
 function waterProcessPlan(): ToolCardPlan {
   return diagramCard(WATER_PROCESS_DSL, {
     intro:
@@ -341,82 +435,7 @@ function waterProcessPlan(): ToolCardPlan {
       `${CASE_SCALE.units} 个单元、${CASE_SCALE.pipes} 段管线，` +
       `用满了 ${CASE_SCALE.kinds} 种工艺符号与 ${CASE_SCALE.mediums} 种介质线型。` +
       '我按工艺段走一遍，镜头会跟着推近。',
-    beats: [
-      {
-        text:
-          '先把整张图框进来 —— 上面那条是水线主线，中间一条是深度处理，' +
-          '最下面是污泥线，右边还有一条事故水支路。',
-        zoom: { ...VIEW_ALL_FIT },
-      },
-      {
-        text: '从最左边开始。厂外进水进来先加压，出口接止回阀、再进细格栅挡大颗粒：',
-        pointAt: 'inlet',
-        zoom: { direction: 'to', scale: VIEW_UNIT },
-      },
-      {
-        text:
-          '接着是曝气沉砂池去掉砂粒，再到初沉池把悬浮物沉下去 —— ' +
-          '这两格是预处理段的主体：',
-        pointAt: 'primary',
-        zoom: { direction: 'to', scale: VIEW_STAGE },
-      },
-      {
-        text:
-          '进生化段。厌氧池是释磷的地方 —— 聚磷菌在这里把磷放出来，' +
-          '这是后面能生物除磷的前提：',
-        pointAt: 'ana1',
-        zoom: { direction: 'to', scale: VIEW_UNIT },
-      },
-      {
-        text:
-          '缺氧池靠内回流把硝态氮还原成氮气，这是脱氮的主战场。' +
-          '注意上方那个内回流调节阀，混合液就是从好氧池经它回到这里的：',
-        pointAt: 'anx1',
-        zoom: { direction: 'to', scale: VIEW_UNIT },
-      },
-      {
-        text: '好氧池完成硝化与有机物降解，鼓风机房从最上面通过空气管给它供氧：',
-        pointAt: 'aer1',
-        zoom: { direction: 'to', scale: VIEW_UNIT },
-      },
-      {
-        text:
-          '二沉池做泥水分离。上清液去深度处理，污泥一路回流到厌氧池、' +
-          '一路去浓缩脱水 —— 池子底下那几根管子就是这几路：',
-        pointAt: 'sec1',
-        zoom: { direction: 'to', scale: VIEW_UNIT },
-      },
-      {
-        text: '深度处理段从左到右：加药 → 混凝沉淀 → 滤布滤池 → 消毒接触池，除磷、控 SS、杀菌：',
-        pointAt: 'coag',
-        zoom: { direction: 'to', scale: VIEW_STAGE },
-      },
-      {
-        text: '出水前必须过在线水质监测与计量，然后经出水阀从排放口排出去：',
-        pointAt: 'analyzer',
-        zoom: { direction: 'to', scale: VIEW_STAGE },
-      },
-      {
-        text:
-          '再看最下面那条污泥线：浓缩 → 脱水 → 螺杆泵输送 → 料仓 → 外运，' +
-          '脱水机房的臭气由除臭装置抽走：',
-        pointAt: 'thickener',
-        zoom: { direction: 'to', scale: VIEW_STAGE },
-      },
-      {
-        text:
-          '最后是右边那条事故水支路：出水一旦超标就切进事故池，' +
-          '再由回流泵打回厌氧池重来一遍 —— 所以它绕回的是生化段，不是排放口：',
-        pointAt: 'accidentTank',
-        zoom: { direction: 'to', scale: VIEW_STAGE },
-      },
-      {
-        text:
-          '整张图是 `ice-entity-designer` 画的，不是图片。滚轮可以缩放、空白处拖拽可以平移 —— ' +
-          '世界尺寸约 4800×2300，是拖着看而不是缩略图。',
-        zoom: { ...VIEW_ALL_FIT },
-      },
-    ],
+    beats: WATER_WALK_BEATS,
   });
 }
 
