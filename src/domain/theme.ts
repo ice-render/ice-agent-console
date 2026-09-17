@@ -100,8 +100,14 @@ export function currentTheme(): ThemeName {
 /**
  * 装主题。**必须在任何组件 / ICE 实例被构造之前调**。
  *
- * 库的注释写得很明确：「主题在组件构造时读取一次，要热切换就重建组件」。
- * 所以本工程是"启动即定死" —— 卡片是按需创建的，装完主题之后建出来的都在同一套里。
+ * 本工程是"启动即定死"（`?theme=dark` 决定，运行期不换）：卡片是按需创建的，
+ * 装完主题之后建出来的都在同一套里。
+ *
+ * ⚠️ 这条**不再是库的限制**：`ice-web-components` 1.15 起，组件样式槽里放的是**主题引用**
+ * （`token('ui.colors.x')`，paint 时解析），`iceUIManager.setTheme()` 之后不用重建组件树
+ * 就会换色（见库的 `docs/guides/theming.md` 第七节）。本工程保持"启动即定死"是**产品选择**，
+ * 不是被迫 —— 想加运行期切换的话，`setTheme()` + `applyThemeToCss()` + `applyThemeToIce(ice)`
+ * 三句就够，卡片不需要重建。
  */
 export function installTheme(): ThemeName {
   const name: ThemeName = themeFromUrl() ?? DEFAULT_THEME;

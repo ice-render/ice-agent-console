@@ -42,7 +42,7 @@ export class FormLayer {
       onSubmit: (values) => options.onSubmit(values),
     });
     // 表单层这个 ICE 实例是 DSL 内部建的，从 `result.ice` 拿到再对齐主题 ——
-    // 否则表单控件会是亮色主题（库的主题在构造时读一次，这里是构造之后的第一时间）
+    // 引擎主题是**实例级**的，DSL 内部新建的实例不会自动继承，得逐个对齐。
     applyThemeToIce(this.result.ice);
     this.layer = new Layer('form', this.canvas, this.result.ice);
 

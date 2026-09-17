@@ -869,7 +869,7 @@ e2e 那条**主动 `page.route('**/agui').abort()`** 造失败，而不是依赖
 三条细节值得知道：
 
 - **构造期的顺序仍然是承重的**，搬家时一字未动：`installTheme()` 必须在造任何组件之前
-  （库的主题是"组件构造时读一次"）、`syncPanelInset()` 必须在画工艺图之前
+  （本工程"启动即定死"的约定）、`syncPanelInset()` 必须在画工艺图之前
   （初始视野只设一次）、调试句柄挂完之后才轮到自动开演；
 - **调试句柄是页面实例的成员**：`window.__iceAgentConsole` 里那一串查询全部走
   `this.stage` / `this.state`，它的生命周期就是这一页的生命周期（e2e 的 `helpers.ts` 直接读它）；
@@ -890,7 +890,7 @@ e2e 那条**主动 `page.route('**/agui').abort()`** 造失败，而不是依赖
 
 | 谁 | 怎么拿到颜色 |
 |---|---|
-| 画布里的**控件** | `iceUIManager.setTheme()` —— 库的主题是"组件构造时读一次"，所以在 boot 时定死 |
+| 画布里的**控件** | `iceUIManager.setTheme()` —— 本工程在 boot 时定死（库 1.15 起支持热切换，见下） |
 | 画布里的**引擎外壳**（选中框 / 手柄 / 阴影色） | `applyThemeToEngine(ice)` —— 引擎主题是**实例级**的，绘图区里那几块画布各调一次 |
 | 画布里的**图表** | 不用单独调：`ICEChart` 的 `theme: 'auto'` 按**引擎主题背景色的亮度**判明暗 |
 | 画布里的**图**（选中框 / 对齐引导线 / 插槽） | `ice-entity-designer` 的构造里会 `applyDesignerChrome(ice)`，它**从当前引擎主题派生**。所以图层的构造顺序是 **先 `applyThemeToIce` 再 `new WaterProcessDesigner`** —— 反了派生的就是引擎内置默认蓝，而不是家族品牌色 |
@@ -916,8 +916,13 @@ e2e 那条**主动 `page.route('**/agui').abort()`** 造失败，而不是依赖
   浮层那三个是必需的：亮色主题的 `surface` 与 `elevated` 都是纯白，直接拿来当浮层底
   会跟绘图区糊在一起 —— 只能靠边框 + 阴影拉开，那两行就是那份差值。
 
-**没做成运行时切换的开关**，不是因为懒：库的主题在组件构造时读一次，热切换要重建所有画布里的
-组件树，而画布上还跑着 rAF、事件监听与流式更新。要做的话正确的做法是重建整个绘图区。
+**没做成运行时切换的开关**：本工程按"`?theme=dark` 启动即定死"设计，卡片是按需创建的，
+画布上还跑着 rAF、事件监听与流式更新 —— 换主题要同时动 canvas 侧与 DOM 侧，收益不抵复杂度。
+
+⚠️ 这条**不是库的限制**：`ice-web-components` 1.15 起组件样式槽里放的是**主题引用**
+（`token('ui.colors.x')`，paint 时解析），`iceUIManager.setTheme()` 之后**不用重建组件树**
+就会换色（库的 `docs/guides/theming.md` 第七节）。真要加开关，三句就够：
+`setTheme()` + `applyThemeToCss()` + **逐块画布** `applyThemeToIce(ice)`（引擎主题是实例级的）。
 
 ---
 
