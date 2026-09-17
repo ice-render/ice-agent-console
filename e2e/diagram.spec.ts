@@ -562,8 +562,27 @@ test('★ 「看整张图」真的框住整张图：讲稿的全貌档两侧都�
 test('「指着讲」：讲解时高亮对应单元，讲完的单元 id 可查', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
+
+  /**
+   * 讲解期间**采样指点序列**：每一拍 `pointAt` 会把镜头移过去并高亮，`diagramPointedId()` 就读到它。
+   *
+   * 为什么要采整段而不是只看结尾：结尾只证明"最后一拍对"，而这一轮给主流程**插了一站**
+   * （中间提升泵）—— 它到底有没有真的被镜头走到，只有采样序列能回答。
+   * 节拍之间隔着数秒，500ms 采样不会漏。
+   */
+  const pointedSeq: string[] = [];
+  const sampler = setInterval(async () => {
+    try {
+      const id = await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId());
+      if (id && pointedSeq[pointedSeq.length - 1] !== id) pointedSeq.push(id);
+    } catch {
+      /* 页面正在切图层时可能取不到，忽略 */
+    }
+  }, 500);
+
   await useChip(page, '看看污水处理工艺图');
   await waitSettled(page, 1);
+  clearInterval(sampler);
 
   // 讲稿的最后一拍指着事故池（收尾讲事故水支路）；讲完之后高亮留着（与图表的行为一致）
   const pointed = await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId());
@@ -575,6 +594,17 @@ test('「指着讲」：讲解时高亮对应单元，讲完的单元 id 可查'
   const state = await readState(page);
   const ids = state.sharedState.diagram.units.map((u: any) => u.id);
   expect(ids).toContain(pointed);
+
+  // ★ 镜头**按工艺段走**：主流程上的几个关键站都得被真的指点到（顺序也要对）。
+  //   这一条盯着"图改了、台词改了，但镜头没跟上"这类缝 —— 静态判据（台词表 / DSL）看不出来。
+  const mustVisit = ['inlet', 'ana1', 'sec1', 'midPumpA', 'coag'];
+  const missed = mustVisit.filter((id) => !pointedSeq.includes(id));
+  expect({ 没走到的站: missed }).toEqual({ 没走到的站: [] });
+  // 中间提升泵在二沉池之后、混凝之前 —— 顺序反了说明节拍表被插错位置
+  const idxSec1 = pointedSeq.indexOf('sec1');
+  const idxMid = pointedSeq.indexOf('midPumpA');
+  const idxCoag = pointedSeq.indexOf('coag');
+  expect({ 顺序对: idxSec1 < idxMid && idxMid < idxCoag }).toEqual({ 顺序对: true });
 
   expect(errors, errors.join('\n')).toEqual([]);
 });
