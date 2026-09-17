@@ -1184,7 +1184,7 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **280 passed** / 15 suites（含 `seo.test.ts` 与 `pageConvention.test.ts`） |
+| 单测 | **281 passed** / 15 suites（含 `seo.test.ts` 与 `pageConvention.test.ts`） |
 | e2e | **55 passed** / 11 specs |
 | 生产包 | 约 1.36 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
