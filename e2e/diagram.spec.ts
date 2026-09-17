@@ -236,6 +236,10 @@ test('初始视野：按 DSL 里的 focus 框适配到**可视区**，内容没�
   // focus 真的在裁：主流程链**横向铺满整图**（进水在最左、排放口在最右），
   // 所以它裁掉的是**纵向**那一大块（污泥线 / 事故水 / 加药间）。
   // 这条断言同时也说明"为什么要有 focus"—— 按整图算会白白为用不上的行留出高度。
+  //
+  // ⚠️ 顺带钉一个**产品决定**：开页就是"看全流程"（整条主流程装进可视区，约 0.14 倍，
+  //    第一眼像缩略图是刻意的）。别再把它"优化"成开页近景 —— 读细节靠滚轮放大，
+  //    "看全图"另有 fitAll()；理由写在 `shared/water-process-case.ts` 的 viewport 注释里。
   const focusH = vp.focusBox.maxY - vp.focusBox.minY;
   const contentH = vp.contentBox.maxY - vp.contentBox.minY;
   expect(focusH).toBeLessThan(contentH);
