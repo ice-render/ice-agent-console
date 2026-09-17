@@ -1376,6 +1376,33 @@ dist/*（整份）      →（deploy-pages.mjs 递归拷贝）→ gh-pages 分�
 响应体（导致所有读响应头的检查静默变瞎）、`.replace()` 时没判 `canonical` 是不是 null
 （首页一抖就崩在 TypeError 上）。**体检脚本的假绿比没有脚本更糟** —— 它让人以为检查过了。
 
+### 12.7 流量统计：GA4（只在线上加载）
+
+页面的 head 里有 Google Analytics 4（测量 ID `G-HW6H6EP0ES`），但**本地不加载**：
+
+```js
+var isLocal = location.protocol === 'file:' || host === '' ||
+              host === 'localhost' || host === '127.0.0.1' || host === '::1';
+if (isLocal) return;   // 之后才是 gtag.js + dataLayer + config
+```
+
+两个必须记住的点：
+
+1. **这是运行期判定，不是构建期。** e2e 跑的**正是 production 产物**
+   （`npm run build` 的 dist，只是用 localhost 提供）—— 按 `argv.mode` 或 DefinePlugin
+   决定"要不要吐这个标签"**根本挡不住它**。谁想把它"简化"成构建期开关，谁就会让 e2e 红。
+2. **门控失效的症状是"整个 e2e 套件自己红"**（实测）：`collectErrors` 把 `requestfailed`
+   当错误，而 GA 即使在**完全正常工作**时，自己那些重复 beacon 也会被 Chromium 记成
+   `net::ERR_ABORTED`（在非本地主机上验过：`gtag/js` 200、`g/collect` 204、
+   另两条 collect 是 ERR_ABORTED）。所以"网络通就没事"是错的。
+
+判定用**黑名单（排除本地）而不是白名单（只认线上域名）**：白名单在换自定义域名时
+会**静默失效**（统计没了、没有任何报错），黑名单最多是"在非本地的测试环境里多打几次"。
+
+`e2e/seo.spec.ts` 有一条用例钉住这件事（标签在产物里 + 本地一个请求都不发）。
+想统计"有没有人点那些快捷按钮"，需要在 `src/entries/boot.ts` 的 chip 回调里补
+`gtag('event', ...)`（`window.gtag` 已经挂在全局，与 Google 原版一致）—— 现在**没做**。
+
 ---
 
 ## 13. 许可

@@ -192,6 +192,17 @@
     ⚠️ **发版之后再跑一次 `npm run seo:check`**：发版前那套自检看的是"这次构建的产物"，
     这个看的是"线上现在是什么"。站点**不跟 main 走**、而且**每次部署都是整份覆盖** ——
     源码推完以为上线了、或下一次部署把 TDK 覆盖回旧状态，只有它看得出来。
+17. **第三方脚本（现在的 GA4）只在非本地环境加载，而且判定必须在运行期。**
+    页面的 head 里那段 GA 外面套了一层 `location.hostname` 判断（见 README §12.7）。
+    两条都别动：
+    - **判据必须是运行期**：e2e 跑的**正是 production 产物**（`npm run build` 的 dist，
+      只是用 localhost 提供），构建期开关**挡不住它**。
+    - **判据必须是黑名单（排除 local）不是白名单（只认线上域名）**：白名单在换自定义域名时
+      静默失效（统计没了、零报错），黑名单最多是多打几次。
+    ⚠️ 门控失效的症状是"**整个 e2e 套件自己红**"，而且**跟网络好坏无关**：`collectErrors`
+    把 `requestfailed` 当错误，而 GA 即使在完全正常工作时，自己那些重复 beacon 也会被
+    Chromium 记成 `net::ERR_ABORTED`（实测：`gtag/js` 200、`g/collect` 204、
+    另两条 collect 是 ERR_ABORTED）。`e2e/seo.spec.ts` 有一条用例钉住它。
 
 ---
 
@@ -226,6 +237,7 @@
 | 静态文件怎么进 dist/（`public/` → `dist/`） | `webpack.config.js` 的 `CopyPublicFiles` |
 | **线上** TDK / 爬虫体检（发版后再跑一遍） | `npm run seo:check`（`scripts/seo-check.mjs`） |
 | TDK / 爬虫字段怎么读（两个脚本共用一份） | `scripts/lib/html-audit.mjs` |
+| 流量统计（GA4，**只在非本地加载**） | `public/index.html` 的 head（见 README §12.7） |
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |
 | 自定义事件名 / context 键 | `shared/contract.ts` |

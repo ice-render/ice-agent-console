@@ -709,6 +709,74 @@
         color: var(--ice-ink);
       }
     </style>
+
+    <!--
+      ============================ 流量统计（GA4） ============================
+
+      Google Analytics 4 的 gtag.js，测量 ID `G-HW6H6EP0ES`。
+
+      ## 与 Google 给的那段代码只有一处不同：**本地不加载**
+
+      Google 的原始代码是 `<script async src=...>` + 三行配置。这里改成运行期注入，
+      外面套了一层"是不是本地环境"的判断：
+
+        · **本地产物不该往 GA 灌流量**：`npm run dev` 一次刷新一次、e2e 一轮 54 个页面，
+          这些都会变成 GA 里的"访问"（还能看到 hostname=localhost 的会话），
+          把真人的数据淹掉。
+        · **它会直接把 e2e 弄红**（实测，不是推测）：`e2e/helpers.ts` 的 `collectErrors`
+          连 `requestfailed` 与 4xx/5xx 都收，而每条用例都断言它为空。
+          在非本地主机上跑一次、页面停住 6 秒，浏览器里看到的 GA 网络事件是：
+          `gtag/js` **200**、`g/collect` **204**（采集成功）、
+          外加两条 `g/collect` 记成 **`requestfailed: net::ERR_ABORTED`**
+          —— 那是 GA 自己的重复 beacon 被浏览器中止的，**跟网络好坏无关**。
+          所以"网络通就没事"是错的：即使 GA 完全正常，这套断言也会红一片，
+          而红的原因跟被测的东西毫无关系。
+
+      ## 两个刻意的选择
+
+      1. **判定放在运行期（`location.hostname`），不放构建期。**
+         e2e 跑的**正是 production 产物**（`npm run build` 的 dist，只是用 localhost 提供）——
+         按 `argv.mode` 或 DefinePlugin 决定"要不要吐这个标签"**根本挡不住它**。
+      2. **用黑名单（排除本地）而不是白名单（只认线上域名）。**
+         白名单在换自定义域名的那一刻会**静默失效**：统计没了、没有任何报错，
+         可能过几个月才发现。黑名单的失效方式是"在非本地的测试环境里多打了几次" ——
+         可见、可修。
+
+      ⚠️ 改这里之前先看 `e2e/seo.spec.ts` 里那条"本地产物一个 GA 请求都不发"的用例，
+      它钉的就是上面第 1 条理由；去掉门控会让它红。
+    -->
+    <script>
+      (function () {
+        var host = location.hostname;
+        var isLocal =
+          location.protocol === 'file:' ||
+          host === '' ||
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host === '::1';
+        if (isLocal) return;
+
+        var s = document.createElement('script');
+        s.async = true;
+        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-HW6H6EP0ES';
+        document.head.appendChild(s);
+
+        /*
+         * ⚠️ `gtag` 必须挂在 `window` 上，和 Google 原版一致。
+         *
+         * 原版那三行是**顶层声明**，`function gtag()` 自然就成了 `window.gtag`；
+         * 套进这个 IIFE 之后它只是局部函数 —— 后果是以后想补自定义事件
+         * （`gtag('event', 'chip_click', ...)`）会直接 `undefined is not a function`，
+         * 而且是在**线上**才炸（本地被门控跳过了，测不到）。
+         */
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = function gtag() {
+          dataLayer.push(arguments);
+        };
+        window.gtag('js', new Date());
+        window.gtag('config', 'G-HW6H6EP0ES');
+      })();
+    </script>
   </head>
   <body>
     <!-- 绘图区：铺满整个视口。开页就画着工艺图（boot.ts 里 mount 的） -->

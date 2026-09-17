@@ -159,3 +159,44 @@ test('面板底部的家族链接：可爬、可点、且没有挤坏输入区',
 
   expect(errors).toEqual([]);
 });
+
+/**
+ * GA4 那条标签**在本地不许发请求**。
+ *
+ * 这是刻意加的门控（`public/index.html` 里那段注释写了两个理由），而它有个副作用：
+ * 门控一旦被改掉 / 写错，问题**不会有任何可见症状** —— 页面照常工作，
+ * 只是本地开发与每一轮 e2e 都开始往 GA 灌流量。
+ *
+ * ⚠️ 更硬的一条是**实测出来的**：GA 在工作正常的情况下，自己那些重复 beacon
+ * 也会被 Chromium 记成 `requestfailed: net::ERR_ABORTED`（在非本地主机上验过：
+ * `gtag/js` 200、`g/collect` 204、另两条 collect 是 ERR_ABORTED）。
+ * 而 `collectErrors` 把 `requestfailed` 当错误、每条用例都断言它为空 ——
+ * 所以门控一旦失效，**整个 e2e 套件会自己红**，跟网络好坏无关。
+ *
+ * 所以这里钉两件事：**标签确实在**（测量 ID 在 HTML 里）、**本地确实一个请求都不发**。
+ * 少了前一半，把标签整个删掉也能让后一半通过。
+ */
+test('GA4：标签在产物里，但本地一个请求都不发', async ({ page }) => {
+  const gaHits: string[] = [];
+  page.on('request', (r) => {
+    if (/googletagmanager\.com|google-analytics\.com/.test(r.url())) gaHits.push(r.url());
+  });
+
+  const errors = collectErrors(page);
+  await page.goto('/?autoplay=0');
+  await waitDiagramReady(page);
+  // 给它足够的时间去"本来应该"发请求（gtag 是 async 注入的）
+  await page.waitForTimeout(1000);
+
+  // 前一半：标签真的在产物里（测量 ID 从 HTML 里读得到）
+  const html = await page.content();
+  expect(html, 'GA 的测量 ID 应当在页面里').toContain('G-HW6H6EP0ES');
+
+  // 后一半：localhost 上不该有任何 GA 请求
+  expect(gaHits, '本地产物不该往 GA 发请求（会灌假流量，且让用例依赖 Google 的网络）').toEqual(
+    []
+  );
+  expect(await page.evaluate(() => typeof (window as any).gtag)).toBe('undefined');
+
+  expect(errors).toEqual([]);
+});
