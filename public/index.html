@@ -198,8 +198,11 @@
         color-scheme: light;
       }
       /* 主题名由**库的 DOM 桥**写在 <html data-ice-theme> 上（applyThemeToCss）；这里只用来切
-         color-scheme（滚动条、原生控件）—— 颜色一律走上面的 var(--…) 别名，不在这边判主题 */
-      html[data-ice-theme='dark'] { color-scheme: dark; }
+         color-scheme（滚动条、原生控件）—— 颜色一律走上面的 var(--…) 别名，不在这边判主题。
+         ⚠️ 值是**注册名**，本工程注册的是 `ice-light` / `ice-dark`（刻意加前缀，避免与库内置的
+         `light` / `dark` 撞名）→ 所以按**后缀**匹配，别写 `[data-ice-theme='dark']`（永远不命中，
+         实测踩过：color-scheme 一直停在亮色）。 */
+      html[data-ice-theme$='dark'] { color-scheme: dark; }
 
       * { box-sizing: border-box; }
 
