@@ -36,14 +36,14 @@
       4. `keywords` 对 Google **早就无效**，对百度 / 360 / 搜狗仍然看一眼，
          而且零成本 —— 所以留着，但**不靠它**。
     -->
-    <title>ICE Agent Console — AG-UI 事件流驱动的 ICE 画布控制台</title>
+    <title>AG-UI 事件流驱动的 Canvas 控制台 · ICE Agent Console</title>
     <meta
       name="description"
-      content="ICE Agent Console：AG-UI 事件流驱动 Canvas 的在线演示。开页画出 78 单元 / 100 管线的污水处理 AAO 工艺图，可推镜头、高亮、动态增删图元。"
+      content="ICE Agent Console：AG-UI 事件流驱动 Canvas 的在线演示，数字孪生 / SCADA 污水处理工艺图。开页画出 78 单元 / 100 管线的 AAO 工艺，可推镜头、高亮、动态增删图元。"
     />
     <meta
       name="keywords"
-      content="ICE Agent Console,AG-UI,ICE 渲染引擎,ice-render,ice-chart,ice-entity-designer,canvas 可视化,画布渲染,污水处理工艺图,AAO 工艺,工艺流程设计器,AI Agent 可视化,智能体控制台,事件流驱动,图表 DSL,在线演示"
+      content="ICE Agent Console,AG-UI,ICE 渲染引擎,ice-render,ice-chart,ice-entity-designer,canvas 可视化,画布渲染,污水处理工艺图,AAO 工艺,工艺流程设计器,AI Agent 可视化,智能体控制台,事件流驱动,图表 DSL,在线演示,数字孪生,SCADA,工业过程监控,智能水务,Agentic UI,工业可视化"
     />
     <meta name="author" content="ICE Render" />
     <!-- 允许大图预览与完整摘要：搜索结果的缩略图对"画出来的东西"尤其重要 -->
@@ -61,7 +61,7 @@
     <meta property="og:site_name" content="ICE Agent Console" />
     <meta property="og:locale" content="zh_CN" />
     <meta property="og:url" content="https://ice-render.github.io/ice-agent-console/" />
-    <meta property="og:title" content="ICE Agent Console — AG-UI 事件流驱动的 ICE 画布控制台" />
+    <meta property="og:title" content="AG-UI 事件流驱动的 Canvas 控制台 · ICE Agent Console" />
     <meta
       property="og:description"
       content="agent 的事件流直接驱动 Canvas：开页就画出某 10 万 m³/d 污水厂的 AAO 工艺流程图，并能缩放、高亮、动态增删图元。ICE 渲染家族 × AG-UI 协议的纯前端在线演示。"
@@ -75,7 +75,7 @@
       content="ICE Agent Console 界面：绘图区铺满视口、上面画着污水处理工艺图，对话面板浮在它的右边缘"
     />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="ICE Agent Console — AG-UI 事件流驱动的 ICE 画布控制台" />
+    <meta name="twitter:title" content="AG-UI 事件流驱动的 Canvas 控制台 · ICE Agent Console" />
     <meta
       name="twitter:description"
       content="agent 的事件流直接驱动 Canvas：开页就画出某 10 万 m³/d 污水厂的 AAO 工艺流程图，并能缩放、高亮、动态增删图元。"
@@ -113,15 +113,14 @@
             "url": "https://ice-render.github.io/ice-agent-console/",
             "description": "AG-UI 事件流驱动 ICE 画布的控制台演示：开页画出一张 78 单元 / 100 管线的污水处理 AAO 工艺流程图，agent 可以推镜头、打高亮、用 JSON Patch 动态增删图元，并支持中断 → 填表 → resume 的人机回环。",
             "applicationCategory": "DeveloperApplication",
-            "applicationSubCategory": "数据可视化 / 图表",
-            "operatingSystem": "Web（现代浏览器）",
+            "operatingSystem": "Web Browser",
             "browserRequirements": "需要 JavaScript 与 Canvas 2D",
             "inLanguage": "zh-CN",
             "isAccessibleForFree": true,
             "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
             "screenshot": "https://ice-render.github.io/ice-agent-console/og-cover.jpg",
             "codeRepository": "https://github.com/ice-render/ice-agent-console",
-            "keywords": "AG-UI,ICE 渲染引擎,Canvas 可视化,污水处理工艺图,AAO 工艺,AI Agent 可视化",
+            "keywords": "AG-UI,ICE 渲染引擎,Canvas 可视化,污水处理工艺图,AAO 工艺,AI Agent 可视化,数字孪生,SCADA,工业过程监控,智能水务,Agentic UI",
             "featureList": [
               "AG-UI 事件流驱动 Canvas 画布（不是往消息流里插卡片）",
               "绘图区铺满视口，按 tool 切图层：工艺图 / 图表 / 表单",
@@ -922,7 +921,8 @@
       <p>
         ICE Agent Console 是一个把 <strong>AG-UI 协议</strong>接到
         <strong>ICE 渲染家族</strong>（ice-render / ice-chart / ice-chart-dsl /
-        ice-entity-designer / ice-web-components）上的开源在线演示：
+        ice-entity-designer / ice-web-components）上的开源在线演示，本质上是一张
+        <strong>数字孪生 / SCADA 风格</strong>的工业过程监控（智能水务）界面：
         agent 产生的事件流<strong>直接驱动浏览器里的 Canvas 画布</strong> —— 画工艺图、画图表、画表单，
         而不是把卡片插进消息流。
       </p>
