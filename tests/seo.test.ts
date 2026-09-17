@@ -191,9 +191,18 @@ describe('canvas 的文字替身（爬虫能读到的正文）', () => {
   });
 
   it('文案里报的规模必须与内置案例对得上（数字会过期）', () => {
-    // 这两条是"改图之后忘了改文案"的探针：加一个单元，这里立刻红
+    // 这两条是"改图之后忘了改文案"的探针：加一个单元，这里立刻红。
+    // ⚠️ 覆盖面要**宽**：正文摘要、meta description、JSON-LD 三处都会写规模，只钉正文会漏 ——
+    //    实测踩过（正文改到 78/100 之后，meta 与 JSON-LD 还留着 68/81，爬虫看到的是旧数字）。
     expect(summaryText).toContain(`${WATER_PROCESS_DSL.units.length} 个单元`);
     expect(summaryText).toContain(`${WATER_PROCESS_DSL.pipes.length} 段管线`);
+    // 源文件是**多行展开**的（`name="description"` 另起一行），构建产物又是压平的 —— 正则要两边都认
+    const metaDesc = html.match(/<meta[^>]*name=["']?description["']?[^>]*content="([^"]*)"/i)?.[1] ?? '';
+    expect(metaDesc).toContain(`${WATER_PROCESS_DSL.units.length} 单元`);
+    expect(metaDesc).toContain(`${WATER_PROCESS_DSL.pipes.length} 管线`);
+    const ld = html.match(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/i)?.[1] ?? '';
+    expect(ld).toContain(`${WATER_PROCESS_DSL.units.length} 单元`);
+    expect(ld).toContain(`${WATER_PROCESS_DSL.pipes.length} 管线`);
   });
 
   it('不跑 JS 的爬虫（百度 / 360 / 搜狗）看到的是说明，不是白屏', () => {
