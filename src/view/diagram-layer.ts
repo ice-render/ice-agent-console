@@ -593,7 +593,7 @@ export class DiagramLayer {
       },
     });
     // `WaterSymbol.applyPatch` 不置 dirty（与 FlowNode 不同），必须自己置
-    this.ice.dirty = true;
+    this.ice.requestRepaint();
 
     this.__showOverlay(target, opts.blink === true);
     this.__centerOn(target);
@@ -603,7 +603,7 @@ export class DiagramLayer {
   clearPoint(): void {
     if (!this.highlightedId) return;
     this.__clearHighlight();
-    this.ice.dirty = true;
+    this.ice.requestRepaint();
   }
 
   /**
@@ -703,7 +703,7 @@ export class DiagramLayer {
       if (patchedDoc) this.doc = patchedDoc;
       // `createSymbol` 每建一个都会把它记成选中项 —— 与构造里一样要清掉
       this.designer.select(null);
-      this.ice.dirty = true;
+      this.ice.requestRepaint();
     }
     return { added, removed };
   }
@@ -1114,14 +1114,14 @@ export class DiagramLayer {
       overlay.setAnimation('opacity', blinkAnimation());
     }
 
-    this.ice.dirty = true;
+    this.ice.requestRepaint();
   }
 
   private __hideOverlay(): void {
     if (!this.highlightOverlay) return;
     this.ice.removeTool(this.highlightOverlay);
     this.highlightOverlay = null;
-    this.ice.dirty = true;
+    this.ice.requestRepaint();
   }
 
   /** 高亮底块的颜色：黄压到很低的不透明度，够看出范围又不遮位号。 */

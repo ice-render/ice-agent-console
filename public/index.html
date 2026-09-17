@@ -197,8 +197,9 @@
         --chat-gap: 12px;
         color-scheme: light;
       }
-      /* 主题名由 JS 写在 <html data-theme> 上；只用来切 color-scheme（滚动条、原生控件） */
-      html[data-theme='dark'] { color-scheme: dark; }
+      /* 主题名由**库的 DOM 桥**写在 <html data-ice-theme> 上（applyThemeToCss）；这里只用来切
+         color-scheme（滚动条、原生控件）—— 颜色一律走上面的 var(--…) 别名，不在这边判主题 */
+      html[data-ice-theme='dark'] { color-scheme: dark; }
 
       * { box-sizing: border-box; }
 

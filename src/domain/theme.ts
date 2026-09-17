@@ -28,13 +28,14 @@
  * 家族品牌色是冰蓝 `#61D9FB`。它在**深底上**直接当文字色好看，在**浅底上**当文字色
  * 对比度不够（4.5:1 都不到）—— 所以拆成两个变量：
  * - `--ice` —— 填充 / 描边（两种主题都是冰蓝）；
- * - `--ice-ink` —— 当文字用的强调色（浅底上用深一档的 `#0D7EA8`，深底上就用冰蓝本身）。
+ * - `--ice-ink` —— 当文字用的强调色（别名到库的 `link` token：浅 `#0a58ca` / 暗 `#6ea8fe`）。
  *
  * 这是"暗色不是把亮色反过来"的一个具体例子：同一个语义在不同底上要取不同的值。
  */
 import {
   ICE_DARK_THEME,
   ICE_LIGHT_THEME,
+  applyThemeToCss as applyLibraryThemeToCss,
   applyThemeToEngine,
   iceUIManager,
   type ICEThemeTokens,
@@ -42,8 +43,6 @@ import {
 
 /** 家族品牌色，与各仓 logo、示例页强调色同一个值。 */
 const ICE_BLUE = '#61D9FB';
-/** 浅底上当文字用的强调色（冰蓝在浅底上对比度不够，文字要深一档）。 */
-const ICE_BLUE_INK_ON_LIGHT = '#0D7EA8';
 
 export type ThemeName = 'light' | 'dark';
 
@@ -161,50 +160,62 @@ const LOCAL_TOKENS: Record<ThemeName, Record<string, string>> = {
 };
 
 /**
- * 把主题写进 CSS 变量 —— **DOM 外壳的颜色从同一张表里读**，不另抄一套。
+ * 把主题写进 CSS 变量 —— **机制交给库**，本工程只声明"自己的名字"到库变量名的别名。
  *
- * 少一次手抄就少一处漂移：改了 token，画布与外壳一起变。
+ * 分两步（这是库 `docs/guides/theming.md` 第七节给的约定）：
+ * ① 库的 `applyThemeToCss()` 按 token 表产出 `--ice-color-*`（外加 `data-ice-theme` 标记）；
+ * ② 本工程把样式表里用的短名字（`--bg` / `--panel` / …）**别名**到库变量上。
+ *
+ * 以前这里是自己遍历 token 写一遍 —— 同样是"读同一张表"，但**机制重复**：库改了变量命名规则、
+ * 加了新 token 分组（阴影、字号、窗口色）都得这边跟着抄一遍。别名只有一行一处，且**颜色只有一个来源**。
+ * `--ice-ink`（主色当文字用）以前还在 TS 里手算明暗（`name === 'light' ? … : c.primary`）——
+ * 库的 `link` token 就是干这个的（浅 `#0a58ca` / 暗 `#6ea8fe`，都过 AA），直接别名过去。
  */
 function applyThemeToCss(): void {
   const name = currentTheme();
-  const c = iceUIManager.getTheme().colors as any;
   const root = document.documentElement;
-  const set = (prop: string, value: string | undefined) => {
-    if (value) root.style.setProperty(prop, value);
+  // ① 库的桥：`--ice-color-<kebab token>` + `data-ice-theme="light|dark"`
+  applyLibraryThemeToCss(root);
+
+  /** ② 别名：本工程样式表里的短名字 → 库变量（颜色只有一个来源） */
+  const alias = (prop: string, variable: string) => root.style.setProperty(prop, `var(${variable})`);
+  const aliasIfPresent = (prop: string, variable: string) => {
+    // 库变量是按 token 表产出的，理论上都在；缺了就别写别名，免得 `var()` 落空
+    if (root.style.getPropertyValue(variable)) alias(prop, variable);
   };
 
-  root.dataset.theme = name;
   // 底与面
-  set('--bg', c.background);
-  set('--panel', c.surface);
-  set('--elevated', c.elevated ?? c.surface);
-  set('--line', c.border);
+  alias('--bg', '--ice-color-background');
+  alias('--panel', '--ice-color-surface');
+  aliasIfPresent('--elevated', '--ice-color-elevated');
+  alias('--line', '--ice-color-border');
   // 文字
-  set('--text', c.text);
-  set('--muted', c.textSecondary);
-  set('--hint', c.textTertiary ?? c.textSecondary);
-  // 强调：填充用一种、当文字用另一种（见文件头那段）
-  set('--ice', c.primary);
-  set('--ice-ink', name === 'light' ? ICE_BLUE_INK_ON_LIGHT : c.primary);
-  set('--ice-soft', c.primaryBg);
-  set('--ice-line', c.primaryBorder);
+  alias('--text', '--ice-color-text');
+  alias('--muted', '--ice-color-text-secondary');
+  aliasIfPresent('--hint', '--ice-color-text-tertiary');
+  // 强调：填充用一种、当文字用另一种（见文件头那段）—— 当文字那支直接用库的 `link`
+  alias('--ice', '--ice-color-primary');
+  alias('--ice-ink', '--ice-color-link');
+  alias('--ice-soft', '--ice-color-primary-bg');
+  alias('--ice-line', '--ice-color-primary-border');
   // 语义
-  set('--ok', c.success);
-  set('--warn', c.warning);
-  set('--err', c.error);
-  set('--warn-bg', c.warningBg);
-  set('--warn-line', c.warningBorder);
-  set('--err-bg', c.errorBg);
-  set('--err-line', c.errorBorder);
+  alias('--ok', '--ice-color-success');
+  alias('--warn', '--ice-color-warning');
+  alias('--err', '--ice-color-error');
+  alias('--warn-bg', '--ice-color-warning-bg');
+  alias('--warn-line', '--ice-color-warning-border');
+  alias('--err-bg', '--ice-color-error-bg');
+  alias('--err-line', '--ice-color-error-border');
   // 气泡：主色软底给"我"，**比面板沉一档**的底给 Agent。
   //
   // 亮色主题里 `surface` 与 `elevated` 都是纯白，拿它当 Agent 气泡会跟卡片底一模一样
   // （肉眼等于没有气泡）。所以这里借 `background` —— 它在语义上就是"页面底、
   // 比面板沉一档"的那个面。token 表里没有"内凹面"这个概念，这是最接近的一个。
-  set('--bubble-user', c.primaryBg);
-  set('--bubble-agent', name === 'light' ? c.background : (c.elevated ?? c.surface));
+  alias('--bubble-user', '--ice-color-primary-bg');
+  alias('--bubble-agent', name === 'light' ? '--ice-color-background' : '--ice-color-elevated');
   // 诊断/警告的正文色：token 表里已经按明暗给了不同的强调档位
-  set('--err-text', c.errorTextEmphasis);
-  set('--warn-text', c.warningTextEmphasis);
-  for (const [prop, value] of Object.entries(LOCAL_TOKENS[name])) set(prop, value);
+  alias('--err-text', '--ice-color-error-text-emphasis');
+  alias('--warn-text', '--ice-color-warning-text-emphasis');
+  // ③ 库 token 表里**没有**的概念（代码块配色 / 内凹面 / 浮层）：显式按主题给，见 LOCAL_TOKENS
+  for (const [prop, value] of Object.entries(LOCAL_TOKENS[name])) root.style.setProperty(prop, value);
 }
