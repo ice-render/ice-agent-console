@@ -81,7 +81,7 @@ npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 | 故意画错 | **自修复回路**：坏 DSL → 诊断回灌 → agent 自动吐修正版 | [自修复](docs/images/self-repair.png) |
 | 今天天气怎么样 | 兜底：不画图，只回文字（**绘图区保持原样**，不是清空） | — |
 
-（分组顺序即界面上的顺序，`src/entries/boot.ts` 的 `CHIP_GROUPS` 是它的出处。）
+（分组顺序即界面上的顺序，`src/entries/boot.ts` 里 `AgentConsolePage.CHIP_GROUPS` 是它的出处。）
 
 **也可以在图上直接操作**：
 
@@ -845,11 +845,41 @@ e2e 那条**主动 `page.route('**/agui').abort()`** 造失败，而不是依赖
 ### 3.4 纯核心 + 命令式外壳
 
 `src/domain/agui/reducer.ts` 是**纯函数**，返回 `{state, effects}`：
-它只描述"要做什么"，不碰 DOM。碰 canvas 的活在 `src/entries/boot.ts` 的 `applyEffects` 里 ——
+它只描述"要做什么"，不碰 DOM。碰 canvas 的活在 `AgentConsolePage.applyEffects()`（`src/entries/boot.ts`）里 ——
 它把 effect **打给 `StageView`**（effect 的形状没变，只是落点从"最后一张卡片"换成了
 "绘图区当前那一层"）。
 
 这样归约器可以被穷举测试（连"边画边指"的事件顺序都能断言），而 canvas 脏活留在需要它的地方。
+
+#### 页面写法：一页 = 一个类
+
+家族的应用层统一到「**一页 = 一个类**」（库侧是 `ice-web-components` 的 `ICEContainer` 契约，
+`ice-smart-water` 的 12 个页面、各仓的示例页都这么写）。本工程只有一屏 ——
+绘图区铺满视口、对话面板浮在右边缘 —— 所以**入口即页面**：`src/entries/boot.ts` 就是
+`class AgentConsolePage`。
+
+| 原来（模块级脚本） | 现在（页面类） |
+|---|---|
+| 顶层 `const stageEl = …` | `private readonly stageEl: HTMLElement` 字段 |
+| 顶层 `let state = …` / `pendingDiagnostics` / `failedTool` | 同上，都是实例字段 |
+| 顶层 `function send() {}` / `async function startAutoplay() {}` | `send()` / `startAutoplay()` 方法 |
+| 顶层 `const CHIP_GROUPS = […]`（纯常量） | `private static readonly CHIP_GROUPS` |
+| 模块顶层一路执行到底 | `constructor()` 按**原来的顺序**装配 + 文件末尾 `new AgentConsolePage()` |
+
+三条细节值得知道：
+
+- **构造期的顺序仍然是承重的**，搬家时一字未动：`installTheme()` 必须在造任何组件之前
+  （库的主题是"组件构造时读一次"）、`syncPanelInset()` 必须在画工艺图之前
+  （初始视野只设一次）、调试句柄挂完之后才轮到自动开演；
+- **调试句柄是页面实例的成员**：`window.__iceAgentConsole` 里那一串查询全部走
+  `this.stage` / `this.state`，它的生命周期就是这一页的生命周期（e2e 的 `helpers.ts` 直接读它）；
+- **DOM 抓手走"局部变量 → 守卫里收窄 → 赋给 `readonly` 字段"**：所以方法里不必再写
+  `this.metaEl!` 那种非空断言 —— 守卫已经把类型收窄成非空。
+
+这条写法有棘轮：`tests/pageConvention.test.ts`（恰好一个类 / 无模块级 `function`、`let` /
+文件末尾实例化 / 状态在实例上）。它跟 smart-water 那种"宿主 + 12 页"是两个形状：
+那边入口是**宿主**（外壳 + 岛 + 切页，页面在 `src/view/pages/`），这里是单页应用，
+入口就是那一页 —— 与 `ice-game` 的 `src/home/main.ts` 同类。
 
 ### 3.5 主题：画布与外壳读同一份 token
 
@@ -1050,7 +1080,8 @@ ice-agent-console/
 │   │   ├── form-layer.ts    表单图层（ice-web-components-dsl 画的）
 │   │   ├── tool-entry.ts    对话里的工具条目（**只有外壳，没有画布**）
 │   │   └── chat.ts          对话面板外壳 + 浮层的 stopPropagation + 有条件跟随滚动
-│   └── entries/boot.ts      接线：开页画图、分发动作、执行 effects、触发 run
+│   └── entries/boot.ts      页面类 `AgentConsolePage`（一页一个类，见 §3.4）：
+│                            开页画图、分发动作、执行 effects、触发 run、挂调试句柄
 ├── shared/
 │   ├── contract.ts          自定义事件名 / context 键 / `ZoomDirection`（server 与 web 的唯一出处）
 │   ├── diagram.ts           图 DSL 的结构类型（**只有类型** —— server 那套 tsconfig 不加载 DOM）
@@ -1153,8 +1184,8 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **276 passed** / 14 suites（含 `seo.test.ts`，见 §12） |
-| e2e | **54 passed** / 11 specs |
+| 单测 | **280 passed** / 15 suites（含 `seo.test.ts` 与 `pageConvention.test.ts`） |
+| e2e | **55 passed** / 11 specs |
 | 生产包 | 约 1.36 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
 
 > 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，

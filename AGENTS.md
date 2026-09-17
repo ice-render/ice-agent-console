@@ -204,6 +204,31 @@
     Chromium 记成 `net::ERR_ABORTED`（实测：`gtag/js` 200、`g/collect` 204、
     另两条 collect 是 ERR_ABORTED）。`e2e/seo.spec.ts` 有一条用例钉住它。
 
+18. **应用层写法：一页 = 一个类（2026-09-17 确立）。**
+    家族的应用层统一到这个形状（库侧是 `ice-web-components` 的 `ICEContainer` 契约，
+    `ice-smart-water` 的 12 个页面、各仓示例页都这么写；游戏页见 `ice-game` 的 `GamePage`）。
+    本仓**只有一屏**（绘图区铺满视口 + 对话面板浮着），所以**入口即页面**：
+    `src/entries/boot.ts` 就是 `class AgentConsolePage` —— 构造期按原顺序装配、
+    方法承载动作、文件末尾 `new AgentConsolePage()`（与 `ice-game` 的 `src/home/main.ts` 同形）。
+
+   - **DOM 抓手**：`const x = document.getElementById(…)` 落成局部变量 → 在守卫里收窄 →
+     赋给 `private readonly x: HTMLElement`。所以方法里**不用**写 `this.metaEl!` 那种非空断言。
+   - **纯常量**（`CHIP_GROUPS` / `WIDGET_ACTIONS` / `WIDGET_PROMPTS` / `AUTOPLAY_DELAY_MS`）
+     走 `private static readonly`，引用处写 `AgentConsolePage.xxx`。
+   - **状态一律是实例字段**（`state` / `running` / `pendingDiagnostics` / `failedTool` /
+     `autoRepairUsed` / `autoplayAbort` / `autoplayDone`）—— 别再摊回模块顶层。
+   - ⚠️ **构造期的顺序是承重的，别顺手排序**：`installTheme()` 必须在造任何组件之前、
+     `syncPanelInset()` 必须在画工艺图之前、调试句柄挂完最后才自动开演。
+     搬进构造期时注释跟着搬，顺序一字未动。
+   - 棘轮：`tests/pageConvention.test.ts`（恰好一个类 / 无模块级 `function`、`let` /
+     文件末尾实例化 / 状态在实例上）。smart-water 那种"宿主 + 12 页"是**另一个形状**
+     （那边入口是宿主，页面在 `src/view/pages/`），别拿它当反例。
+   - 改造时踩的坑：**机械替换必须避开字符串与注释**。裸名换 `this.x` 时把
+     `getElementById('stage')` 改成了 `'this.stage'`、把状态字符串 `'running'` 改成了
+     `'this.running'` —— 构造函数当场抛错、调试句柄没挂上，症状是 **55 条 e2e 全红**
+     且报的是"`__iceAgentConsole` 不存在"，完全看不出根因。注释里夹着的 `state` /
+     `transport` / `running` 一样会被误改（中文注释里还常有反引号包的代码片段）。
+
 ---
 
 ## 2. 分层与落点
@@ -241,9 +266,10 @@
 | 事件序列怎么生成 | `server/agents/dsl-to-events.ts` |
 | 剧本（M2 会被模型替换） | `server/agents/scenarios.ts` |
 | 自定义事件名 / context 键 | `shared/contract.ts` |
+| **页面本身**（装配 / 状态 / 交互 / 布局 / 调试句柄） | `src/entries/boot.ts` 的 `AgentConsolePage`（见第 18 条） |
 
 `reducer.ts` 是**纯函数 + effects**：它只描述要做什么，不碰 DOM。碰 canvas 的活在
-`src/entries/boot.ts` 的 `applyEffects` 里（它把 effect **打给 `StageView`**，
+`AgentConsolePage.applyEffects()`（`src/entries/boot.ts`）里（它把 effect **打给 `StageView`**，
 effect 的形状没变、只是落点从"最后一张卡片"换成了"绘图区当前那一层"）。
 改归约逻辑时保持这个边界，否则归约器就没法单测了。
 
