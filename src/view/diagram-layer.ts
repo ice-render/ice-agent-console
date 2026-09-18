@@ -211,17 +211,12 @@ export class DiagramLayer {
   /** 当前高亮的单元 id。 */
   private highlightedId: string | null = null;
   /**
-   * 高亮期间给该节点打上的 style 备份 + **节点引用本身**。
-   *
-   * 存引用而不是存 id：还原时按 id 再查一次会依赖"节点还在、id 没改"，
-   * 而这个类有 `destroy()` 路径 —— 查询失败就静默留下一个被改过样式的节点。
-   */
-  private highlightBackup: any = null;
-  private highlightNode: any = null;
-  /**
    * 盖在高亮符号上的半透明底块（`addTool` 的 UI 覆盖层，不参与序列化）。
    *
    * 带上 `__iceDiagramHighlight` 标记 —— 用来把"本层建的底块"从引擎自己的工具节点里认出来。
+   *
+   * 高亮的**描边环**不在这里：那是设计器的程序化原语（`designer.setHighlights()`），
+   * 见 `pointAt()`。本层只负责它额外要的那层"洗底 + 闪烁"动画。
    */
   private highlightOverlay: any = null;
   /**
@@ -569,10 +564,11 @@ export class DiagramLayer {
    * 为什么要顺带平移：图比卡片宽得多，讲到的单元很可能不在当前视野里 ——
    * 那样高亮是发生在一个看不见的地方，等于没讲。演示时"镜头跟过去"是自然动作。
    *
-   * 高亮本身没有引擎原语可用（`chrome.selection` 只由 mousedown 触发的控制面板消费，
-   * `designer.select()` 只改一个字段、没有渲染消费者），所以走 `WaterSymbol` 的
-   * style 补丁：它会触发 `syncShape()` 重建内部图形。
-   * ⚠️ `WaterSymbol.applyPatch` **不置 dirty**（与 `FlowNode` 不同），必须自己置。
+   * 高亮走**设计器的程序化原语** `designer.setHighlights()`（描边环落在工具层：
+   * 不进快照、不挡命中，图元被拖动时自己跟着走）。此前这里只能给 `WaterSymbol`
+   * 打 style 补丁再手动置脏 —— 那是从外面模拟内部状态，依赖组件的 `syncShape()`
+   * 触发条件，一旦上游调整就静默失效。原语补上之后这段绕法就退休了
+   * （见本仓 `docs/upstream-gaps.md` 第 12 条）。
    *
    * @param value 单元业务 id 或位号（`tag`），两者都认 —— agent 措辞里更常出现位号
    * @returns 是否找到了这个单元
@@ -582,18 +578,12 @@ export class DiagramLayer {
     if (!target) return false;
 
     this.__clearHighlight();
-    this.highlightBackup = { ...(target.state.style || {}) };
-    this.highlightNode = target;
     this.highlightedId = String(target.state.id);
-    target.applyPatch({
-      style: {
-        ...this.highlightBackup,
-        strokeStyle: this.highlightColor,
-        lineWidth: HIGHLIGHT_LINE_WIDTH,
-      },
+    this.designer.setHighlights([this.highlightedId], {
+      color: this.highlightColor,
+      lineWidth: HIGHLIGHT_LINE_WIDTH,
+      padding: HIGHLIGHT_PADDING,
     });
-    // `WaterSymbol.applyPatch` 不置 dirty（与 FlowNode 不同），必须自己置
-    this.ice.requestRepaint();
 
     this.__showOverlay(target, opts.blink === true);
     this.__centerOn(target);
@@ -1060,14 +1050,10 @@ export class DiagramLayer {
   }
 
   private __clearHighlight(): void {
-    if (!this.highlightedId) return;
-    if (this.highlightNode && this.highlightBackup) {
-      this.highlightNode.applyPatch({ style: { ...this.highlightBackup } });
-    }
+    if (!this.highlightedId && !this.highlightOverlay) return;
+    this.designer.clearHighlights();
     this.__hideOverlay();
     this.highlightedId = null;
-    this.highlightBackup = null;
-    this.highlightNode = null;
   }
 
   /**
@@ -1095,8 +1081,11 @@ export class DiagramLayer {
         fillStyle: this.__highlightWash(),
       },
     });
-    // 压在符号**下面**：盖在上面会把位号与名称糊掉，而那两个正是要读的东西。
-    // 同一个 ICE 里靠 zIndex 排序，给一个很小的负值最省事也最稳。
+    // ⚠️ 这块洗底**盖在符号之上**，不是之下：引擎 2.13 起渲染顺序是
+    // 「组件层 → 工具层」（两层不按 zIndex 交叉），`zIndex` 只在同一层的兄弟之间比较，
+    // 所以负值跨不了层。原注释写的"压在符号下面"从那时起就不成立了。
+    // 底块压在图上之所以仍然能读：透明度只有 0.18（见 `HIGHLIGHT_WASH_ALPHA`），
+    // 位号与名称看得清 —— 而这正是当初选低透明度的原因，改高之前先看一眼实测截图。
     overlay.setState({ zIndex: -1 });
     // 打个标记：`ice.toolNodes` 是**引擎共用的工具层**，里面本来就有对齐引导线、
     // 控制面板、连线插槽等一大堆引擎自己的东西（实测基线 7~9 个）。
