@@ -312,12 +312,12 @@ const VIEW = { width: 1440, height: 900 };
   await shootStage('upgrade');
 
   // ---- 2. 图表 + 「指着讲」（主链路）----
-  await chip('看看各渠道的月度销量');
+  await chip('看看出水 COD 的趋势');
   await onLayer('chart');
   await shoot('chart');
 
   // ---- 3. 流式追加：走 appendData 快路径，同一张图逐拍长数据 ----
-  await chip('看一下实时吞吐量');
+  await chip('看看出水实时流量');
   await onLayer('chart');
   // 必须等三拍追加完（`chip` 只等到 idle，而追加的三拍都在同一个 run 里 —— 所以这里是对的）
   await shoot('streaming');
@@ -325,12 +325,12 @@ const VIEW = { width: 1440, height: 900 };
   // ---- 4. 人机回环：中断 → 表单图层（停在 waiting）----
   // 表单比一屏高（它自己会滚），所以后面几张先把视口调高，不然拍到一半就断了
   await needTall();
-  await chip('要下发指令', 'waiting', 700);
+  await chip('给进水泵下发指令', 'waiting', 700);
   await onLayer('form');
   await shoot('form-card');
 
   // ---- 5. 新控件原型（10 个字段，最高的一张）----
-  await chip('看看新控件都能用吗');
+  await chip('调整加药量');
   await onLayer('form');
   await shoot('showcase');
   await needWindow();

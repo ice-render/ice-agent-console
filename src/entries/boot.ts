@@ -84,7 +84,7 @@ class AgentConsolePage {
   private static readonly WIDGET_PROMPTS: Record<string, string> = {
     explain: '解释一下这张图',
     redraw: '换个画法',
-    stream: '看一下实时吞吐量',
+    stream: '看看出水实时流量',
   };
 
   /** 开页自动开演前，先让人看清那一屏的停顿（毫秒）；为什么要等见 `startAutoplay()`。 */
@@ -115,12 +115,12 @@ class AgentConsolePage {
     {
       label: '其他',
       chips: [
-        '看看各渠道的月度销量',
-        '看一下实时吞吐量',
-        '要下发指令',
-        '看看新控件都能用吗',
+        '看看出水 COD 的趋势',
+        '看看出水实时流量',
+        '给进水泵下发指令',
+        '调整加药量',
         '故意画错',
-        '今天天气怎么样',
+        '出水要达到什么标准',
       ],
     },
   ];
@@ -291,6 +291,9 @@ class AgentConsolePage {
         const pending = this.state.interrupt;
         this.dispatch({ type: '@local/form-submitted', toolCallId });
         this.stage.markFormSubmitted();
+        // 提交后在**图上**给一次反馈（当初锚定的那个单元闪一下）——
+        // 卡片上的"已提交"是界面内的事，这一下才是"我真的落到图上了"。
+        this.stage.anchorFeedback();
 
         const summary = Object.entries(values)
           .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join('/') : value}`)
@@ -547,6 +550,12 @@ class AgentConsolePage {
         case 'point-at': {
           // 「指着讲」：作用在绘图区**当前显示的那一层**上（工艺图走高亮，图表走悬停）
           this.stage.pointAt(effect.value, { blink: effect.blink === true });
+          break;
+        }
+        case 'anchor': {
+          // 卡片锚定：高亮 + 镜头跟到工艺图上的那个单元（见 StageView.anchor 的注释）。
+          // 它**总是**落在工艺图上，与当前前台是哪张卡片无关 —— 这正是"关联关系"的意思。
+          this.stage.anchor(effect.value);
           break;
         }
         case 'clear-point': {

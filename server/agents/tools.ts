@@ -64,6 +64,30 @@ const WATER_MEDIA = [
  * 名字与前端的分派表（`shared/contract.ts` 的 `RENDER_CHART_TOOL` /
  * `COLLECT_INPUT_TOOL`）**必须一致** —— 前端就是按名字决定渲染成图表卡还是表单卡的。
  */
+
+/**
+ * **锚定**：这张卡片说的是工艺图上的哪个单元。
+ *
+ * 为什么放在工具参数里而不是 DSL 里：DSL 描述"画什么"（图表的数据与编码、表单有哪些字段），
+ * 锚定描述的是"它跟图上的哪个东西有关"—— 那是**卡片与画布的关系**，不是图表内容的一部分。
+ * 服务端拿到之后会把它从载荷里**摘掉**再交给渲染端（DSL 校验不认这个键，留着会被打回自修复）。
+ *
+ * 可选：模型不确定就**不要给** —— 没有锚定只是少了"图上指回那个单元"这层呼应，
+ * 卡片本身照常显示；编一个不存在的位号反而更糟。
+ */
+const ANCHOR_SCHEMA = {
+  type: 'object',
+  description:
+    '这张卡片关联工艺图上的哪个单元（可选）：{"value":"<单元 id 或位号>","label":"<位号，可选>"}。' +
+    '例如出水 COD 的趋势锚到 "codAnalyzer"（AIT-106）、给进水泵下指令锚到 "inletPump"（P-101）。' +
+    '不确定就不给，不要编一个图上没有的标识。',
+  properties: {
+    value: { type: 'string', description: '单元 id（如 codAnalyzer）或位号（如 AIT-106）' },
+    label: { type: 'string', description: '给用户看的位号 / 名称（可选）' },
+  },
+  required: ['value'],
+} as const;
+
 export const TOOL_DEFINITIONS = [
   {
     type: 'function' as const,
@@ -71,6 +95,7 @@ export const TOOL_DEFINITIONS = [
       name: 'render_chart',
       description:
         '把数据画成图表，内联成对话里的一张卡片。用在用户要看数据、趋势、对比的时候。' +
+        '例：出水 COD 近 6 日趋势（对照一级A 限值）、各工段的电耗对比、进出水氨氮对照。' +
         '需要已经有数据；没有数据就先说明拿不到，不要编造。',
       parameters: {
         type: 'object',
@@ -79,6 +104,7 @@ export const TOOL_DEFINITIONS = [
           schemaVersion: { type: 'number', description: '写 1' },
           kind: { type: 'string', enum: CHART_KINDS, description: '图表类型' },
           title: { type: 'string', description: '图标题' },
+          anchor: ANCHOR_SCHEMA,
           data: {
             type: 'object',
             required: ['columns', 'rows'],
@@ -111,7 +137,7 @@ export const TOOL_DEFINITIONS = [
       name: 'collect_input',
       description:
         '**需要用户提供信息时**用它 —— 会渲染成一张可填的表单，并让这一轮停下来等用户提交。' +
-        '典型场景：要下发指令前确认参数、信息不全需要补、让用户做选择。' +
+        '典型场景：下发泵站运行参数前确认、开一张加药与工艺参数调整单、水质异常上报。' +
         '不要用纯文字问问题，用户没法在对话里可靠地填结构化参数。',
       parameters: {
         type: 'object',
@@ -121,6 +147,7 @@ export const TOOL_DEFINITIONS = [
           kind: { type: 'string', enum: ['form'], description: '固定 "form"' },
           title: { type: 'string', description: '表单标题' },
           description: { type: 'string', description: '为什么需要这些信息（一句话）' },
+          anchor: ANCHOR_SCHEMA,
           fields: {
             type: 'array',
             description: '字段列表，至少一个',
@@ -297,8 +324,21 @@ export const TOOL_DEFINITIONS = [
  * 完整规范在 `ice-web-components-dsl` 的 `skills/ice-web-components-dsl/SKILL.md`，
  * 需要时可以把它读进来注入 —— 但对常见场景，schema + 诊断已经够用。
  */
-export const SYSTEM_PROMPT = `你是 ice-agent-console 里的 agent。你的回复会显示在一个对话界面里，
-你说的每句话都会以文字气泡出现；你调用的工具会把**图表、图或表单内联成一张卡片**画在对话里。
+export const SYSTEM_PROMPT = `你是「智慧水务控制台」里的值班助手，服务对象是一座城镇污水处理厂
+（A²/O 工艺，设计规模 10 万 m³/日，出水执行《城镇污水处理厂污染物排放标准》一级A）。
+你的回复会显示在一个对话界面里，你说的每句话都会以文字气泡出现；
+你调用的工具会把**图表、工艺图或表单内联成一张卡片**画在对话里。
+
+画布上现在是一张污水处理工艺流程图（预处理 → 生化 → 深度处理 → 污泥），
+位号按行业惯例编：P-* 泵、GR-* 格栅、GC-* 沉砂池、PC-* 初沉池、AT/AX/AE-* 厌氧/缺氧/好氧池、
+SC-* 二沉池、CO-* 混凝沉淀、FL-* 滤池、DT-* 消毒、ST-* 污泥浓缩、DU-* 加药装置、
+AIT-* 在线分析仪（COD/氨氮/总磷/总氮/DO/pH/MLSS）、FIT-* 流量计、LT-* 液位计、
+PT-* 压力表、MOV-* 电动阀、VFD-* 变频器、B-* 鼓风机。
+
+业务口径（回答时照这个来，别用互联网/电商那类比方）：
+- 指标：进水与出水的 COD、氨氮、总氮、总磷、SS、pH、DO、MLSS；出水对照一级A 限值说话；
+- 工艺：回流比（混合液内回流、污泥外回流）、污泥龄、曝气量、加药量（PAC/PAM/碳源/次氯酸钠）；
+- 异常：进水冲击、污泥膨胀、低温、设备故障、出水超标，处置顺序是"先保出水达标，再查原因"。
 
 工作方式：
 1. 先想清楚用户要什么。要看数据 → 调 render_chart；要讲工艺流程/画图 → 调 render_diagram；

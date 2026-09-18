@@ -9,13 +9,17 @@ import {
 } from './helpers';
 
 /**
- * **第二批控件的原型页。**
+ * **加药与工艺参数调整单**（表单卡片）。
  *
- * 这条用例的价值不在"没报错"，而在它守住了两个**只有真去看画出来什么**才会发现的 bug
- * （都是做这一版原型时才暴露的）：
+ * 这张单据是"第二批控件"那张原型页改造来的（2026-09-18）：原型页的 10 个字段是
+ * 主题色 / 优先级 / 维护窗口 / 省市区…… 跟水务业务毫无关系，浮在工艺图上很出戏。
+ * 现在字段按单据语义来，**控件覆盖面一条没丢**（0.3.0 新接的 9 个类型各有一个）。
+ *
+ * 而这条用例守的两个 bug 与字段叫什么无关，都是"只有真去看画出来什么"才会发现的：
  *
  * 1. **色板全白**：`ICEColorPicker` 要的是 `colors: string[]`（一串颜色值），
  *    而我把选项归一化成了 `{value,label}` 对象传进去 —— 组件不报错，色块画成空白。
+ *    （所以新单据里那个「HMI 标识色」不是凑数的字段：组态屏上真要用它区分加药点。）
  * 2. **占位文案全丢**：`createControl` 有 6 个老分支 + 9 个新分支漏了展开 `base`
  *    （它装着 `placeholder`），于是下拉框 / 日期框 / 级联 / 树选择 / 自动完成的
  *    占位文案从来没画出来过。TypeScript 抓不到 —— `placeholder` 都是**可选**参数。
@@ -24,7 +28,7 @@ import {
  * "值真的进得了取值回路"。
  */
 
-const CHIP = '看看新控件都能用吗';
+const CHIP = '调整加药量';
 
 async function openShowcase(page: import('@playwright/test').Page) {
   await page.goto('/');
@@ -33,7 +37,7 @@ async function openShowcase(page: import('@playwright/test').Page) {
   });
 }
 
-test('10 个字段全部上画布，色板有色、占位文案有字', async ({ page }) => {
+test('单据的字段全部上画布，色板有色、占位文案有字', async ({ page }) => {
   const errors = collectErrors(page);
   const after = await openShowcase(page);
 
@@ -42,17 +46,21 @@ test('10 个字段全部上画布，色板有色、占位文案有字', async ({
   expect(tool.name).toBe('collect_input');
   expect(tool.dsl.kind).toBe('form');
   expect(tool.dsl.fields.map((f: any) => f.name)).toEqual([
-    'themeColor',
-    'priority',
-    'triggerAt',
-    'window',
-    'region',
-    'station',
-    'tags',
+    'hmiColor',
+    'urgency',
+    'startAt',
+    'period',
+    'plant',
+    'dosingPoint',
+    'chemical',
+    'dose',
+    'doseRate',
+    'reasons',
     'risk',
-    'keyword',
     'devices',
+    'note',
   ]);
+  expect(tool.dsl.title).toContain('加药');
 
   await expect(page.locator(FORM_CANVAS)).toBeVisible();
   expect((await readStage(page)).active, '绘图区应当切到表单层').toBe('form');
@@ -96,14 +104,14 @@ test('10 个字段全部上画布，色板有色、占位文案有字', async ({
   const byName: Record<string, string | null> = Object.fromEntries(
     texts.map((t: any) => [t.name, t.text])
   );
-  expect(byName.region, '级联的占位文案应当画出来').toBe('选省 / 市');
-  expect(byName.station, '树选择的占位文案应当画出来').toBe('按分组选');
-  expect(byName.keyword, '自动完成的占位文案应当画出来').toBe('输入以筛选');
-  expect(byName.triggerAt, '时间框的初值应当画出来').toBe('08:30');
+  expect(byName.plant, '级联的占位文案应当画出来').toBe('选厂区 / 工段');
+  expect(byName.dosingPoint, '树选择的占位文案应当画出来').toBe('按加药间选');
+  expect(byName.chemical, '自动完成的占位文案应当画出来').toBe('输入以筛选');
+  expect(byName.startAt, '时间框的初值应当画出来').toBe('08:00');
   // 不是每个类型都有文字取值器：`segmented` / `rate` / `transfer` 两个都没有
   // （它们的取值由子节点自己画），所以这里不断言 —— 但**值**由下一个用例守着。
-  expect(String(byName.window), '区间日期应当画出两头').toContain('2026-09-01');
-  expect(String(byName.window)).toContain('2026-09-07');
+  expect(String(byName.period), '区间日期应当画出两头').toContain('2026-09-19');
+  expect(String(byName.period)).toContain('2026-09-25');
 
   // ---- 内容宽度仍然停在 640 上限，没溢出画布 ----
   const bounds = await page.evaluate(() => {
@@ -139,16 +147,19 @@ test('往新控件里写值，表单模型读得到（值真的进了回路）',
 
   const ok = await page.evaluate(() =>
     (window as any).__iceAgentConsole.fillForm({
-      themeColor: '#F59E0B',
-      priority: 'high',
-      triggerAt: '09:15',
-      window: ['2026-10-01', '2026-10-15'],
-      region: 'hz',
-      station: 'pump-2',
-      tags: ['例检', '抢修'],
+      hmiColor: '#F59E0B',
+      urgency: 'urgent',
+      startAt: '09:15',
+      period: ['2026-10-01', '2026-10-15'],
+      plant: 'bio',
+      dosingPoint: 'pac-point',
+      chemical: 'PAC（聚合氯化铝）',
+      dose: 160,
+      doseRate: 12,
+      reasons: ['出水波动', '药耗偏高'],
       risk: 5,
-      keyword: '阀门',
-      devices: ['V-101', 'P-201'],
+      devices: ['DU-101', 'P-401'],
+      note: '当班出水 COD 46',
     })
   );
   expect(ok).toBe(true);
@@ -156,18 +167,19 @@ test('往新控件里写值，表单模型读得到（值真的进了回路）',
   const values = await page.evaluate(() => (window as any).__iceAgentConsole.formValues());
 
   // 标量：直接回读
-  expect(values.triggerAt).toBe('09:15');
-  expect(values.priority).toBe('high');
+  expect(values.startAt).toBe('09:15');
+  expect(values.urgency).toBe('urgent');
   expect(values.risk).toBe(5);
-  expect(values.keyword).toBe('阀门');
+  expect(values.chemical).toBe('PAC（聚合氯化铝）');
+  expect(values.dose).toBe(160);
   // `color` 会**强制转成字符串**（组件自己的行为，运行时探测过）
-  expect(values.themeColor).toBe('#F59E0B');
+  expect(values.hmiColor).toBe('#F59E0B');
   // 级联 / 树选择：值是最深一层 / 节点的 key
-  expect(values.region).toBe('hz');
-  expect(values.station).toBe('pump-2');
+  expect(values.plant).toBe('bio');
+  expect(values.dosingPoint).toBe('pac-point');
   // 元组：两头都在
-  expect(values.window).toEqual(['2026-10-01', '2026-10-15']);
+  expect(values.period).toEqual(['2026-10-01', '2026-10-15']);
   // 数组：穿梭框会按数据源过滤，多选 select 保持数组
-  expect(values.tags).toEqual(['例检', '抢修']);
-  expect(values.devices).toEqual(['V-101', 'P-201']);
+  expect(values.reasons).toEqual(['出水波动', '药耗偏高']);
+  expect(values.devices).toEqual(['DU-101', 'P-401']);
 });

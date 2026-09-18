@@ -25,36 +25,39 @@ import {
 } from '../../shared/water-process-case';
 import type { ToolCardPlan } from './dsl-to-events';
 
-/** 一张表 + encoding，这就是 ice-chart-dsl 想要的形态。 */
-const SALES_DSL = {
+/**
+ * 一张表 + encoding，这就是 ice-chart-dsl 想要的形态。
+ *
+ * ⚠️ **题材必须与工艺图有关系**（2026-09-18 改）：原先这里是"各渠道月度销量"，
+ * 而它要浮在一张污水处理工艺流程图上 —— 两者毫无业务关联，看着就是硬凑的。
+ * 现在换成**图上某个单元的运行数据**：出水 COD 在线（`codAnalyzer` / AIT-106）的近 6 日读数，
+ * 并且卡片会锚定到那个单元上（见 `ToolCardPlan.anchor`）。
+ *
+ * 判据很简单：**把图遮住，这张卡片还说得通吗？** 说得通就说明它没绑在图上。
+ */
+const COD_TREND_DSL = {
   schemaVersion: 1,
   kind: 'bar',
-  title: '各渠道月度销量',
+  title: '出水 COD · 近 6 日（限值 50 mg/L）',
   data: {
-    columns: ['月份', '销量', '渠道'],
+    columns: ['日期', 'COD'],
     rows: [
-      ['1月', 120, '线上'],
-      ['1月', 86, '线下'],
-      ['2月', 96, '线下'],
-      ['2月', 132, '线上'],
-      ['3月', 168, '线上'],
-      ['3月', 101, '线下'],
-      ['4月', 142, '线上'],
-      ['4月', 88, '线下'],
-      ['5月', 133, '线上'],
-      ['5月', 95, '线下'],
-      ['6月', 118, '线上'],
-      ['6月', 90, '线下'],
+      ['9-12', 34],
+      ['9-13', 31],
+      ['9-14', 38],
+      ['9-15', 46],
+      ['9-16', 36],
+      ['9-17', 33],
     ],
   },
-  encoding: { x: '月份', y: '销量', series: '渠道' },
+  encoding: { x: '日期', y: 'COD' },
 };
 
-/** 故意写错的一版：`销售额` 不是表里的列。用来走自修复回路。 */
+/** 故意写错的一版：表里的列叫「COD」，模型却写成了「COD浓度」。用来走自修复回路。 */
 const BROKEN_DSL = {
-  ...SALES_DSL,
-  title: '各渠道月度销量（第一版，写错了列名）',
-  encoding: { x: '月份', y: '销售额', series: '渠道' },
+  ...COD_TREND_DSL,
+  title: '出水 COD（第一版，写错了列名）',
+  encoding: { x: '日期', y: 'COD浓度' },
 };
 
 /**
@@ -74,7 +77,11 @@ const BROKEN_DIAGRAM_DSL = {
 };
 
 /**
- * 实时流剧本的数据源。
+ * 实时流剧本的数据源：**出水计量井的瞬时流量**。
+ *
+ * 量级按这座厂的设计规模（10 万 m³/日）算：日均 ≈ 4167 m³/h，
+ * 所以列里的数在 4100 上下波动 —— 旧版写的是 92/105/148（那是老题材"平台吞吐量"的量级），
+ * 放在一座污水厂的出水计量上不成立。
  *
  * x 刻意用**数值轴**（秒）而不是类目轴（月份），原因是查过 `appendData` 的实现：
  * 它只往 `series.data` 末尾 concat，**不碰 `xAxis.data`**。
@@ -85,22 +92,22 @@ const BROKEN_DIAGRAM_DSL = {
  * 这才是 `appendData` 被设计出来服务的场景（"实时数据流专用"）。
  * 视图层对此有防御：认出类目轴就走全量 `setOption`（见 src/view/chart-adapter.ts）。
  */
-const TRAFFIC_DSL = {
+const OUTLET_FLOW_DSL = {
   schemaVersion: 1,
   kind: 'line',
-  title: '实时吞吐量',
+  title: '出水计量 FIT-101 · 实时流量（m³/h）',
   data: {
-    columns: ['秒', '吞吐'],
+    columns: ['时刻(秒)', '流量(m³/h)'],
     rows: [
-      [1, 92],
-      [2, 105],
-      [3, 148],
-      [4, 136],
-      [5, 151],
-      [6, 163],
+      [1, 4020],
+      [2, 4110],
+      [3, 4372],
+      [4, 4264],
+      [5, 4156],
+      [6, 4084],
     ],
   },
-  encoding: { x: '秒', y: '吞吐' },
+  encoding: { x: '时刻(秒)', y: '流量(m³/h)' },
 };
 
 /**
@@ -112,27 +119,27 @@ const TRAFFIC_DSL = {
 const CONFIRM_FORM_DSL = {
   schemaVersion: 1,
   kind: 'form',
-  title: '下发前确认',
-  description: '这三项确认后才会把控制指令发下去。',
+  title: '进水泵站 P-101 · 运行参数下发',
+  description: '确认后把运行参数下发给进水泵 P-101（图上会高亮这台泵）。',
   fields: [
     {
       name: 'station',
       type: 'select',
-      label: '泵站',
+      label: '泵组',
       required: true,
       options: [
-        { value: 'pump-1', label: '一号泵站' },
-        { value: 'pump-2', label: '二号泵站' },
+        { value: 'pump-1', label: '一号进水泵 P-101' },
+        { value: 'pump-2', label: '二号进水泵 P-102（备用）' },
       ],
     },
     {
       name: 'mode',
       type: 'radio-group',
-      label: '运行模式',
+      label: '控制方式',
       default: 'auto',
       options: [
-        { value: 'auto', label: '自动' },
-        { value: 'manual', label: '手动' },
+        { value: 'auto', label: '自动（按集水井液位）' },
+        { value: 'manual', label: '远程手动' },
       ],
     },
     {
@@ -140,106 +147,153 @@ const CONFIRM_FORM_DSL = {
       type: 'number',
       label: '目标流量 (m³/h)',
       required: true,
-      min: 0,
-      max: 5000,
+      // 量程按泵的能力曲线来：这座厂进水日均 ≈ 4167 m³/h（两台并联，单泵 ~2083），单泵 800~2600
+      min: 800,
+      max: 2600,
       step: 10,
-      default: 800,
+      default: 2080,
     },
-    { name: 'note', type: 'textarea', label: '备注', maxLength: 120, placeholder: '选填' },
+    {
+      name: 'level',
+      type: 'number',
+      label: '集水井目标液位 (m)',
+      min: 0.5,
+      max: 6,
+      step: 0.1,
+      default: 3.2,
+    },
+    { name: 'note', type: 'textarea', label: '备注', maxLength: 120, placeholder: '选填：填写依据（如当班液位、进水水量）' },
   ],
   submitText: '确认下发',
 };
 
 /**
- * **第二批控件的演示表单。**
+ * **加药与工艺参数调整单。**
  *
- * 0.3.0 起 `ice-web-components-dsl` 的字段类型从 11 个扩到 20 个，这张表把新接的 9 个
- * 各放一个，加上一个多选 `select`（它顺便证明了"数组默认值"那个 bug 已经修好）。
+ * 这张表是"智慧水务平台上真会开的一张单子"：当班发现出水波动或药耗偏高，
+ * 工艺员提调整申请，值班长复核后下发到加药间。表单锚定图上那台 PAC 加药装置（DU-101），
+ * 所以"填的数字对着哪个设备"在图上是看得见的。
  *
- * 全部 10 个字段都**没有写宽度** —— 那是宿主 + DSL 的事（见该包 README §8.1）。
- * `options` 也一律用**裸字符串**写法（除了需要 label 的），因为不同控件对选项形状的
- * 要求不一样（`colors: string[]` / `options: string[]` / `nodes: {key,label}` /
- * `dataSource`），那些差别由编译期归一化 —— agent 不该知道。
+ * 改造前这里叫「第二批控件」，字段是主题色 / 优先级 / 触发时间 / 维护窗口 / 省市区……
+ * 那一版是**控件原型页**（目的是把 0.3.0 新接的 9 个字段类型各放一个），
+ * 问题是它跟水务业务毫无关系 —— 表单浮在一张污水处理工艺图上，看着就是硬凑的。
+ *
+ * 现在字段按单据本身的语义来，**覆盖面一条没丢**：`ice-web-components-dsl` 0.3.0
+ * 新接的 9 个类型（color / segmented / time / date-range / cascader / tree-select /
+ * transfer / rate / autocomplete）在这张单子上各有一个，另外补了
+ * number（投加量）/ slider（投加浓度）/ 多选 select（关联设备）/ textarea（备注）。
+ *
+ * 「HMI 标识色」不是凑数的配置项：组态屏上每个加药点都要指定一个显示色，
+ * 用它区分工段（这是水务平台组态页的常规字段）。
+ *
+ * 全部字段都**没有写宽度** —— 那是宿主 + DSL 的事（见该包 README §8.1）；
+ * `options` 也一律用裸字符串（除了需要 label 的），形状差异由编译期归一化。
  */
-const SHOWCASE_FORM_DSL = {
+const DOSING_FORM_DSL = {
   schemaVersion: 1,
   kind: 'form',
-  title: '第二批控件',
-  description: '0.3.0 新接的 9 个字段类型，各来一个。',
+  title: '加药与工艺参数调整单',
+  description: '提交后进「待复核」，值班长确认后再下发到加药间。',
   fields: [
     {
-      name: 'themeColor',
+      name: 'hmiColor',
       type: 'color',
-      label: '主题色',
+      label: 'HMI 标识色',
       default: '#61D9FB',
       options: ['#61D9FB', '#0F172A', '#16A34A', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'],
     },
     {
-      name: 'priority',
+      name: 'urgency',
       type: 'segmented',
-      label: '优先级',
+      label: '紧急程度',
       default: 'normal',
       options: [
-        { value: 'low', label: '低' },
-        { value: 'normal', label: '中' },
-        { value: 'high', label: '高' },
+        { value: 'normal', label: '常规' },
+        { value: 'urgent', label: '加急' },
+        { value: 'immediate', label: '立即执行' },
       ],
     },
-    { name: 'triggerAt', type: 'time', label: '触发时间', format: 'HH:mm', default: '08:30' },
+    { name: 'startAt', type: 'time', label: '每日起始时刻', format: 'HH:mm', default: '08:00' },
     {
-      name: 'window',
+      name: 'period',
       type: 'date-range',
-      label: '维护窗口',
+      label: '计划执行周期',
       required: true,
-      default: ['2026-09-01', '2026-09-07'],
+      default: ['2026-09-19', '2026-09-25'],
     },
     {
-      name: 'region',
+      name: 'plant',
       type: 'cascader',
-      label: '区域',
-      placeholder: '选省 / 市',
+      label: '厂区 / 工段',
+      placeholder: '选厂区 / 工段',
       separator: ' / ',
       options: [
-        { value: 'zj', label: '浙江', children: [{ value: 'hz', label: '杭州' }, { value: 'nb', label: '宁波' }] },
-        { value: 'js', label: '江苏', children: [{ value: 'nj', label: '南京' }, { value: 'sz', label: '苏州' }] },
+        {
+          value: 'plant-1',
+          label: '一号污水厂',
+          children: [
+            { value: 'pretreat', label: '预处理工段' },
+            { value: 'bio', label: '生化段（AAO）' },
+            { value: 'advanced', label: '深度处理工段' },
+            { value: 'sludge', label: '污泥工段' },
+          ],
+        },
       ],
     },
     {
-      name: 'station',
+      name: 'dosingPoint',
       type: 'tree-select',
-      label: '泵站',
-      placeholder: '按分组选',
+      label: '加药点',
+      placeholder: '按加药间选',
       showSearch: true,
       options: [
-        { value: 'group-a', label: 'A 组', children: [{ value: 'pump-1', label: '一号泵站' }, { value: 'pump-2', label: '二号泵站' }] },
-        { value: 'group-b', label: 'B 组', children: [{ value: 'pump-3', label: '三号泵站' }] },
+        {
+          value: 'dosing-room',
+          label: '加药间',
+          children: [
+            { value: 'pac-point', label: 'PAC 投加点（混凝沉淀池）' },
+            { value: 'pam-point', label: 'PAM 投加点（污泥脱水）' },
+            { value: 'carbon-point', label: '碳源投加点（缺氧池）' },
+          ],
+        },
       ],
     },
     {
-      name: 'tags',
-      type: 'transfer',
-      label: '标签',
-      default: ['例检'],
-      options: ['例检', '抢修', '节能', '扩容', '试运行'],
-    },
-    { name: 'risk', type: 'rate', label: '风险等级', max: 5, default: 3 },
-    {
-      name: 'keyword',
+      name: 'chemical',
       type: 'autocomplete',
-      label: '关键词',
+      label: '药剂',
       placeholder: '输入以筛选',
-      options: ['泵站', '阀门', '管道', '变频器', '液位计', '流量计'],
+      options: ['PAC（聚合氯化铝）', 'PAM（聚丙烯酰胺）', '次氯酸钠', '乙酸钠（碳源）', '液氧'],
     },
+    {
+      name: 'dose',
+      type: 'number',
+      label: '投加量 (L/h)',
+      min: 0,
+      max: 2000,
+      step: 10,
+      default: 120,
+    },
+    { name: 'doseRate', type: 'slider', label: '投加浓度 (%)', min: 1, max: 30, default: 10 },
+    {
+      name: 'reasons',
+      type: 'transfer',
+      label: '调整原因',
+      default: ['出水波动'],
+      options: ['出水波动', '进水冲击', '低温运行', '污泥膨胀', '药耗偏高', '节能降耗'],
+    },
+    { name: 'risk', type: 'rate', label: '风险等级', max: 5, default: 2 },
     {
       name: 'devices',
       type: 'select',
       mode: 'multiple',
       label: '关联设备',
-      default: ['V-101'],
-      options: ['V-101', 'V-102', 'P-201', 'P-202'],
+      default: ['DU-101'],
+      options: ['DU-101', 'DU-102', 'DU-103', 'DU-104', 'P-401', 'P-402'],
     },
+    { name: 'note', type: 'textarea', label: '备注', maxLength: 120, placeholder: '选填：填写依据（如当班化验值）' },
   ],
-  submitText: '提交看看',
+  submitText: '提交调整单',
 };
 
 /** 图表卡的公共部分。 */
@@ -720,24 +774,35 @@ function upgradePlan(): ToolCardPlan {
   });
 }
 
-function salesPlan(): ToolCardPlan {
-  return chartCard(SALES_DSL, {
-    intro: '好的，我拉一下各渠道的月度销量，用分组柱状图看。',
+/**
+ * 出水 COD 趋势卡：**锚定到图上的在线监测仪**（`codAnalyzer` / AIT-106）。
+ *
+ * 卡片浮起来的同时，工艺图上那个单元会被高亮、镜头跟过去 —— 这就是"这张卡片说的是图上哪个东西"。
+ * 解说的那一拍指的还是**图表里的那个尖峰**（图表卡上的 `pointAt` 认的是 x 刻度值）。
+ */
+/** 出水 COD 近 6 日趋势（锚定到图上的在线监测仪 AIT-106）。 */
+function codTrendPlan(): ToolCardPlan {
+  return chartCard(COD_TREND_DSL, {
+    intro:
+      '好的，我把出水 COD 在线监测（AIT-106）近 6 日的读数拉出来 —— ' +
+      '对照《城镇污水处理厂污染物排放标准》一级A 的限值 50 mg/L 看。',
+    anchor: { value: 'codAnalyzer', label: 'AIT-106' },
     beats: [
-      { text: '画好了。整体看线上一直压着线下，' },
-      { text: '不过 3 月线上有个明显的尖峰 —— 就是这个点。', pointAt: '3月' },
+      { text: '画好了。这六天日均 36 mg/L，离限值还有一段余量，' },
+      { text: '不过 9-15 那天冒出一个尖峰（46），一天涨了 8 —— 就是这个点。', pointAt: '9-15' },
     ],
   });
 }
 
-/** 流式追加剧本：先画前 6 秒，然后一拍一拍往后补数据点（走 appendData 快路径）。 */
+/** 流式追加剧本：先画出水计量的前 6 秒，然后一拍一拍往后补数据点（走 appendData 快路径）。 */
 function streamingPlan(): ToolCardPlan {
-  return chartCard(TRAFFIC_DSL, {
-    intro: '先给你前 6 秒的吞吐量。',
+  return chartCard(OUTLET_FLOW_DSL, {
+    intro: '先给出水计量井（FIT-101）前 6 秒的实时流量 —— 这座厂日均约 4167 m³/h。',
+    anchor: { value: 'meter', label: 'FIT-101' },
     beats: [
-      { text: '我接着往前推，第 7 秒上来了：', appendRows: [[7, 171]] },
-      { text: '第 8 秒继续涨：', appendRows: [[8, 188]] },
-      { text: '第 9 秒开始回落了，留意这个拐点：', appendRows: [[9, 154]] },
+      { text: '我接着往前推，第 7 秒上到 4428：', appendRows: [[7, 4428]] },
+      { text: '第 8 秒继续涨到 4494：', appendRows: [[8, 4494]] },
+      { text: '第 9 秒回落到 4176 了，留意这个拐点：', appendRows: [[9, 4176]] },
     ],
   });
 }
@@ -764,7 +829,7 @@ function repairPlan(hasDiagnostics: boolean, failedTool?: string): ToolCardPlan 
       });
     }
     return chartCard(BROKEN_DSL, {
-      intro: '我先按「销售额」这个列名画一版，你看看。',
+      intro: '我先按「COD浓度」这个列名画一版，你看看。',
       beats: [{ text: '这一版是故意写错的 —— 用来演示诊断回灌的自修复回路。' }],
     });
   }
@@ -777,9 +842,12 @@ function repairPlan(hasDiagnostics: boolean, failedTool?: string): ToolCardPlan 
       beats: [{ text: '主流程不受影响，还是从进水一路走到排放口。', pointAt: 'inlet' }],
     });
   }
-  return chartCard(SALES_DSL, {
-    intro: '收到诊断了 —— 表里没有「销售额」这一列，可用的是「销量」。改过来了：',
-    beats: [{ text: '还是 3 月线上最高的那个形态。', pointAt: '3月' }],
+  return chartCard(COD_TREND_DSL, {
+    intro: '收到诊断了 —— 表里没有「COD浓度」这一列，可用的是「COD」。改过来了：',
+    // 修复轮是**接着上一张卡片的上下文**：锚定要一起带回来，
+    // 否则修完之后卡片就"飘"了（图上不再指回那台在线监测仪）。
+    anchor: { value: 'codAnalyzer', label: 'AIT-106' },
+    beats: [{ text: '还是 9-15 那天最高，46 mg/L，没有破一级A 的 50。', pointAt: '9-15' }],
   });
 }
 
@@ -797,50 +865,123 @@ function confirmPlan(): ToolCardPlan {
     tool: COLLECT_INPUT_TOOL,
     payload: CONFIRM_FORM_DSL,
     stateKey: STATE_FORM_KEY,
-    intro: '要下发控制指令，我得先跟你确认几项。',
-    beats: [{ text: '填好点「确认下发」，我拿到参数就继续。' }],
+    // 这张表是**对进水泵站 P-101 的操作**，所以锚定到那台泵：
+    // 表单浮起来的同时，图上高亮它、镜头跟过去；提交之后还会再闪一下（`anchorFeedback`）。
+    anchor: { value: 'inletPump', label: 'P-101' },
+    intro: '要给进水泵 P-101 改运行参数，我先跟你确认几项 —— 现在集水井液位 3.4 m，流量 2040 m³/h。',
+    beats: [{ text: '填好点「确认下发」，我按这套参数把泵的给定值写下去。' }],
     interrupt: {
       id: 'confirm-params',
-      reason: '需要用户确认泵站与运行参数后才能下发',
-      message: '请确认泵站、运行模式与目标流量',
+      reason: '需要用户确认泵组与运行参数后才能下发',
+      message: '请确认泵组、控制方式与目标流量',
     },
   };
 }
 
 /**
- * 第二批控件的演示。
+ * **加药与工艺参数调整单**（表单卡片）。
  *
  * 这一份**故意不做中断** —— 它是一条"直接给你看"的剧本：一次 run 里把表单卡片推出来，
- * 你在浏览器里点一遍就完成它的使命了。要看人机回环走「要下发指令」那条。
+ * 填一遍、提交，`（已提交表单：…）` 会作为下一条消息回到会话里（见 `submittedFormPlan`）。
+ * 要看不带这层"提交后回执"的纯中断回路，走「给进水泵下发指令」那条。
  */
-function showcasePlan(): ToolCardPlan {
+function dosingPlan(): ToolCardPlan {
   return {
     tool: COLLECT_INPUT_TOOL,
-    payload: SHOWCASE_FORM_DSL,
+    payload: DOSING_FORM_DSL,
     stateKey: STATE_FORM_KEY,
-    intro: '这是 0.3.0 新接的 9 个字段类型，我在一张表单里各放了一个。',
+    // 锚到 PAC 加药装置：卡片上的数字填的是哪台设备，图上直接圈出来
+    anchor: { value: 'pacDosing', label: 'DU-101' },
+    intro: '好，我把 PAC 投加调整单拉出来 —— 药剂、投加点、投加量与执行周期都在上面。',
     beats: [
-      { text: '从上往下：颜色、分段、时间、区间、级联、树选择、穿梭框、评分、自动完成。' },
-      { text: '点一遍看看哪些顺手、哪些别扭 —— 这一版的目的是让你能判断后面接什么。' },
+      { text: '图上先圈出 PAC 加药装置 DU-101，数字对着它填。' },
+      { text: '填完提交，我按这套参数折算当班加药量与药耗。' },
     ],
   };
 }
 
+/**
+ * 字段 key → 中文标签。
+ *
+ * 回执里要念一遍用户填了什么，而协议里带回来的是 `station` / `flow` 这种英文 key ——
+ * 直接念 key 在现场看着很怪（"flow：2080"）。这里按单据语义翻译成人话。
+ */
+const FIELD_LABELS: Record<string, string> = {
+  station: '泵组',
+  mode: '控制方式',
+  flow: '目标流量 (m³/h)',
+  level: '集水井目标液位 (m)',
+  note: '备注',
+  hmiColor: 'HMI 标识色',
+  urgency: '紧急程度',
+  startAt: '每日起始时刻',
+  period: '计划执行周期',
+  plant: '厂区 / 工段',
+  dosingPoint: '加药点',
+  chemical: '药剂',
+  dose: '投加量 (L/h)',
+  doseRate: '投加浓度 (%)',
+  reasons: '调整原因',
+  risk: '风险等级',
+  devices: '关联设备',
+};
+
+function describeValues(values: any): string {
+  return Object.entries(values || {})
+    .map(([key, value]) => `  · ${FIELD_LABELS[key] || key}：${Array.isArray(value) ? value.join('、') : value}`)
+    .join('\n');
+}
+
 /** 收到 resume 之后：读用户填的值并应答。 */
 function resumedPlan(values: any): ToolCardPlan {
-  const pairs = Object.entries(values || {})
-    .map(([key, value]) => `  · ${key}：${Array.isArray(value) ? value.join('、') : value}`)
-    .join('\n');
+  const pairs = describeValues(values);
   return {
     beats: [
       {
         text:
-          '收到你的确认了：\n' +
+          '收到确认，按这套参数下发：\n' +
           (pairs || '  （没有带回任何值）') +
           '\n\n' +
-          '这些值是走协议的 `resume` 通道回来的 —— 它不是一次新的提问，' +
-          '而是对上一轮那个中断的**答复**。所以我能确定它们对应的是哪一次中断。\n' +
-          '接上模型之后，这里就会是一次真正的"拿到参数 → 继续干活"。',
+          'P-101 的给定值已经写到控制柜；现场把转换开关打到「远程」就能接管。\n' +
+          '（这些值是走协议的 `resume` 通道回来的 —— 它不是一次新的提问，' +
+          '而是对上一轮那个中断的答复，所以我知道它们对应哪一次下发。）',
+      },
+    ],
+  };
+}
+
+/**
+ * **表单提交后的回执**（非中断的那张「加药与工艺参数调整单」）。
+ *
+ * 客户端把提交结果作为一条普通消息发回来：`（已提交表单：key=value, …）`。
+ * 这一条把它翻译成业务回执 —— 没有它的话，提交完会掉进兜底剧本，
+ * 用户看到的是一排"试试这些"的菜单，像是把自己的单子弄丢了。
+ */
+function submittedFormPlan(message: string): ToolCardPlan | null {
+  const matched = /^（已提交表单：([\s\S]*)）$/.exec(String(message || '').trim());
+  if (!matched) return null;
+  const values: Record<string, any> = {};
+  matched[1]
+    .split(', ')
+    .filter(Boolean)
+    .forEach((pair) => {
+      const at = pair.indexOf('=');
+      if (at === -1) return;
+      const key = pair.slice(0, at);
+      const raw = pair.slice(at + 1);
+      values[key] = raw.includes('/') ? raw.split('/') : raw;
+    });
+
+  const dose = Number(values.dose);
+  const perShift = Number.isFinite(dose) && dose > 0 ? `\n按 ${dose} L/h 折算，每班（8h）约 ${Math.round(dose * 8)} L。` : '';
+  return {
+    beats: [
+      {
+        text:
+          '收到这张调整单了：\n' +
+          (describeValues(values) || '  （单据是空的）') +
+          perShift +
+          '\n\n我先挂在「待复核」上，值班长确认后再下发到加药间；执行周期内我每天按当班化验值核一次效果。',
       },
     ],
   };
@@ -864,12 +1005,12 @@ function textOnlyPlan(message: string): ToolCardPlan {
           `  · 提标改造（让 AI **改图**：拆掉初沉池、加三个提标单元，画面不重画）\n` +
           `  · 故意画错工艺图（诊断回灌的自修复回路，**图**这一路）\n\n` +
           `  【其他】\n` +
-          `  · 看看各渠道的月度销量\n` +
-          `  · 看一下实时吞吐量\n` +
-          `  · 要下发指令（走一遍中断 → 填表 → resume 的人机回环）\n` +
-          `  · 看看新控件都能用吗\n` +
+          `  · 看看出水 COD 的趋势（锚定到图上的出水 COD 在线监测 AIT-106）\n` +
+          `  · 看看出水实时流量（出水计量井 FIT-101 的秒级流量）\n` +
+          `  · 给进水泵下发指令（走一遍中断 → 填表 → resume 的人机回环，锚定到进水泵 P-101）\n` +
+          `  · 调整加药量（开一张加药与工艺参数调整单）\n` +
           `  · 故意画错（同一条自修复回路，但走**图表**那一路）\n` +
-          `  · 今天天气怎么样（兜底：只回文字、不动图）`,
+          `  · 出水要达到什么标准（兜底：只回文字、不动图）`,
       },
     ],
   };
@@ -904,16 +1045,18 @@ function interactionPlan(interaction: string, currentChart: any): ToolCardPlan |
   }
 
   if (parsed?.kind === 'item-click') {
+    const value = parsed.value === undefined ? '' : `，值 ${parsed.value}`;
     return {
       beats: [
         {
           text:
-            `你在图上点了「${parsed.xValue}」` +
-            (parsed.seriesName ? `（${parsed.seriesName}系列，值 ${parsed.value}）` : '') +
+            `你点了「${parsed.xValue}」${value}` +
+            (parsed.seriesName ? `（${parsed.seriesName}）` : '') +
             `。\n` +
-            `这个交互是通过 AG-UI 的 context 字段送上来的，不是拼在你说的话里——` +
-            `所以我知道哪部分是"你做的"、哪部分是"你说的"。\n` +
-            `接上模型之后，这里就会变成一次真正的追问。`,
+            `要归因的话，我会把这一天的进水水质、加药量与回流比一起调出来对一遍 —— ` +
+            `点进来的这一刻我拿到的就是你**在图上指的那个点**。\n` +
+            `（这个交互是走 AG-UI 的 \`context\` 字段送上来的，不是拼在你说的话里，` +
+            `所以我能分清哪部分是"你指的"、哪部分是"你说的"。）`,
         },
       ],
     };
@@ -921,13 +1064,19 @@ function interactionPlan(interaction: string, currentChart: any): ToolCardPlan |
 
   if (parsed?.kind === 'brush') {
     const span = parsed?.range?.x ? `${parsed.range.x[0]} ~ ${parsed.range.x[1]}` : '一段区间';
+    const inside = (currentChart?.data?.rows || []).filter(
+      (row: any) => Array.isArray(row) && row[0] >= parsed?.range?.x?.[0] && row[0] <= parsed?.range?.x?.[1]
+    );
+    const values = inside.map((row: any) => Number(row[1])).filter((n: number) => Number.isFinite(n));
+    const average = values.length ? (values.reduce((a: number, b: number) => a + b, 0) / values.length).toFixed(1) : '';
     return {
       beats: [
         {
           text:
             `你框选了 ${span}。\n` +
-            `框选范围同样是走 context 上来的结构化数据，` +
-            `接上模型之后就能针对这一段做归因。`,
+            (values.length ? `这一段 ${values.length} 个采样，均值 ${average}，最高 ${Math.max(...values)}。\n` : '') +
+            `接下来我会按这一段去查同期的进水冲击与加药记录，看看是水量变化还是药剂投加引起的。\n` +
+            `（框选范围和点位一样，是走 context 上来的结构化数据。）`,
         },
       ],
     };
@@ -939,27 +1088,37 @@ function interactionPlan(interaction: string, currentChart: any): ToolCardPlan |
 /** 「解释这张图」：**读 state** 里客户端回传的图表定义，逐项说出来。 */
 function explainPlan(current: any): ToolCardPlan {
   if (!current) {
-    return { beats: [{ text: '卡片上现在还没有图 —— 先让我画一张，再来解释。' }] };
+    return { beats: [{ text: '绘图区现在还没有图 —— 先让我画一张，再来解释。' }] };
   }
   const enc = current.encoding || {};
-  const rows = Array.isArray(current.data?.rows) ? current.data.rows.length : 0;
+  const rawRows: any[] = Array.isArray(current.data?.rows) ? current.data.rows : [];
+  const yIndex = Array.isArray(current.data?.columns) ? current.data.columns.indexOf(enc.y) : -1;
+  const values = rawRows
+    .map((row) => Number(Array.isArray(row) ? row[yIndex === -1 ? 1 : yIndex] : row?.[enc.y]))
+    .filter((n) => Number.isFinite(n));
   const columns = Array.isArray(current.data?.columns) ? current.data.columns.join(' / ') : '(未声明)';
   const channels = [`x=${enc.x}`];
   if (enc.y) channels.push(`y=${enc.y}`);
   if (enc.series) channels.push(`分组=${enc.series}`);
 
+  const average = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+  const peak = values.length ? Math.max(...values) : null;
+  const peakRow = peak === null ? null : rawRows.find((row) => Number(row[yIndex === -1 ? 1 : yIndex]) === peak);
+
   return {
     beats: [
       {
         text:
-          `这张图的定义我读到了 —— 它是通过 AG-UI 的 state 字段同步给我的，` +
-          `不是靠猜：\n` +
-          `  · 类型：${current.kind}\n` +
-          `  · 标题：${current.title || '(无)'}\n` +
-          `  · 列：${columns}\n` +
-          `  · 行数：${rows}\n` +
-          `  · 编码：${channels.join('，')}\n\n` +
-          `接上模型之后，这里会是结合数据的一次真正解释。`,
+          `这张是「${current.title || columns}」（${current.kind}），共 ${rawRows.length} 个点` +
+          (average !== null ? `，均值 ${average.toFixed(1)}` : '') +
+          (peak !== null ? `，最高 ${peak}${peakRow ? `（${peakRow[0]}）` : ''}` : '') +
+          `。\n` +
+          `看的是 ${enc.y || columns}${enc.x ? ` 随 ${enc.x}` : ''} 的变化${enc.series ? `，按 ${enc.series} 分组` : ''}。\n` +
+          (enc.y && String(enc.y).includes('COD') && peak !== null
+            ? `对照一级A 的限值 50 mg/L：最高 ${peak}，余量 ${50 - peak} 个点 —— ` +
+              `值得盯的是峰值那天，通常先查进水冲击，再查加药与回流比。\n`
+            : '') +
+          `（图的内容我是从画布状态里读出来的 —— 通过 AG-UI 的 state 字段同步，不是靠猜。）`,
       },
     ],
   };
@@ -971,7 +1130,7 @@ function explainPlan(current: any): ToolCardPlan {
  * 这是最能说明 `state` 用途的例子：agent 不需要你复述"刚才画的是什么"。
  */
 function redrawPlan(current: any): ToolCardPlan {
-  if (!current) return salesPlan();
+  if (!current) return codTrendPlan();
 
   const nextKind = current.kind === 'line' ? 'bar' : 'line';
   const label = nextKind === 'line' ? '折线' : '柱状';
@@ -1029,6 +1188,11 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
   const resumed = resumeValues(input.resume);
   if (resumed !== null) return resumedPlan(resumed);
 
+  // 非中断那张表单（加药调整单）提交后，客户端会把值拼成一条消息发回来 —— 先给出回执，
+  // 否则它会掉进下面的关键词匹配、最后落到兜底剧本（看起来像把用户的单子弄丢了）。
+  const submitted = submittedFormPlan(text);
+  if (submitted) return submitted;
+
   // 已经在修复轮里：不管用户说了什么，都按修复走（但要吐回**同一种**卡片）
   if (input.hasDiagnostics) return repairPlan(true, input.diagnosticsTool ?? undefined);
 
@@ -1043,7 +1207,7 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
     return repairPlan(false, isWaterAsk(text) ? RENDER_DIAGRAM_TOOL : undefined);
   }
   if (/下发|确认参数|填表|参数确认|中断/.test(text)) return confirmPlan();
-  if (/控件|组件|演示|第二批|字段类型|都能用/.test(text)) return showcasePlan();
+  if (/加药|投加|药耗|药剂|调整单/.test(text)) return dosingPlan();
   // ⚠️ 水务这条必须排在「实时|趋势|流」之前：「工艺流程」里含「流」，
   // 排在后面的话问工艺图会被流式剧本抢走（这个坑踩过一次）
   // ⚠️ 缩放 / 闪烁这两条必须排在 `isWaterAsk` **之前**：
@@ -1057,19 +1221,25 @@ export function buildPlan(input: PlanInput): ToolCardPlan {
   // 判断得**在 `故意画错` 之后**（那一条更具体，且优先级更高）。
   if (/提标|改造|拆掉|拆除|改图|增删|加三个|加几个|新增图元|删掉/.test(text)) return upgradePlan();
   if (isWaterAsk(text)) return waterProcessPlan();
+  // ⚠️ 这条必须排在「实时|趋势|流」**之前**：新图表的说法里带"趋势"，
+  // 排在后面的话会被流式剧本抢走（图表变成一条实时曲线）。
+  if (/COD|氨氮|水质|指标|排放/.test(text)) return codTrendPlan();
   if (/实时|趋势|流|追加|访问量|吞吐/.test(text)) return streamingPlan();
-  if (/销量|渠道|柱|卖/.test(text)) return salesPlan();
+  // 兜底：老说法（"各渠道的月度销量"）仍然指向同一张 COD 趋势卡 ——
+  // 关键词表可以随题材演进，但**不该让旧话变成"听不懂"**。
+  if (/销量|渠道|柱|趋势图/.test(text)) return codTrendPlan();
 
   return textOnlyPlan(text);
 }
 
 /** 暴露给测试：几个 DSL 常量。 */
 export const SCENARIO_DSL = {
-  SALES_DSL,
+  /** 出水 COD 趋势（锚定到图上的在线监测仪 AIT-106）—— 原名 `SALES_DSL`，题材改成水务的了。 */
+  SALES_DSL: COD_TREND_DSL,
   BROKEN_DSL,
-  TRAFFIC_DSL,
+  OUTLET_FLOW_DSL,
   CONFIRM_FORM_DSL,
-  SHOWCASE_FORM_DSL,
+  DOSING_FORM_DSL,
   WATER_PROCESS_DSL,
   BROKEN_DIAGRAM_DSL,
 };

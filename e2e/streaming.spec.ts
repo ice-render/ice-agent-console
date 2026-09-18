@@ -28,14 +28,16 @@ test('数据一拍一拍追加进同一张图', async ({ page }) => {
   await page.goto('/');
 
   const before = await readState(page);
-  await chipLocator(page, '看一下实时吞吐量').click();
+  await chipLocator(page, '看看出水实时流量').click();
 
   // 等第一次上画布：STATE_SNAPSHOT 在 TOOL_CALL_END **之后**到，
   // 所以"条目 done"不等于"状态已就绪"——要单独等一次。
   await waitForState(page, (s) => s.sharedState !== null, undefined, 30_000);
   const initial = await readState(page);
   expect(initial.sharedState.chart.data.rows).toHaveLength(6);
-  expect(initial.sharedState.chart.encoding.x).toBe('秒');
+  expect(initial.sharedState.chart.encoding.x).toBe('时刻(秒)');
+  // 量级是"一座 10 万 m³/日污水厂的出水流量"（日均 ≈ 4167 m³/h），不是随便画的两位数
+  expect(initial.sharedState.chart.data.rows[0][1]).toBeGreaterThan(1000);
 
   const signatureBefore = await canvasSignature(page, CHART_CANVAS);
 
@@ -45,9 +47,9 @@ test('数据一拍一拍追加进同一张图', async ({ page }) => {
   // 三拍各追加一个点，表长到 9，且追加的是数值轴上的新采样
   expect(final.sharedState.chart.data.rows).toHaveLength(9);
   expect(final.sharedState.chart.data.rows.slice(6)).toEqual([
-    [7, 171],
-    [8, 188],
-    [9, 154],
+    [7, 4428],
+    [8, 4494],
+    [9, 4176],
   ]);
 
   // 画面确实变了（新点画上去了），而且**始终只有一层图**——
@@ -71,7 +73,7 @@ test('追加之后图还能交互（快路径不该把监听弄丢）', async ({
   await page.goto('/');
 
   const before = await readState(page);
-  await chipLocator(page, '看一下实时吞吐量').click();
+  await chipLocator(page, '看看出水实时流量').click();
   await waitForState(
     page,
     (s, min) => s.status === 'idle' && s.eventCount > min,
@@ -111,8 +113,8 @@ test('追加之后图还能交互（快路径不该把监听弄丢）', async ({
 
 test('第二轮的条目不会顶掉第一轮的（跨轮 id 唯一）', async ({ page }) => {
   await page.goto('/');
-  await useChip(page, '看一下实时吞吐量');
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水实时流量');
+  await useChip(page, '看看出水 COD 的趋势');
 
   const state = await readState(page);
   const ids = state.items.map((i) => i.id);

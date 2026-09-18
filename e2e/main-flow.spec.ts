@@ -40,7 +40,7 @@ test('主链路：文字流式 → 绘图区出图 → 指着讲', async ({ page
   await expect(page.locator(TOOL_ENTRY)).toHaveCount(0);
 
   const before = await readState(page);
-  await chipLocator(page, '看看各渠道的月度销量').click();
+  await chipLocator(page, '看看出水 COD 的趋势').click();
 
   // ---- 文字是流式的：跟着归约状态采样，长度应当出现过多个值 ----
   // 直接读状态而不是读第一个 `.bubble`——第一个气泡是本地插入的用户消息，
@@ -74,13 +74,13 @@ test('主链路：文字流式 → 绘图区出图 → 指着讲', async ({ page
   expect(ink, '图表画布上必须有实际绘制内容').toBeGreaterThan(1000);
 
   // ★ 切过来了：绘图区**显示**的是图表层。
-  //   注意工艺图那一层仍然在（只是 `hidden`）—— 它是主视图，设计上永不销毁，
-  //   所以切回来是"显示"而不是"重建"（这一条在 diagram.spec.ts 里单独钉）。
+  //   注意工艺图那一层**仍然显示着**（2026-09-18 起）：图表 / 表单是浮在它上面的
+  //   卡片，工艺图是主视图、永不销毁也永不隐藏 —— 所以"切回来"是"收起卡片"而不是"重建"。
   const stage = await readStage(page);
   expect(stage.active).toBe('chart');
   expect(stage.layers.sort()).toEqual(['chart', 'diagram']);
   expect(stage.builds.diagram).toBe(1);
-  await expect(page.locator(DIAGRAM_CANVAS)).toBeHidden();
+  await expect(page.locator(DIAGRAM_CANVAS), '工艺图应当还在卡片底下显示着').toBeVisible();
   await expect(page.locator(CHART_CANVAS)).toBeVisible();
 
   const beforePointAt = await canvasSignature(page, CHART_CANVAS);
@@ -98,7 +98,7 @@ test('主链路：文字流式 → 绘图区出图 → 指着讲', async ({ page
   const state = await readState(page);
   expect(state.status).toBe('idle');
   expect(state.sharedState.chart.kind).toBe('bar');
-  expect(state.pointAt, '指点事件应当被归约进状态').toEqual({ value: '3月', seq: 1 });
+  expect(state.pointAt, '指点事件应当被归约进状态').toEqual({ value: '9-15', seq: 1 });
   // 一条用户消息 + 一句开场 + 两拍解说，加一条工具条目
   expect(state.items.filter((i) => i.kind === 'text')).toHaveLength(4);
   expect(state.items.filter((i) => i.kind === 'tool')).toHaveLength(1);
@@ -239,7 +239,7 @@ test('★ 新消息自动滚到底；用户翻上去之后不拽回来，滚回�
   const atTop = await chatScroll(page);
   expect(atTop.scrollTop).toBe(0);
 
-  await useChip(page, '看一下实时吞吐量');
+  await useChip(page, '看看出水实时流量');
   await waitSettled(page, 1);
 
   const stillAtTop = await chatScroll(page);
@@ -249,7 +249,7 @@ test('★ 新消息自动滚到底；用户翻上去之后不拽回来，滚回�
 
   // ---- ③ 滚回底部 → 再来的新消息**重新跟上** ----
   await scrollChatTo(page, 'bottom');
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
   await waitSettled(page, 1);
 
   const followedAgain = await chatScroll(page);
@@ -261,13 +261,15 @@ test('★ 新消息自动滚到底；用户翻上去之后不拽回来，滚回�
 test('兜底剧本：不画图，只回文字（绘图区保持原样）', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
-  const state = await useChip(page, '今天天气怎么样');
+  // 这句问的是**水务的事**，但剧本里没有对应画法 —— 兜底与"跑题"无关，
+  // 它守的是"认不出来的话就只回文字、别乱动图"。
+  const state = await useChip(page, '出水要达到什么标准');
 
   await expect(page.locator(TOOL_ENTRY)).toHaveCount(0);
   expect(state.sharedState).toBeNull();
   // 本地乐观插入的用户消息 + Agent 的回复
   expect(state.items).toHaveLength(2);
-  expect(state.items[1].text).toContain('今天天气怎么样');
+  expect(state.items[1].text).toContain('出水要达到什么标准');
 
   // ★ "不画图"不等于"把绘图区清空" —— 刚才那张工艺图还在，只是没有新的图层被挂上
   const stage = await readStage(page);
@@ -280,8 +282,8 @@ test('连续两轮对话共用同一个 thread，条目各自独立', async ({ p
   const errors = collectErrors(page);
   await page.goto('/');
 
-  const first = await useChip(page, '看看各渠道的月度销量');
-  const second = await useChip(page, '看一下实时吞吐量');
+  const first = await useChip(page, '看看出水 COD 的趋势');
+  const second = await useChip(page, '看看出水实时流量');
 
   expect(second.threadId).toBe(first.threadId);
   expect(second.runId).not.toBe(first.runId);
@@ -298,7 +300,7 @@ test('连续两轮对话共用同一个 thread，条目各自独立', async ({ p
 
 test('打字追问也能触发（对话入口没被图交互顶掉）', async ({ page }) => {
   await page.goto('/');
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
 
   const state = await settleAfter(page, async () => {
     await page.fill('#input', '换个说法再看看');

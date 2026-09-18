@@ -109,43 +109,62 @@ describe('readDiagnostics', () => {
 
 describe('buildPlan 剧本选择', () => {
   it('同样的说法永远选到同一个剧本（确定性是 e2e 的前提）', () => {
-    const once = buildPlan({ message: '看看各渠道的月度销量', hasDiagnostics: false });
-    const twice = buildPlan({ message: '看看各渠道的月度销量', hasDiagnostics: false });
+    const once = buildPlan({ message: '看看出水 COD 的趋势', hasDiagnostics: false });
+    const twice = buildPlan({ message: '看看出水 COD 的趋势', hasDiagnostics: false });
     expect(once).toEqual(twice);
   });
 
-  it('销量 → 柱状图 + 指着 3 月讲', () => {
-    const plan = buildPlan({ message: '看看各渠道的月度销量', hasDiagnostics: false });
+  /**
+   * 这张图表必须**与工艺图有业务关系**（2026-09-18 改）：题材是图上某个单元的运行数据，
+   * 而且带 `anchor` 指向那个单元 —— 否则它浮在工艺图上就是"硬凑的一屏界面"。
+   */
+  it('出水 COD → 柱状图 + 锚定到在线监测仪 + 指着尖峰讲', () => {
+    const plan = buildPlan({ message: '看看出水 COD 的趋势', hasDiagnostics: false });
     expect(toolOf(plan)).toBe(RENDER_CHART_TOOL);
     expect(payloadOf(plan).kind).toBe('bar');
-    expect(plan.beats.some((b) => b.pointAt === '3月')).toBe(true);
+    // 卡片要锚定到图上的那个单元（否则它浮在工艺图上没有着落）
+    expect(plan.anchor).toEqual({ value: 'codAnalyzer', label: 'AIT-106' });
+    expect(payloadOf(plan).title).toContain('COD');
+    expect(plan.beats.some((b) => b.pointAt === '9-15')).toBe(true);
+  });
+
+  it('老说法（销量）仍然能被听懂 —— 关键词表演进不该让旧话失灵', () => {
+    const plan = buildPlan({ message: '看看各渠道的月度销量', hasDiagnostics: false });
+    expect(toolOf(plan)).toBe(RENDER_CHART_TOOL);
+    expect(plan.anchor?.value).toBe('codAnalyzer');
   });
 
   it('实时 → 折线 + 逐拍追加数据', () => {
-    const plan = buildPlan({ message: '看一下实时吞吐量', hasDiagnostics: false });
+    const plan = buildPlan({ message: '看看出水实时流量', hasDiagnostics: false });
     expect(payloadOf(plan).kind).toBe('line');
     expect(plan.beats.filter((b) => b.appendRows).length).toBe(3);
+    expect(plan.anchor?.value).toBe('meter');
+    // 量级按 10 万 m³/日折算（日均 ≈ 4167 m³/h），不是老题材那套两位数的"吞吐"
+    expect(payloadOf(plan).title).toContain('m³/h');
+    expect(payloadOf(plan).data.rows[0][1]).toBeGreaterThan(1000);
   });
 
   it('故意画错 → 第一次吐的是坏 DSL（列名不存在）', () => {
     const plan = buildPlan({ message: '故意画错', hasDiagnostics: false });
-    expect(payloadOf(plan).encoding.y).toBe('销售额');
-    expect(payloadOf(plan).data.columns).not.toContain('销售额');
+    expect(payloadOf(plan).encoding.y).toBe('COD浓度');
+    expect(payloadOf(plan).data.columns).not.toContain('COD浓度');
   });
 
   it('带诊断进来 → 吐修正版，列名回到真的那一列', () => {
     const plan = buildPlan({ message: '随便说点什么', hasDiagnostics: true });
-    expect(payloadOf(plan).encoding.y).toBe('销量');
-    expect(payloadOf(plan).data.columns).toContain('销量');
+    expect(payloadOf(plan).encoding.y).toBe('COD');
+    expect(payloadOf(plan).data.columns).toContain('COD');
   });
 
   it('诊断优先于关键词：修复轮里说什么都走修复', () => {
-    const plan = buildPlan({ message: '看看各渠道的月度销量', hasDiagnostics: true });
-    expect(payloadOf(plan).encoding.y).toBe('销量');
+    const plan = buildPlan({ message: '看看出水 COD 的趋势', hasDiagnostics: true });
+    expect(payloadOf(plan).encoding.y).toBe('COD');
   });
 
   it('兜底剧本不画图', () => {
-    expect(buildPlan({ message: '今天天气怎么样', hasDiagnostics: false }).payload).toBeUndefined();
+    // 用**界面上真有的那个按钮**（见 `src/entries/boot.ts` 的 CHIP_GROUPS）当输入：
+    // 它进兜底是因为"剧本里没有对应画法"，不是因为"跑题"。
+    expect(buildPlan({ message: '出水要达到什么标准', hasDiagnostics: false }).payload).toBeUndefined();
   });
 });
 
@@ -204,14 +223,16 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
 
   it('★ 含「流」的水务问法不会被流式剧本抢走', () => {
     // 回归：水务分支必须排在 `/实时|趋势|流|…/` **之前**，
-    // 否则"工艺流程"里的"流"会把这条问法判成实时吞吐量
+    // 否则"工艺流程"里的"流"会把这条问法判成实时流量
     for (const text of ['看看工艺流程', '污水处理工艺流程', 'AAO 工艺流程图']) {
       const plan = buildPlan({ message: text, hasDiagnostics: false });
       expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
     }
-    // 反向：真的问吞吐量还是要走流式剧本
-    const streaming = buildPlan({ message: '看一下实时吞吐量', hasDiagnostics: false });
+    // 反向：真的问流量还是要走流式剧本（新旧两种问法都要认）
+    const streaming = buildPlan({ message: '看看出水实时流量', hasDiagnostics: false });
     expect(toolOf(streaming)).toBe(RENDER_CHART_TOOL);
+    const legacy = buildPlan({ message: '看一下实时吞吐量', hasDiagnostics: false });
+    expect(toolOf(legacy)).toBe(RENDER_CHART_TOOL);
   });
 
   it('节拍里有指着讲的单元 id，且都能在图里找到', () => {
@@ -460,6 +481,9 @@ describe('人机回环：中断与 resume', () => {
     expect(toolOf(plan)).toBe(COLLECT_INPUT_TOOL);
     expect(payloadOf(plan).kind).toBe('form');
     expect(payloadOf(plan).fields.length).toBeGreaterThan(0);
+    // 表单是"对图上某台泵的操作"，所以必须锚定到它（否则表单浮在图上没有着落）
+    expect(plan.anchor).toEqual({ value: 'inletPump', label: 'P-101' });
+    expect(payloadOf(plan).title).toContain('P-101');
     expect(plan.interrupt).toBeTruthy();
     expect(plan.interrupt!.id).toBeTruthy();
     expect(plan.interrupt!.reason).toBeTruthy();
@@ -541,7 +565,7 @@ describe('ScriptedAgent', () => {
       .filter((e) => e.type === EventType.TOOL_CALL_ARGS)
       .map((e) => e.delta)
       .join('');
-    expect(JSON.parse(args).encoding.y).toBe('销量');
+    expect(JSON.parse(args).encoding.y).toBe('COD');
   });
 
   it('**带 resume 的输入**：agent 读得到用户填的值', async () => {

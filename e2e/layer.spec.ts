@@ -29,7 +29,7 @@ test('图表图层里有两块画布，各自都画出了内容', async ({ page 
   const errors = collectErrors(page);
   await page.goto('/');
 
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
 
   const stats = await stageStats(page);
   expect(stats.chart, '图表画布应当存在').not.toBeNull();
@@ -64,7 +64,7 @@ test('点控件条上的按钮触发一轮新 run（上行来自第二块画布�
   const errors = collectErrors(page);
   await page.goto('/');
 
-  const before = await useChip(page, '看看各渠道的月度销量');
+  const before = await useChip(page, '看看出水 COD 的趋势');
   const textBefore = before.items.filter((i) => i.kind === 'text').length;
 
   // 「解释这张图」读的是 AG-UI 的 state —— 客户端把当前图表定义回传给了 agent
@@ -79,7 +79,11 @@ test('点控件条上的按钮触发一轮新 run（上行来自第二块画布�
 
   const reply = after.items.filter((i) => i.kind === 'text').slice(-1)[0] as any;
   expect(reply.text, '回复应当是从 state 读出来的图表定义').toContain('state');
-  expect(reply.text).toContain('类型：bar');
+  // 不只是"念了一遍定义"，而是**读出了数据再讲**：均值与峰值都是那张图里的真数
+  // （只有真的拿到 state 里的 rows 才算得出来，靠猜写不出 36.3 这个值）
+  expect(reply.text).toContain('bar');
+  expect(reply.text).toContain('均值 36.3');
+  expect(reply.text).toContain('46');
 
   expect(errors, errors.join('\n')).toEqual([]);
 });
@@ -88,7 +92,7 @@ test('「换个画法」读 state 换类型 —— 同一份数据、同一个�
   const errors = collectErrors(page);
   await page.goto('/');
 
-  const before = await useChip(page, '看看各渠道的月度销量');
+  const before = await useChip(page, '看看出水 COD 的趋势');
   expect(before.sharedState.chart.kind).toBe('bar');
   const rowsBefore = before.sharedState.chart.data.rows.length;
   const stageBefore = await readStage(page);
@@ -121,12 +125,12 @@ test('「换个画法」读 state 换类型 —— 同一份数据、同一个�
 
 test('控件动作照旧走 context 通道（不是拼在用户说的话里）', async ({ page }) => {
   await page.goto('/');
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
 
   const after = await settleAfter(page, async () => {
     await clickWidgetAction(page, 'stream');
     // 气泡里是**发给 agent 的那句话**（按钮文案是短标签，两者本来就不必相同）
-    await expect(page.locator('.msg.user').last()).toContainText('实时吞吐量', { timeout: 5000 });
+    await expect(page.locator('.msg.user').last()).toContainText('实时流量', { timeout: 5000 });
   });
 
   // 「看实时数据」走的是流式剧本：折线 + 逐拍追加
