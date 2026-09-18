@@ -35,7 +35,9 @@
  * 而是"**真的连上了后端**并且跑通了"—— 这比等一个错误强：它同时证明了
  * 那条路上确实有东西在发生。
  */
-import { expect, test, type Page } from '@playwright/test';
+// `./cdp` 平时就是 `@playwright/test`（无头、自己起浏览器），
+// 只有设了 `ICE_CDP_ENDPOINT` 时才改成连你开着的那只 Chrome —— 见 `e2e/cdp.ts`。
+import { expect, test, type Page } from './cdp';
 import {
   TOOL_ENTRY,
   chatScroll,
@@ -84,7 +86,7 @@ test('★ 演示模式：零后端请求，但四类回路全部跑得通', asyn
   // ⚠️ 用 `useChip` 而不是 `chipLocator().click()` + `waitSettled(page, 1)`：
   //    后者会**立刻返回**（eventCount 早就 >= 1 了，状态也还是上一轮的 idle），
   //    于是量到的是"这一轮还没开始"的状态。`settleAfter` 会先记基线再等它涨过基线。
-  const state = await useChip(page, '看看各渠道的月度销量');
+  const state = await useChip(page, '看看出水 COD 的趋势');
   expect(state.status).toBe('idle');
   expect(state.sharedState.chart.kind).toBe('bar');
   expect(state.pointAt, '剧本里的「指着讲」应当也走通了').not.toBeNull();
@@ -97,7 +99,7 @@ test('★ 演示模式：零后端请求，但四类回路全部跑得通', asyn
   expect(ids).not.toContain('primary');
 
   // ---- ⑤ 中断 → 填表 → resume 这条协议通道在演示模式下同样通 ----
-  await chipLocator(page, '要下发指令').click();
+  await chipLocator(page, '给进水泵下发指令').click();
   await waitForState(page, (s) => s.status === 'waiting', undefined, 30_000);
   const waiting = await readState(page);
   expect(waiting.interrupt).toMatchObject({ id: 'confirm-params' });
@@ -133,7 +135,7 @@ test('★ 反面：同一份产物用 ?demo=0 会**真的**走后端（而且跑
   expect(await runMode(page)).toBe('server');
   await expect(page.locator('#meta')).not.toContainText('演示模式');
 
-  const state = await useChip(page, '看看各渠道的月度销量');
+  const state = await useChip(page, '看看出水 COD 的趋势');
   expect(state.status, 'server 模式应当正常跑通（后端是活的）').toBe('idle');
   expect(state.sharedState.chart.kind).toBe('bar');
 
@@ -149,7 +151,7 @@ test('★ 普通产物（不加参数）默认走 server —— 与加这个开�
   expect(await runMode(page), '普通构建的默认模式必须还是 server').toBe('server');
   await expect(page.locator('#meta')).not.toContainText('演示模式');
 
-  const state = await useChip(page, '看看各渠道的月度销量');
+  const state = await useChip(page, '看看出水 COD 的趋势');
   expect(state.status).toBe('idle');
   expect(backendHits.length, '默认模式应当去连后端').toBeGreaterThan(0);
 });
@@ -184,7 +186,7 @@ test('★ 连不上后端时，对话流里要有一张说明卡片（不能只�
   await page.goto('/?demo=0');
   await waitDiagramReady(page);
 
-  await chipLocator(page, '看看各渠道的月度销量').click();
+  await chipLocator(page, '看看出水 COD 的趋势').click();
   await waitForState(page, (s) => s.status === 'error');
 
   // ① 提示必须落在**对话流里**（`#thread` 内），而且给得出下一步动作

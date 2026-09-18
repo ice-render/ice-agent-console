@@ -18,7 +18,8 @@
  * （运行期覆盖，与 `?demo=` 同一套机制）。这样这份 spec 不需要另做一份演示产物，
  * `playwright.config.ts` 的 `webServer` 也不用改。
  */
-import { expect, test, type Page } from '@playwright/test';
+// 同 `demo-mode.spec.ts`：平时等价于 `@playwright/test`，设了 `ICE_CDP_ENDPOINT` 才连 CDP。
+import { expect, test, type Page } from './cdp';
 import { chipLocator, collectErrors, readState, readStage, waitDiagramReady, waitForState } from './helpers';
 
 /** 开页把镜头与高亮的变化**采样**记下来 —— 用来断言"真的推过镜头、真的指过多个单元"。 */
@@ -119,7 +120,7 @@ test('★ 用户一动手就打断自动开演（否则那 19 秒里点什么都
   await waitForState(page, (s) => s.status === 'running', undefined, 20_000);
 
   // 这时候抢它的路：点另一个按钮。不取消的话这一下会被 `running` 护栏静默吞掉。
-  await chipLocator(page, '看看各渠道的月度销量').click();
+  await chipLocator(page, '看看出水 COD 的趋势').click();
 
   // 用户那一轮真的跑起来了并且跑完了
   await waitForState(page, (s) => s.status === 'idle' && s.sharedState?.chart?.kind === 'bar', undefined, 90_000);
@@ -128,7 +129,7 @@ test('★ 用户一动手就打断自动开演（否则那 19 秒里点什么都
   const texts = state.items.filter((i) => i.kind === 'text').map((i) => i.text ?? '');
 
   // ① 用户那句话进了流 —— 这是"没被吞掉"的直接证据
-  expect(texts).toContain('看看各渠道的月度销量');
+  expect(texts).toContain('看看出水 COD 的趋势');
   // ② 被掐掉的自动开演**留下的半截消息保留着**（它是真发生过的事，抹掉反而看不懂）
   expect(texts).toContain('看看污水处理工艺图');
   // ③ 状态不能卡在"运行中"。取消走的是 AbortSignal，transport 对取消是静默返回的，

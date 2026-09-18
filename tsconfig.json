@@ -34,5 +34,5 @@
       "ice-entity-designer": ["../ice-entity-designer"]
     }
   },
-  "include": ["src", "shared", "tests", "e2e", "playwright.config.ts"]
+  "include": ["src", "shared", "tests", "e2e", "playwright.config.ts", "playwright.cdp.config.ts"]
 }
