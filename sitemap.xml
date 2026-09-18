@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ICE Agent Console 的站点地图。
+
+  只有一个 <url>：整站是**一个页面**（换图层不产生新 URL），
+  ?demo= / ?autoplay= / ?theme= 都是同一页的运行期开关，用 index.html 里的
+  rel=canonical 指回根地址，所以不在这里另开条目 —— 给同一份内容列多个 URL
+  反而是"重复内容"的典型来源。
+
+  <lastmod> 由 `scripts/deploy-pages.mjs` 在部署时**按最后一次提交的日期**重写
+  （源码没动就不该假装页面更新过），这里那份是给人看的默认值。
+
+  <image:image> 是图片站点地图扩展：卡片封面也要能被发现。
+-->
+<urlset
+  xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+>
+  <url>
+    <loc>https://ice-render.github.io/ice-agent-console/</loc>
+    <lastmod>2026-09-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://ice-render.github.io/ice-agent-console/og-cover.jpg</image:loc>
+      <image:title>ICE Agent Console：绘图区铺满视口、上面画着污水处理 AAO 工艺流程图</image:title>
+    </image:image>
+  </url>
+</urlset>
