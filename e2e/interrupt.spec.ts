@@ -31,14 +31,14 @@ import {
  * 所以这个 spec 真正要证明的是：**这套语义在前端被正确地实现了一遍** ——
  * 中断进 `waiting`、答复走 `resume`、答复完中断被清掉。
  */
-test('「要下发指令」触发中断：绘图区切成表单、状态进 waiting', async ({ page }) => {
+test('「给进水泵下发指令」触发中断：绘图区切成表单、状态进 waiting', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
 
   const before = await readState(page);
   // 注意：这里**不能用 settleAfter** —— 它等的是 `idle`，而中断轮结束在 `waiting`，
   // 永远等不到。中断要单独等一个状态。
-  await chipLocator(page, '要下发指令').click();
+  await chipLocator(page, '给进水泵下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
   const state = await readState(page);
 
@@ -58,12 +58,15 @@ test('「要下发指令」触发中断：绘图区切成表单、状态进 wait
   expect(stage.active).toBe('form');
   expect(stage.builds.form).toBe(1);
 
-  // 一次只有一层**在显示**。图表 / 表单这两个按需图层互斥（切过来时把对方收掉），
-  // 而工艺图那一层仍然在 —— 它是主视图，设计上永不销毁，只是 `hidden`。
+  // 图表 / 表单这两个**按需图层互斥**（切过来时把对方收掉），但工艺图**一直在显示**
+  // —— 2026-09-18 起它不再被隐藏：卡片浮在它上面，工艺图是主视图，永不销毁也永不隐藏。
   await expect(page.locator(FORM_CANVAS)).toBeVisible();
   await expect(page.locator(CHART_CANVAS)).toHaveCount(0);
   await expect(page.locator(WIDGET_CANVAS)).toHaveCount(0);
-  await expect(page.locator('.stage-layer[data-kind="diagram"] canvas')).toBeHidden();
+  await expect(
+    page.locator('.stage-layer[data-kind="diagram"] canvas'),
+    '表单卡片浮上来时，工艺图仍然显示着'
+  ).toBeVisible();
   expect(stage.layers.sort()).toEqual(['diagram', 'form']);
 
   // 表单**真的画出来了**
@@ -80,7 +83,7 @@ test('必填没填时点提交被拦住：不进已提交、仍在 waiting', asy
   await page.goto('/');
 
   const before = await readState(page);
-  await chipLocator(page, '要下发指令').click();
+  await chipLocator(page, '给进水泵下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 
   // 真实点中画布上的提交按钮（泵站是必填，还没填）
@@ -102,16 +105,40 @@ test('填全后真实点提交：带 resume 开新 run，agent 读得到值', as
   await page.goto('/');
 
   const before = await readState(page);
-  await chipLocator(page, '要下发指令').click();
+  await chipLocator(page, '给进水泵下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 
   const during = await readState(page);
+
+  /**
+   * ★ 提交后**图上要有反应**（2026-09-18 的锚定闭环）。
+   *
+   * 表单是"对进水泵 P-101 的操作"，所以它一出现就锚定到那台泵；提交之后再闪一下 ——
+   * 卡片上的"已提交"是界面内的事，这一下才是"我真的落到图上了"。
+   *
+   * 闪烁只有约 1 秒（6 轮 × 160ms），用轮询去撞会 flaky，所以在页面里挂个采样器记下来。
+   */
+  await page.evaluate(() => {
+    (window as any).__sawBlink = null;
+    const timer = setInterval(() => {
+      const blink = (window as any).__iceAgentConsole.diagramBlink();
+      if (blink && blink.id) {
+        (window as any).__sawBlink = blink.id;
+        clearInterval(timer);
+      }
+    }, 40);
+  });
 
   const after = await settleAfter(page, async () => {
     await fillForm(page, { station: 'pump-2', mode: 'manual', flow: 1200, note: '例检' });
     await clickFormSubmit(page);
     await expect(page.locator('.msg.user').last()).toContainText('已提交表单', { timeout: 5000 });
   });
+
+  expect(
+    await page.evaluate(() => (window as any).__sawBlink),
+    '提交之后图上那台泵应当闪一下（锚定闭环）'
+  ).toBe('inletPump');
 
   // ---- 中断被答复了 ----
   expect(after.interrupt, '答复完中断要被清掉').toBeNull();
@@ -140,12 +167,12 @@ test('填全后真实点提交：带 resume 开新 run，agent 读得到值', as
 test('图表与表单能在同一条时间线里各留一条条目（绘图区只显示后者）', async ({ page }) => {
   await page.goto('/');
 
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
   await expect(page.locator(TOOL_ENTRY)).toHaveCount(1);
   expect((await readStage(page)).builds.chart).toBe(1);
 
   const before = await readState(page);
-  await chipLocator(page, '要下发指令').click();
+  await chipLocator(page, '给进水泵下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 
   // 时间线是追加的：**两条条目**都在，按顺序是图表在前、表单在后
@@ -172,7 +199,7 @@ test('图表与表单能在同一条时间线里各留一条条目（绘图区�
 /** 触发中断拿到表单，停在 `waiting`。 */
 async function openForm(page: import('@playwright/test').Page): Promise<void> {
   const before = await readState(page);
-  await chipLocator(page, '要下发指令').click();
+  await chipLocator(page, '给进水泵下发指令').click();
   await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, before.eventCount);
 }
 

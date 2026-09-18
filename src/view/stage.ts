@@ -57,6 +57,7 @@ import { ChartAdapter } from './chart-adapter';
 import { DiagramLayer, type DiagramRegion } from './diagram-layer';
 import { FormLayer } from './form-layer';
 import { WidgetLayer, type WidgetAction } from './widget-layer';
+import { shieldFromCanvas } from './dom-shield';
 import { formatDiagramDiagnostics, validateDiagramDsl, type DiagramDiagnostic } from '../domain/diagram/validate';
 
 export type StageLayerKind = 'diagram' | 'chart' | 'form';
@@ -93,6 +94,14 @@ interface LayerHost {
   readonly kind: StageLayerKind;
   /** 该层的根元素（`.stage-layer`），显隐就是切它的 `hidden`。 */
   readonly el: HTMLElement;
+  /**
+   * 该层**看得见的那块卡片**（工艺图没有卡片，所以可选）。
+   *
+   * 图表层是"层根即卡片"，表单层是"层根整屏透明 + 里面那块 `.stage-form` 才是卡片"——
+   * 点「✕」与装指针屏蔽都要落在**卡片**上，落在层根上会跑到屏幕角落（表单那次就是）
+   * 或者挡住卡片里面的画布（图表那次就是）。
+   */
+  readonly cardEl?: HTMLElement;
   fit(width: number, height: number): void;
   destroy(): void;
 }
@@ -129,10 +138,31 @@ export class StageView {
   /** 当前 chart 层是给哪次 tool call 用的（控件条上行时要带上它）。 */
   private chartToolCallId = '';
 
+  /**
+   * 当前卡片锚定在工艺图的哪个单元上（`ice/anchor`）。
+   *
+   * 记在视图这一层而不是每次去问归约状态：提交表单时要**立刻**在图上给反馈，
+   * 而那时手上只有 toolCallId（见 `anchorFeedback()`）。
+   */
+  private lastAnchor: string | null = null;
+
   /** 各层建过几次。新建一次 +1，复用不加 —— e2e 用它断言"切回来没重画"。 */
   private readonly builds: Record<StageLayerKind, number> = { diagram: 0, chart: 0, form: 0 };
   /** 各层被显示过几次（含复用）。 */
   private readonly shows: Record<StageLayerKind, number> = { diagram: 0, chart: 0, form: 0 };
+
+  /**
+   * 浮层下面那层"接住点击"的遮罩。
+   *
+   * 它做两件事，缺一不可：
+   * ① **吃掉指针事件**：卡片期间底下的工艺图不该还能拖拽缩放 —— 半透明卡片下层能动，
+   *    看着就像"卡住了"；而且它同时挡住了工艺图上那些被压住的按钮（比如「看整张图」）。
+   * ② **提供"点空白处收起"这个手势**：没有任何收起入口的话，用户只能再发一句话把图层顶掉。
+   *
+   * 目前**不压暗**（`--stage-scrim-bg` 默认透明）：工艺图本来就该看得见。
+   * 想加一层淡淡的暗色，只改那一个 CSS 变量即可。
+   */
+  private scrim: HTMLElement | null = null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -265,12 +295,19 @@ export class StageView {
   /**
    * 显示某个图层。
    *
-   * 同时把**别的**按需图层收掉 —— 除了工艺图。理由是"按需图层留着也没用"：
-   * 一次只有一种界面在前台，而图表 / 表单都是"这次 tool call 的产物"，
-   * 下次来的时候本来就是整份新数据（图表会被 `setOption` 覆盖、表单会被重建），
-   * 留着只是白占一块画布 + 一个 ICE 实例。
+   * ## 工艺图**永远在**，图表 / 表单是浮在它上面的卡片
    *
-   * 工艺图**不收** —— 它是这个应用的主视图，而且"切走再切回来不重画"正是需求里点名的。
+   * 原先这里是"一次只显示一层"：切到图表就把工艺图 `hidden` 掉。结果是屏幕上一片空白
+   * 加一张孤零零的图表 —— 用户的第一反应是"我那张工艺图被清掉了"（其实它还在 DOM 里，
+   * 只是没显示）。现在改成：
+   *
+   * - **工艺图不再被隐藏**：它是主视图，任何时候都看得见；
+   * - chart / form 变成**浮在它上面的卡片**（CSS 给了背景 / 圆角 / 阴影），互相之间仍然互斥；
+   * - 卡片期间在下面垫一层遮罩（见 `scrim`）：吃掉指针事件，并提供"点空白收起"。
+   *
+   * 仍然保留的旧语义：**按需图层只留一个** —— 图表 / 表单都是"这次 tool call 的产物"，
+   * 下次来时本来就是整份新数据（图表 `setOption` 覆盖、表单重建），留着只是白占画布与实例。
+   * 工艺图依旧**不销毁**，"切走再切回来不重画"这条需求没有被破坏。
    */
   show(kind: StageLayerKind): void {
     this.__measure();
@@ -278,9 +315,11 @@ export class StageView {
     if (!host) return;
 
     this.__dropOthers(kind);
-    for (const [k, h] of this.layers) h.el.hidden = k !== kind;
+    // 工艺图**不参与隐藏**：无论前台是哪种卡片，它都在底下显示着。
+    for (const [k, h] of this.layers) h.el.hidden = k !== kind && k !== 'diagram';
     this.active = kind;
     this.shows[kind]++;
+    this.__setScrim(kind !== 'diagram', host);
     // 先取消隐藏**再**量尺寸：display:none 的元素 clientWidth 是 0，
     // 顺序反了会画出一张 0 宽的图（这种错在 e2e 里表现为"canvas 存在但全白"）。
     host.fit(this.cssWidth, this.cssHeight);
@@ -290,8 +329,57 @@ export class StageView {
     if (kind === 'diagram' && this.__syncDiagramRegion()) this.diagram()?.reframe();
   }
 
+  /**
+   * 收起浮层，回到"只有工艺图"。
+   *
+   * 两个入口都走这里：卡片右上角的 `✕`、以及点卡片外面的遮罩。
+   * 返回是否真的收掉了（当前没有浮层时返回 false，调用方据此判断要不要重绘）。
+   */
+  dismissOverlay(): boolean {
+    if (this.active !== 'chart' && this.active !== 'form') {
+      return false;
+    }
+    // 只收按需图层；`__dropOthers('diagram')` 会把 chart / form 都收掉，工艺图豁免
+    this.__dropOthers('diagram');
+    for (const [, h] of this.layers) h.el.hidden = false;
+    this.__setScrim(false);
+    this.active = 'diagram';
+    this.shows.diagram++;
+    return true;
+  }
+
   activeKind(): StageLayerKind | null {
     return this.active;
+  }
+
+  /**
+   * **把卡片与工艺图关联起来**：高亮某个单元并让镜头跟过去。
+   *
+   * 这是"浮层不再像空中楼阁"的那一步 —— 卡片浮起来的同时，图上告诉你在说哪一个东西。
+   * 实现直接复用「指着讲」那条通路（`DiagramLayer.pointAt`：高亮 + 平移镜头），
+   * 不新造一套视觉：两者要的本来就是同一件事，只是**语义**不同
+   * （`point-at` 是"讲到这里"，`anchor` 是"这张卡片说的是它"，见 `EVT_ANCHOR`）。
+   *
+   * 认不出这个标识时返回 false（模型可能给了一个图上没有的位号）——
+   * 不报错、也不改镜头，卡片照样显示。
+   */
+  anchor(value: string, opts: { blink?: boolean } = {}): boolean {
+    const layer = this.diagram();
+    if (!layer || !value) return false;
+    const hit = layer.pointAt(value, opts);
+    if (hit) this.lastAnchor = value;
+    return hit;
+  }
+
+  /**
+   * 表单提交后在**图上**给一次反馈：把当初锚定的那个单元闪一下。
+   *
+   * 为什么值得单独做：填完表点提交，如果图上一点反应都没有，用户没法确认
+   * "我刚才那一下真的落到某个东西上了" —— 卡片上的"已提交"是界面内的事，
+   * 而这条把它**落回工艺图**，闭环才成立。
+   */
+  anchorFeedback(): boolean {
+    return this.lastAnchor ? this.anchor(this.lastAnchor, { blink: true }) : false;
   }
 
   // -------------------------------------------------------------------------
@@ -422,6 +510,8 @@ export class StageView {
   info(): {
     active: StageLayerKind | null;
     layers: StageLayerKind[];
+    /** 当前**真的显示着**的层（工艺图 + 可能压在上面的那张卡片）。 */
+    visible: StageLayerKind[];
     builds: Record<StageLayerKind, number>;
     shows: Record<StageLayerKind, number>;
     canvasCount: number;
@@ -431,6 +521,9 @@ export class StageView {
     return {
       active: this.active,
       layers: Array.from(this.layers.keys()),
+      visible: Array.from(this.layers.entries())
+        .filter(([, host]) => !host.el.hidden)
+        .map(([kind]) => kind),
       builds: { ...this.builds },
       shows: { ...this.shows },
       canvasCount: this.root.querySelectorAll('canvas').length,
@@ -555,7 +648,53 @@ export class StageView {
       prev.el.remove();
     }
     this.layers.set(kind, host);
+    if (kind !== 'diagram') {
+      this.__attachCloseButton(host);
+    }
     this.root.append(host.el);
+  }
+
+  /**
+   * 给浮层卡片加一个「收起」按钮（右上角）。
+   *
+   * 为什么必须有：卡片出来之后，用户回到"纯工艺图"的唯一办法原本是**再发一句话**
+   * 让别的图层把它顶掉 —— 那是个不成立的交互（看看东西还得再使唤一次 agent）。
+   *
+   * 屏蔽只放行**画布里**的事件（`passCanvasEvents`）：卡片自己的背景 / 按钮上的点击
+   * 不能让底下那张工艺图以为"用户在点我"，但图表画布上的悬停必须照常冒泡 ——
+   * `ice-chart` 的交互是靠 window 级广播 + `isOverCanvas()` 过滤的，掐掉就全哑了。
+   */
+  private __attachCloseButton(host: LayerHost): void {
+    const card = host.cardEl ?? host.el;
+    shieldFromCanvas(card, { passCanvasEvents: true });
+    if (card.querySelector('.stage-close')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'stage-close';
+    btn.textContent = '✕';
+    btn.title = '收起，回到工艺图';
+    btn.setAttribute('aria-label', '收起，回到工艺图');
+    btn.addEventListener('click', () => this.dismissOverlay());
+    card.append(btn);
+  }
+
+  /** 显示 / 收起遮罩。显示时要把它插到卡片**之前**（DOM 顺序 = 叠放顺序）。 */
+  private __setScrim(on: boolean, host?: LayerHost): void {
+    if (!on) {
+      if (this.scrim) this.scrim.hidden = true;
+      return;
+    }
+    if (!this.scrim) {
+      const el = document.createElement('div');
+      el.className = 'stage-scrim';
+      // 遮罩上没有任何画布：全挡。挡掉之后底下的工艺图收不到指针，
+      // 于是"卡片期间图不能拖"这件事不需要额外的开关。
+      shieldFromCanvas(el);
+      el.addEventListener('click', () => this.dismissOverlay());
+      this.scrim = el;
+    }
+    if (host) this.root.insertBefore(this.scrim, host.el);
+    this.scrim.hidden = false;
   }
 
   /**
@@ -643,6 +782,8 @@ class DiagramHost implements LayerHost {
 class ChartHost implements LayerHost {
   readonly kind = 'chart' as const;
   readonly el: HTMLElement;
+  /** 图表层的层根**就是**那张卡片（CSS 给的背景 / 圆角 / 阴影）。 */
+  readonly cardEl: HTMLElement;
 
   private readonly chartWrap: HTMLElement;
   private readonly widgetWrap: HTMLElement;
@@ -660,6 +801,7 @@ class ChartHost implements LayerHost {
     private readonly toolCallId: () => string
   ) {
     this.el = layerEl('chart');
+    this.cardEl = this.el;
 
     this.chartWrap = document.createElement('div');
     this.chartWrap.className = 'stage-chart';
@@ -741,6 +883,8 @@ class ChartHost implements LayerHost {
 class FormHost implements LayerHost {
   readonly kind = 'form' as const;
   readonly el: HTMLElement;
+  /** 表单层的层根是整屏透明的，**卡片是里面那块 `.stage-form`**。 */
+  readonly cardEl: HTMLElement;
   readonly diagnostics: string | null;
 
   private readonly wrap: HTMLElement;
@@ -752,6 +896,7 @@ class FormHost implements LayerHost {
     this.el = layerEl('form');
     this.wrap = document.createElement('div');
     this.wrap.className = 'stage-form';
+    this.cardEl = this.wrap;
 
     let diagnostics: string | null = null;
     this.layer = new FormLayer(dsl, this.__available(), {

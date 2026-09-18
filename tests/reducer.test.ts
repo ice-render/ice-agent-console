@@ -19,6 +19,8 @@ import {
 } from '../src/domain/agui/reducer';
 import { CHART_ROWS_PATH } from '../src/domain/agui/state-patch';
 import { EVT_POINT_AT, EVT_POINT_CLEAR, EVT_ZOOM } from '../shared/contract';
+import { EVT_REASONING } from '../shared/contract';
+import { EVT_ANCHOR } from '../shared/contract';
 
 /** 折叠一串动作，顺便收集所有 effect。 */
 function run(actions: Action[]) {
@@ -535,5 +537,117 @@ describe('reduceAll', () => {
       { type: EventType.RUN_FINISHED, threadId: 't1', runId: 'r1' },
     ];
     expect(reduceAll(initialState('t1'), actions)).toEqual(run(actions).state);
+  });
+});
+
+/**
+ * 推理模型的思考过程（`EVT_REASONING`）。
+ *
+ * 它是**过程**不是消息：同一次模型调用的几十个 delta 必须收进同一条，
+ * 正文一开始就自动收口 —— 否则面板上会同时挂着"思考中"和正文，看着像两件事在并行。
+ */
+describe('思考过程（reasoning）', () => {
+  const think = (delta: string, phase = 0): Action =>
+    ({ type: EventType.CUSTOM, name: EVT_REASONING, value: { delta, phase } }) as Action;
+
+  it('同一次调用的多个 delta 聚成一条，并按 phase 分开', () => {
+    const { state } = run([
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' },
+      think('用户在问'),
+      think('销量。'),
+      think('第二次调用的思考', 1),
+    ]);
+    const items = state.items.filter((item) => item.kind === 'reasoning') as any[];
+    expect(items).toHaveLength(2);
+    expect(items[0].text).toBe('用户在问销量。');
+    expect(items[0].phase).toBe(0);
+    expect(items[1].phase).toBe(1);
+    expect(items[0].done).toBe(false);
+  });
+
+  it('正文一开始，思考就自动收口（不等 run 结束）', () => {
+    const { state } = run([
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' },
+      think('想好了。'),
+      { type: EventType.TEXT_MESSAGE_START, messageId: 'm1', role: 'assistant' },
+      { type: EventType.TEXT_MESSAGE_CONTENT, messageId: 'm1', delta: '画好了' },
+    ]);
+    const reasoning: any = state.items.find((item) => item.kind === 'reasoning');
+    expect(reasoning.done).toBe(true);
+    expect(state.items.some((item) => item.kind === 'text' && item.text === '画好了')).toBe(true);
+  });
+
+  it('只思考不说话的那种轮次：RUN_FINISHED 也会收口', () => {
+    const { state } = run([
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' },
+      think('想了半天没说话。'),
+      { type: EventType.RUN_FINISHED, threadId: 't1', runId: 'r1' },
+    ]);
+    const reasoning: any = state.items.find((item) => item.kind === 'reasoning');
+    expect(reasoning.done).toBe(true);
+    expect(state.status).toBe('idle');
+  });
+
+  it('跨轮不复用同一条（id 里带 runId）', () => {
+    let state = run([
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' },
+      think('第一轮'),
+      { type: EventType.RUN_FINISHED, threadId: 't1', runId: 'r1' },
+    ]).state;
+    // 第二轮接着上一轮的状态走（真实使用就是这样），只是 runId 变了
+    for (const action of [
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r2' },
+      think('第二轮'),
+    ] as Action[]) {
+      state = reduce(state, action).state;
+    }
+    const reasoning = state.items.filter((item) => item.kind === 'reasoning') as any[];
+    const ids = reasoning.map((item) => item.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(reasoning[0].text).toBe('第一轮');
+    expect(reasoning[1].text).toBe('第二轮');
+  });
+});
+
+/**
+ * 卡片锚定（`EVT_ANCHOR`）：卡片浮在工艺图上时，它说的是图上哪个单元。
+ *
+ * 与「指着讲」分开存是**刻意的**：指着讲会被下一条命令改写，而锚定要一直留到
+ * 另一张卡片把它换掉 —— 表单提交后的反馈（"回到当初那个单元闪一下"）靠它。
+ */
+describe('卡片锚定（anchor）', () => {
+  const anchor = (value: any, label?: string): Action =>
+    ({ type: EventType.CUSTOM, name: EVT_ANCHOR, value: { value, ...(label ? { label } : {}) } }) as Action;
+
+  it('存进状态并吐一条 anchor effect（视图据此高亮 + 镜头跟过去）', () => {
+    const { state, effects } = run([
+      { type: EventType.RUN_STARTED, threadId: 't1', runId: 'r1' },
+      anchor('codAnalyzer', 'AIT-106'),
+    ]);
+    expect(state.anchor).toMatchObject({ value: 'codAnalyzer', label: 'AIT-106' });
+    expect(effects.filter((e) => e.type === 'anchor')).toEqual([
+      { type: 'anchor', value: 'codAnalyzer', label: 'AIT-106' },
+    ]);
+  });
+
+  it('同一个值再锚一次也要重发（seq 递增）—— 修完之后要重新指回去', () => {
+    const { state, effects } = run([anchor('codAnalyzer'), anchor('codAnalyzer')]);
+    expect(state.anchor!.seq).toBe(2);
+    expect(effects.filter((e) => e.type === 'anchor')).toHaveLength(2);
+  });
+
+  it('它不是 pointAt：锚定之后再来一次「指着讲」不会把锚定冲掉', () => {
+    const { state } = run([
+      anchor('codAnalyzer', 'AIT-106'),
+      { type: EventType.CUSTOM, name: EVT_POINT_AT, value: { value: '9-15' } } as Action,
+    ]);
+    expect(state.pointAt!.value).toBe('9-15');
+    expect(state.anchor!.value).toBe('codAnalyzer');
+  });
+
+  it('空值 / 非字符串当没给（模型可能给个空对象）', () => {
+    const { state, effects } = run([anchor(''), anchor(undefined)]);
+    expect(state.anchor).toBeNull();
+    expect(effects.filter((e) => e.type === 'anchor')).toHaveLength(0);
   });
 });

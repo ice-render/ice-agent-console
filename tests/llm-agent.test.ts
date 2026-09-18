@@ -101,6 +101,44 @@ const CHART_ARGS = {
 };
 
 describe('buildLlmPlan：模型的选择 → 计划（纯函数，不碰网络）', () => {
+  /**
+   * 锚定：模型在参数顶层给 `anchor`，说明这张卡片关联图上的哪个单元。
+   *
+   * 两条都要钉住：① 它被**摘出来**放进 plan；② 它**不能留在 payload 里** ——
+   * DSL 校验只认自己的字段，多一个键会被判不合法，然后走成"自修复"，
+   * 把一张本来好好的卡片修没（这个坑不报错，只表现为"卡片莫名其妙不见了"）。
+   */
+  it('模型给了 anchor → 摘进 plan，且**不进** payload', () => {
+    const args = { ...CHART_ARGS, anchor: { value: 'codAnalyzer', label: 'AIT-106' } };
+    const plan: any = buildLlmPlan({ text: '', toolCall: { name: 'render_chart', args, id: 'c1' } }, null, 'r1');
+    expect(plan.anchor).toEqual({ value: 'codAnalyzer', label: 'AIT-106' });
+    expect(plan.payload.anchor).toBeUndefined();
+    expect(plan.payload.title).toBe(CHART_ARGS.title);
+  });
+
+  it('anchor 容忍几种写法：字符串 / id / unit / tag；认不出就当没给', () => {
+    const withAnchor = (anchor: any) => {
+      const plan: any = buildLlmPlan(
+        { text: '', toolCall: { name: 'render_chart', args: { ...CHART_ARGS, anchor }, id: 'c1' } },
+        null,
+        'r1'
+      );
+      return plan.anchor;
+    };
+    expect(withAnchor('meter')).toEqual({ value: 'meter' });
+    expect(withAnchor({ id: 'meter' })).toEqual({ value: 'meter' });
+    expect(withAnchor({ unit: 'meter', label: 'FIT-101' })).toEqual({ value: 'meter', label: 'FIT-101' });
+    expect(withAnchor({ tag: 'FIT-101' })).toEqual({ value: 'FIT-101' });
+    // 认不出 → 当没给（宁可少一层呼应，也不要带着半个锚定往下走）
+    expect(withAnchor({})).toBeUndefined();
+    expect(withAnchor(42)).toBeUndefined();
+  });
+
+  it('没给 anchor 的卡片不带这个字段（图卡 / 普通图表都一样）', () => {
+    const plan: any = buildLlmPlan({ text: '', toolCall: { name: 'render_chart', args: CHART_ARGS, id: 'c1' } }, null, 'r1');
+    expect(plan.anchor).toBeUndefined();
+  });
+
   it('没调工具 → 纯文字计划，文字放 `beats`（不是 `intro`）', () => {
     const plan: any = buildLlmPlan({ text: '我还不支持这个。', toolCall: null }, null, 'r1');
     expect(plan.tool).toBeUndefined();
@@ -348,7 +386,7 @@ describe('LlmAgent 真去调那个假接口', () => {
   it('模型直接回一句话（没调工具）→ 只有文字，没有卡片', async () => {
     const api = await startFakeApi([{ text: '我还没接上这个能力。' }]);
     try {
-      const events = await collect(new LlmAgent(CONFIG(api.baseUrl), NO_PACE), inputOf('今天天气'));
+      const events = await collect(new LlmAgent(CONFIG(api.baseUrl), NO_PACE), inputOf('出水要达到什么标准'));
       expect(api.calls).toHaveLength(1); // 没调工具就不再问第二次
       expect(events.some((e) => e.type === 'TOOL_CALL_START')).toBe(false);
       expect(events.some((e) => e.type === 'STATE_SNAPSHOT')).toBe(false);

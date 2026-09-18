@@ -18,6 +18,7 @@ import { chunkString, planToEvents, type ToolCardPlan, type ToolCallCardPlan,
 import {
   COLLECT_INPUT_TOOL,
   EVT_POINT_AT,
+  EVT_ANCHOR,
   RENDER_CHART_TOOL,
   STATE_CHART_KEY,
   STATE_FORM_KEY,
@@ -136,6 +137,39 @@ describe('事件顺序（先画后讲）', () => {
     const seq = types(chartPlan({ beats: [{ text: 'x' }] }));
     expect(seq[0]).toBe(EventType.RUN_STARTED);
     expect(seq[seq.length - 1]).toBe(EventType.RUN_FINISHED);
+  });
+
+  /**
+   * 锚定（卡片 ↔ 工艺图上的单元）：
+   * - 必须在 `STATE_SNAPSHOT` **之后** —— 图得先在，才有"指回去"这回事；
+   * - 也必须在解说之前 —— 镜头先跟过去，再开始讲那一拍；
+   * - 没给 anchor 的卡片（比如图卡）**不许**凭空发一条。
+   */
+  it('anchor 排在快照之后、解说之前；没给就不发', () => {
+    const withAnchor = planToEvents(
+      chartPlan({ anchor: { value: 'codAnalyzer', label: 'AIT-106' }, beats: [{ text: '解说' }] }),
+      { threadId: 't1', runId: 'r1' }
+    );
+    const anchorAt = withAnchor.findIndex((e) => e.type === EventType.CUSTOM && e.name === EVT_ANCHOR);
+    const snapshotAt = withAnchor.findIndex((e) => e.type === EventType.STATE_SNAPSHOT);
+    const firstBeatAt = withAnchor.findIndex(
+      (e, i) => e.type === EventType.TEXT_MESSAGE_START && i > snapshotAt
+    );
+    expect(anchorAt).toBeGreaterThan(snapshotAt);
+    expect(anchorAt).toBeLessThan(firstBeatAt);
+    expect(withAnchor[anchorAt].value).toEqual({ value: 'codAnalyzer', label: 'AIT-106' });
+
+    const without = planToEvents(chartPlan({ beats: [{ text: '解说' }] }), { threadId: 't1', runId: 'r1' });
+    expect(without.some((e) => e.type === EventType.CUSTOM && e.name === EVT_ANCHOR)).toBe(false);
+  });
+
+  it('label 是可选的：只给 value 时载荷里就不带 label', () => {
+    const events = planToEvents(chartPlan({ anchor: { value: 'meter' }, beats: [{ text: 'x' }] }), {
+      threadId: 't1',
+      runId: 'r1',
+    });
+    const anchor = events.find((e) => e.type === EventType.CUSTOM && e.name === EVT_ANCHOR);
+    expect(anchor.value).toEqual({ value: 'meter' });
   });
 
   it('没有 payload 时不发 tool call / snapshot', () => {

@@ -16,6 +16,7 @@
  */
 import { EventType } from '@ag-ui/core';
 import { EVT_POINT_AT, EVT_ZOOM, type ZoomDirection } from '../../shared/contract';
+import { EVT_ANCHOR } from '../../shared/contract';
 
 /** 事件在这里是"开放结构 + 必有 type"。字段名的正确性由 tests/ 里的官方 schema 校验兜底。 */
 export type AnyEvent = { type: EventType } & Record<string, any>;
@@ -100,6 +101,14 @@ interface PlanCommon {
   /** 分片粒度。默认值是按"人眼能看出在拼"调的；测试里会调大。 */
   textChunk?: number;
   argsChunk?: number;
+  /**
+   * 这张卡片**关联工艺图上的哪个单元**（单元 id 或位号）。
+   *
+   * 给了就在卡片渲染之后把那个单元高亮 + 镜头跟过去 —— 卡片浮在图上时，
+   * "它说的是图上哪个东西"就看得见了（见 `shared/contract.ts` 的 `EVT_ANCHOR`）。
+   * 图卡自己不需要它（图卡就是主视图）；图表 / 表单这类"外挂界面"才需要。
+   */
+  anchor?: { value: string; label?: string };
 }
 
 /** 一次 tool call 卡片。 */
@@ -137,6 +146,21 @@ export interface PlanContext {
   id?: (prefix: string) => string;
 }
 
+/**
+ * 发事件的开关（只有**流式**那条路会用到）。
+ *
+ * 接真模型之后多了一种可能：正文是**边生成边发**的（见 `llm.ts` 的流式 run）。
+ * 那种情况下事件序列里就不该再有这轮文字 —— 否则同一句话会被说两遍。
+ * 但卡片、指点、缩放、数据补丁这些"动作"仍然要按原顺序补上，
+ * 所以需要的不是"跳过整个 planToEvents"，而是"跳过其中的文字"。
+ */
+export interface PlanEmitOptions {
+  /** 正文已经流式发过了：不再发 `intro` 与各拍的文字（动作照发）。 */
+  streamedText?: boolean;
+  /** 调用方已经发过 `RUN_STARTED`（流式路径先发它，好让前端立刻进 running）。 */
+  skipRunStarted?: boolean;
+}
+
 /** 把字符串切成等长片段。空串返回空数组（不发空 delta，协议要求 delta 非空）。 */
 export function chunkString(input: string, size: number): string[] {
   if (!input) return [];
@@ -165,7 +189,7 @@ export function chunkString(input: string, size: number): string[] {
  * 第一版把解说全排在 tool call 前面，结果指点事件到达时图上什么都没有——
  * 前端只能缓冲，而缓冲意味着"指着讲"和文字不再同步，整个演示效果就没了。
  */
-export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
+export function planToEvents(plan: ToolCardPlan, ctx: PlanContext, options: PlanEmitOptions = {}): AnyEvent[] {
   const now = ctx.now ?? (() => Date.now());
   let seq = 0;
   // id 里必须带 runId。第一版是 `msg_${seq}`，每轮从 0 重新数——
@@ -176,7 +200,9 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
   const events: AnyEvent[] = [];
   const push = (event: AnyEvent) => events.push({ timestamp: now(), ...event });
 
-  push({ type: EventType.RUN_STARTED, threadId: ctx.threadId, runId: ctx.runId });
+  if (!options.skipRunStarted) {
+    push({ type: EventType.RUN_STARTED, threadId: ctx.threadId, runId: ctx.runId });
+  }
 
   /** 发一条完整的文字消息。返回消息 id。 */
   const emitText = (text: string): string => {
@@ -189,7 +215,7 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
     return messageId;
   };
 
-  if (plan.intro) emitText(plan.intro);
+  if (plan.intro && !options.streamedText) emitText(plan.intro);
 
   if (plan.payload !== undefined) {
     const toolCallId = id('tc');
@@ -209,14 +235,28 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
       content: 'rendered',
     });
     push({ type: EventType.STATE_SNAPSHOT, snapshot: { [plan.stateKey]: plan.payload } });
+
+    // 锚定：卡片说的是图上的哪个单元。**排在快照之后**（图得先在），
+    // 排在解说之前（镜头先跟过去，再开始讲那一拍）。
+    if (plan.anchor) {
+      push({
+        type: EventType.CUSTOM,
+        name: EVT_ANCHOR,
+        value: { value: plan.anchor.value, ...(plan.anchor.label ? { label: plan.anchor.label } : {}) },
+      });
+    }
   }
 
   // ---------- 画完之后才解说：文字与"指着讲"在同一时间线上交错 ----------
   for (const beat of plan.beats) {
-    const messageId = id('msg');
-    push({ type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' });
-    for (const delta of chunkString(beat.text, plan.textChunk ?? 6)) {
-      push({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta });
+    // 流式路径下这段话已经在生成时发过了，这里只补动作（指点 / 缩放 / 数据补丁）
+    let messageId = '';
+    if (!options.streamedText) {
+      messageId = id('msg');
+      push({ type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' });
+      for (const delta of chunkString(beat.text, plan.textChunk ?? 6)) {
+        push({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta });
+      }
     }
     // 解说播完的瞬间做动作——这正是"文字和图同拍"的关键：
     // 用户读到哪里，图就指到哪里。
@@ -265,7 +305,9 @@ export function planToEvents(plan: ToolCardPlan, ctx: PlanContext): AnyEvent[] {
         })),
       });
     }
-    push({ type: EventType.TEXT_MESSAGE_END, messageId });
+    if (!options.streamedText) {
+      push({ type: EventType.TEXT_MESSAGE_END, messageId });
+    }
   }
 
   // 中断：run 仍然是"结束"，只是留了一个待答复的口子。

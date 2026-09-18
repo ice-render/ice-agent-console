@@ -16,62 +16,20 @@
  * （流式 / 已渲染 / 校验不通过 / 已提交），整棵重建会把"这一条已经失败过"这类
  * 粘性状态冲掉，也会把滚动位置弹回去。这一点决定了这里不能写成 `innerHTML = ...`。
  */
-import type { ThreadState, TextItem, ToolItem } from '../domain/agui/reducer';
+import type { ThreadState, TextItem, ToolItem, ReasoningItem } from '../domain/agui/reducer';
 import { ToolEntryView } from './tool-entry';
+import { renderMarkdown } from './markdown';
+import { shieldFromCanvas } from './dom-shield';
+
+// 面板整体要装的那道屏蔽：实现与理由搬到了 `dom-shield.ts`（绘图区的浮层也要用同一套），
+// 这里再导出一次，是为了不动 `boot.ts` 的既有调用点。
+export { shieldFromCanvas };
 
 interface TextSlot {
   wrap: HTMLElement;
   bubble: HTMLElement;
-}
-
-/**
- * 引擎会**广播**这些事件给每一个 ICE 实例（`DOMEventInterceptor` 在 `window` 上
- * 挂的是冒泡阶段的监听），过滤只认"事件目标是不是另一块 **canvas**"（见
- * `DOMEventDispatcher.__isForeignCanvasTarget`）。对话面板是个 `<div>`，
- * 不在过滤范围内，所以在面板根上把它们拦下来。
- *
- * ⚠️ **"没拦住"长什么样，实测过**（2026-09-16，像素级，拿图表图层做正反两面）：
- *
- * | | 在图表自己上悬停（对照） | 在面板上悬停（实验） |
- * |---|---|---|
- * | 摘掉这道屏蔽 | 画面变（提示框 / 高亮） | **画面也变** |
- * | 装上这道屏蔽 | 画面变 | 画面一动不动 |
- *
- * ⚠️ **这条泄漏在工艺图上量不出来**：工艺图的滚轮缩放监听是直接挂在 canvas 元素上的
- * （`diagram-layer.ts` 的 `canvas.addEventListener('wheel', …)`），事件目标是面板时
- * 根本到不了它。所以"在面板上滚一下，图没动"**不能**用来判断这道屏蔽有没有用 ——
- * 它挡的是**走引擎事件总线的那类交互（悬停 / 命中）**，而那几个图层正好压在面板下面。
- * 别拿滚轮做判据，也别因为"实测没效果"把它删掉。
- *
- * 装在哪一层是有讲究的：挂在**面板根**上，往后往面板里加东西（比如底部那排
- * 家族链接）自动被覆盖；加到面板**外面**的浮层要自己再拦一次。
- *
- * **不拦键盘**：输入框一直是这样工作的，拦了输入法就废了。
- */
-const SHIELDED_EVENTS = [
-  'pointerdown',
-  'pointerup',
-  'pointermove',
-  'pointercancel',
-  'mousedown',
-  'mouseup',
-  'mousemove',
-  'click',
-  'dblclick',
-  'auxclick',
-  'wheel',
-];
-
-/**
- * 把一块浮层"对画布透明"：指针 / 滚轮 / 点击事件就地掐掉，不再冒泡到 `window`。
- *
- * 导出成函数而不是塞进 `ChatView` 的构造函数，是因为**要拦的是整个面板**，
- * 而 `ChatView` 拿到的是消息区（`#thread`）—— 渲染根与"该拦多大一块"是两件事，
- * 由 `boot.ts`（它同时看得到 `#chat` 与 `#thread`）决定。
- */
-export function shieldFromCanvas(el: HTMLElement): void {
-  const stop = (event: Event) => event.stopPropagation();
-  for (const name of SHIELDED_EVENTS) el.addEventListener(name, stop);
+  /** 上一次写进气泡的原文。流式文本每来一个 delta 就会调到这里，相同就跳过。 */
+  lastText?: string;
 }
 
 /**
@@ -86,12 +44,19 @@ const STICK_THRESHOLD_PX = 8;
 export class ChatView {
   private readonly textSlots = new Map<string, TextSlot>();
   private readonly entries = new Map<string, ToolEntryView>();
+  /** 思考过程块：按条目 id 复用（流式期间每个 delta 都会调到这里）。 */
+  private readonly reasoningSlots = new Map<
+    string,
+    { wrap: HTMLDetailsElement; summary: HTMLElement; body: HTMLElement; lastLength: number; lastDone: boolean | null }
+  >();
   private emptyEl: HTMLElement | null;
 
   /** 「这一轮失败了」那张提示卡。有错误时在，没有时移除。 */
   private errorEl: HTMLElement | null = null;
   /** 上一次渲染的 error 值，用来避免每帧重写 DOM。 */
   private lastError: string | null = null;
+  /** 「正在思考」那一行。只在"run 在跑、但还什么都没有"时出现。 */
+  private pendingEl: HTMLElement | null = null;
 
   /**
    * 是否**跟着底部**走。开页为 `true`（新会话就该盯着最新一条）。
@@ -127,7 +92,12 @@ export class ChatView {
     // 这里仍然按游标校正一次，代价极低，但能兜住"以后有人在中间插入条目"的情况。
     let cursor = 0;
     for (const item of state.items) {
-      const el = item.kind === 'text' ? this.renderText(item) : this.renderTool(item);
+      const el =
+        item.kind === 'text'
+          ? this.renderText(item)
+          : item.kind === 'tool'
+            ? this.renderTool(item)
+            : this.renderReasoning(item);
       const at = this.root.children[cursor] ?? null;
       if (at !== el) this.root.insertBefore(el, at);
       cursor++;
@@ -144,6 +114,12 @@ export class ChatView {
         this.errorEl = null;
       }
     }
+
+    // 「正在思考」：**run 在跑、但助手这一侧还一条都没有**的时候才显示。
+    // 本地模型（尤其是带 reasoning 的）首答可能要一两分钟，没有这一行的话，
+    // 用户看到的就是"我发了一句话，然后什么都没有"。
+    // 一旦任何助手内容到了（文字或工具卡）就撤掉 —— 那时进度已经在内容里了。
+    this.__renderPending(state.status === 'running' && !this.__hasAssistantContent(state));
 
     // ⚠️ 必须在**写完 DOM 之后**才滚：上面那些 insertBefore / textContent 会改变内容高度，
     //    提前滚的话滚到的是**旧**的 scrollHeight，于是一屏永远差一截。
@@ -169,6 +145,7 @@ export class ChatView {
     this.root.removeEventListener('scroll', this.onScroll);
     this.entries.clear();
     this.textSlots.clear();
+    this.reasoningSlots.clear();
   }
 
   private renderText(item: TextItem): HTMLElement {
@@ -189,10 +166,87 @@ export class ChatView {
       slot = { wrap, bubble };
       this.textSlots.set(item.id, slot);
     }
-    // 流式文本每次整段写。片段拼接的状态在归约器里，这里只负责显示。
-    const text = item.text || (item.done ? '' : '…');
-    if (slot.bubble.textContent !== text) slot.bubble.textContent = text;
+    /**
+     * 流式文本每次整段重写：片段拼接的状态在归约器里，这里只负责显示。
+     *
+     * - **助手**走 Markdown（`renderMarkdown` 自己建节点，全程没有 innerHTML）；
+     * - **用户**保持纯文本原样 —— 用户敲进来的星号就是星号，不该被排版规则吃掉。
+     */
+    const text = item.text || '';
+    if (slot.lastText !== text) {
+      slot.lastText = text;
+      if (item.role === 'user') slot.bubble.textContent = text;
+      else renderMarkdown(slot.bubble, text);
+    }
     return slot.wrap;
+  }
+
+  /**
+   * **本轮**助手这一侧有没有已经到手的可见内容（文字 / 工具卡 / 思考过程）。
+   *
+   * ⚠️ 判据必须是"最后一条用户消息**之后**"的那些条目，不能扫整个 thread ——
+   * 历史里只要出现过一次工具卡（几乎必然），`some()` 就永远为真，
+   * 于是新一轮的「正在思考」再也不会出现。这个 bug 在单测里看不出来
+   * （单测的 state 是干净的），是在真实回放里发现的：连发两轮，第二轮全程没有等待提示。
+   */
+  private __hasAssistantContent(state: ThreadState): boolean {
+    const items = state.items;
+    let from = 0;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i].kind === 'text' && (items[i] as TextItem).role === 'user') {
+        from = i + 1;
+        break;
+      }
+    }
+    return items.slice(from).some((item) => {
+      if (item.kind === 'tool') return true;
+      // 思考过程也算"有内容"：它一到，等待就从"转圈"变成"看得见它在想"，
+      // 那一行「正在思考」就该让位（否则同一件事被说两遍）。
+      if (item.kind === 'reasoning') return !!item.text;
+      return item.role !== 'user' && !!item.text;
+    });
+  }
+
+  /**
+   * 显示 / 收起「正在思考」那一行。
+   *
+   * 复用同一个元素而不是每帧重建：重建会让 CSS 动画从头开始，
+   * 于是等待期间三个点一直在"重新起步"，看起来像卡住了 —— 动画本身要有连续性。
+   */
+  private __renderPending(show: boolean): void {
+    if (!show) {
+      if (this.pendingEl) {
+        this.pendingEl.remove();
+        this.pendingEl = null;
+      }
+      return;
+    }
+    if (!this.pendingEl) {
+      const el = document.createElement('div');
+      el.className = 'msg assistant pending';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+
+      const who = document.createElement('div');
+      who.className = 'who';
+      who.textContent = 'AI';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble pending-bubble';
+      const label = document.createElement('span');
+      label.className = 'pending-label';
+      label.textContent = '正在思考';
+      const dots = document.createElement('span');
+      dots.className = 'pending-dots';
+      dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+      bubble.append(label, dots);
+
+      el.append(who, bubble);
+      this.pendingEl = el;
+    }
+    // 永远贴在最后（错误提示排在它后面，两者实际不会同时出现：报错意味着 run 结束了）
+    this.root.append(this.pendingEl);
+    if (this.errorEl) this.root.append(this.errorEl);
   }
 
   /**
@@ -250,6 +304,41 @@ export class ChatView {
     }
     entry.update(item);
     return entry.el;
+  }
+
+  /**
+   * 模型的思考过程：一条**默认收起**的弱化块。
+   *
+   * 为什么用 `<details>` 而不是自己写开关：键盘、屏幕阅读器、折叠动画它都免费给了，
+   * 而这个面板里有大量原生语义（可选中、可复制、有 aria）—— 自己造一个只会更差。
+   *
+   * 自动折叠的规则只有一条：**思考进行中展开、结束时收起**。
+   * 只在状态**变化的那一次**写 `open` —— 每帧都写会把用户手动展开/收起的操作顶掉
+   * （他刚点开想看细节，下一个 delta 又给合上了）。
+   */
+  private renderReasoning(item: ReasoningItem): HTMLElement {
+    let slot = this.reasoningSlots.get(item.id);
+    if (!slot) {
+      const wrap = document.createElement('details');
+      wrap.className = 'reasoning';
+      wrap.dataset.messageId = item.id;
+      const summary = document.createElement('summary');
+      const body = document.createElement('div');
+      body.className = 'reasoning-body';
+      wrap.append(summary, body);
+      slot = { wrap, summary, body, lastLength: -1, lastDone: null };
+      this.reasoningSlots.set(item.id, slot);
+    }
+    if (slot.lastDone !== item.done) {
+      slot.lastDone = item.done;
+      slot.wrap.open = !item.done;
+      slot.summary.textContent = item.done ? '思考过程（点击展开）' : '正在思考…';
+    }
+    if (slot.lastLength !== item.text.length) {
+      slot.lastLength = item.text.length;
+      slot.body.textContent = item.text;
+    }
+    return slot.wrap;
   }
 
   /** 距底部还有多少像素。内容比容器矮时是负数 —— 那也算"贴底"。 */

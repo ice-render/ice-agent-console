@@ -22,6 +22,16 @@ export default defineConfig({
       port: 8099,
       reuseExistingServer: false,
       timeout: 30_000,
+      /**
+       * 强制剧本模式。
+       *
+       * e2e 断言的是**确定性的剧本产物**（某张卡片、某段文字、某个图元数），
+       * 而开发机上很可能放着一份 `.env` 指着自己的模型（比如本机连 120 那台跑 qwopus）。
+       * `loadConfig` 的优先级是「环境变量 > .env」，所以这里钉住模式，
+       * 让"我这台机器上刚好配了模型"不会变成 e2e 的隐藏输入 —— 那种失败最难查：
+       * 在 CI 上是绿的、在本机是红的，看起来像代码坏了。
+       */
+      env: { ICE_LLM_MODE: 'scripted' },
     },
     {
       command: 'npx http-server dist -p 8100 -c-1 --silent',

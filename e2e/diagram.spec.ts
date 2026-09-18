@@ -37,6 +37,7 @@ import {
   settleAfter,
   useChip,
   waitDiagramReady,
+  waitForState,
   waitSettled,
   wheelOnPanel,
   yellowRatio,
@@ -420,7 +421,7 @@ test('折叠面板：可视区变宽、内容重新居中、图不重建', async
  *  - 切到图表 → 工艺图那一层被**藏起来**（留着！不是销毁）；
  *  - 切回工艺图 → 图表层被销毁、工艺图原样显示，**一个符号都不重建**。
  */
-test('切到图表再切回工艺图：图层换掉了，工艺图没有重画', async ({ page }) => {
+test('切到图表再切回工艺图：图表是浮上来的卡片，工艺图一直在、没有重画', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
   await waitDiagramReady(page);
@@ -431,7 +432,7 @@ test('切到图表再切回工艺图：图层换掉了，工艺图没有重画',
 
   // ---- 切到图表 ----
   const before = await readState(page);
-  await chipLocator(page, '看看各渠道的月度销量').click();
+  await chipLocator(page, '看看出水 COD 的趋势').click();
   await page.waitForFunction(
     (n) => {
       const s = (window as any).__iceAgentConsole.getState();
@@ -444,13 +445,33 @@ test('切到图表再切回工艺图：图层换掉了，工艺图没有重画',
 
   const onChart = await readStage(page);
   expect(onChart.active).toBe('chart');
-  // 工艺图那一层**留着**（只是 hidden）—— 切回来是"显示"而不是"重建"
   expect(onChart.layers.sort()).toEqual(['chart', 'diagram']);
   expect(onChart.builds.diagram).toBe(1);
   expect(onChart.builds.chart).toBe(1);
   // 工艺图 1 块 + 图表 2 块（图表 + 控件条）
   expect(onChart.canvasCount).toBe(3);
-  await expect(page.locator(DIAGRAM_CANVAS)).toBeHidden();
+  /**
+   * ★ 2026-09-18 反转的一条：**工艺图不再被藏起来**。
+   *
+   * 之前是"一次只显示一层"，切到图表就把工艺图 `hidden` 掉 —— 用户看到的是
+   * "空白 + 一张孤零零的图表"，第一反应是"我那张图被清掉了"。现在图表 / 表单
+   * 是**浮在工艺图上面的卡片**（`visible` 同时含两层），工艺图永远看得见。
+   */
+  expect(onChart.visible.sort(), '图表卡片浮上来时，工艺图仍然显示着').toEqual(['chart', 'diagram']);
+  await expect(page.locator(DIAGRAM_CANVAS), '工艺图的画布应当还看得见').toBeVisible();
+  // 卡片带「收起」入口，底下垫着接点击的遮罩
+  await expect(page.locator('.stage-close')).toBeVisible();
+  expect(await page.locator('.stage-scrim:not([hidden])').count()).toBe(1);
+  /**
+   * ★ 锚定（2026-09-18）：这张图表说的是图上**哪个单元**。
+   *
+   * 卡片的题材是出水 COD 趋势，它锚在 `codAnalyzer`（AIT-106）上 —— 于是卡片浮起来的同时，
+   * 工艺图上那台在线监测仪被高亮、镜头跟过去。没有这条，卡片就只是"浮在空中的一屏界面"。
+   */
+  expect(
+    await page.evaluate(() => (window as any).__iceAgentConsole.diagramPointedId()),
+    '图表卡片应当锚定到图上的在线监测仪'
+  ).toBe('codAnalyzer');
 
   // ---- 切回工艺图（对话里说一句） ----
   const before2 = await readState(page);
@@ -482,6 +503,56 @@ test('切到图表再切回工艺图：图层换掉了，工艺图没有重画',
   await expect(page.locator(TOOL_ENTRY)).toHaveCount(2);
   await expect(page.locator(`${TOOL_ENTRY}[data-active="true"]`)).toHaveCount(1);
   await expect(page.locator(`${TOOL_ENTRY}[data-active="true"]`)).toHaveAttribute('data-tool', 'render_diagram');
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/**
+ * ★ 浮层的**收起**（2026-09-18 新增的能力）。
+ *
+ * 卡片浮上来之后，用户回到"纯工艺图"原本只有一条路：**再发一句话**让别的图层把它顶掉 ——
+ * 那是个不成立的交互（看看东西还得再使唤一次 agent）。现在有两个入口：卡片右上角的 `✕`、
+ * 以及点卡片外面的空白（遮罩）。这条把两条路都钉住，顺带确认"收起 ≠ 重建工艺图"。
+ */
+test('★ 浮层可以收起：点 ✕ 与点空白都能回到纯工艺图，且工艺图没重画', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+  expect((await readStage(page)).builds.diagram).toBe(1);
+
+  // ---- 图表卡片 → 点 ✕ ----
+  await useChip(page, '看看出水 COD 的趋势');
+  await page.waitForTimeout(250);
+  expect((await readStage(page)).active).toBe('chart');
+  await page.locator('.stage-close').click();
+  await page.waitForTimeout(250);
+  const afterClose = await readStage(page);
+  expect(afterClose.active).toBe('diagram');
+  expect(afterClose.visible).toEqual(['diagram']);
+  expect(afterClose.canvasCount).toBe(1);
+  expect(afterClose.builds.diagram, '收起浮层不是重建工艺图').toBe(1);
+
+  // ---- 表单卡片 → 点卡片外的空白（遮罩） ----
+  // ⚠️ 表单这一轮**不能用 `useChip`**：它等的是 `idle`，而中断轮结束在 `waiting`
+  //    （`collect_input` 的语义就是"我需要用户提供信息"），永远等不到。
+  const beforeForm = await readState(page);
+  await chipLocator(page, '给进水泵下发指令').click();
+  await waitForState(page, (s, min) => s.status === 'waiting' && s.eventCount > min, beforeForm.eventCount);
+  await page.waitForTimeout(250);
+  expect((await readStage(page)).active).toBe('form');
+  // 左上角一定在卡片外面（卡片是居中的，宽度取 min(720px, …)）
+  await page.mouse.click(24, 760);
+  await page.waitForTimeout(250);
+  const afterBlank = await readStage(page);
+  expect(afterBlank.active, '点空白应当收起表单卡片').toBe('diagram');
+  expect(afterBlank.visible).toEqual(['diagram']);
+  expect(afterBlank.canvasCount).toBe(1);
+  expect(afterBlank.builds.diagram).toBe(1);
+
+  // 工艺图还是完整的（收起浮层不该动它一根管线）
+  const stats = await page.evaluate(() => (window as any).__iceAgentConsole.diagramStats());
+  expect(stats.symbols).toBe(SYMBOLS);
+  expect(stats.pipes).toBe(PIPES);
 
   expect(errors, errors.join('\n')).toEqual([]);
 });

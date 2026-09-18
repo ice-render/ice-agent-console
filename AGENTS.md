@@ -21,16 +21,37 @@
    用 `validateChartDsl → compileChartDsl → createChart / setOption`，实例只建一次。
 4. **`appendData` 只能用在数值/时间轴。** 它不补 `xAxis.data`，类目轴追加新类目会错位。
    判不了就走全量 `setOption`（判断逻辑在 `src/domain/ice/option-mapping.ts`）。
-5. **绘图区按 tool 名切图层，三种形态互斥。** `render_diagram` → diagram 图层
+5. **绘图区按 tool 名切图层；工艺图永远在，图表 / 表单是浮在它上面的卡片。** `render_diagram` → diagram 图层
    （一块画布，`ice-entity-designer` 绘制）；`render_chart` → chart 图层
    （**两块**画布：图表 + 控件条，`ice-chart` + `ice-web-components`）；
    `collect_input` → form 图层（一块，`ice-web-components-dsl`）。
    写选择器时**必须用 `[data-kind=…]` 指明是哪一层**，不要靠 DOM 顺序
    （`e2e/helpers.ts` 的 `CHART_CANVAS` / `WIDGET_CANVAS` / `FORM_CANVAS` / `DIAGRAM_CANVAS`）。
-   **diagram 图层永不销毁** —— 它是主视图，开页就建好，"切走再切回来不重画"是需求点名的；
-   chart / form 是按需图层，被顶掉即**销毁**（不叠着留）。
-   断言"有没有重画"用 `__iceAgentConsole.stageInfo().builds`，那是这件事的直接读数。
-   图层之间是**并排**的（同一时刻只显示一个），不需要 `linkViewport` / `setInputPassthrough`。
+   **diagram 图层永不销毁，也永不隐藏**（2026-09-18 起）：它是主视图；chart / form 是
+   **浮在它上面的卡片**（背景 / 圆角 / 阴影 + 一层接点击的遮罩 + 右上角「✕」）。
+   曾经的做法是"一次只显示一层"——切到图表就把工艺图 `hidden` 掉，用户看到的是
+   "一片空白 + 一张孤零零的图表"，第一反应是"我那张图被清掉了"（其实还在 DOM 里）。
+   chart / form 之间仍然互斥，被顶掉即**销毁**（不叠着留）。
+   两条容易踩的：
+   - **表单层的层根是整屏透明的**（卡片是里面那块 `.stage-form`），层根必须
+     `pointer-events: none`、卡片 `auto` —— 漏了这一步"点空白收起"永远不生效，且不报错；
+   - **卡片要装指针屏蔽，但必须放行画布上的事件**（`shieldFromCanvas(el, { passCanvasEvents: true })`）——
+     `ice-chart` 的悬停 / 框选靠 window 级广播，一刀切会把图表交互弄哑。
+   收起入口两个：卡片右上角的「✕」、点卡片外面的遮罩（都走 `StageView.dismissOverlay()`）。
+5a. **卡片必须锚定到图上的某个单元（`EVT_ANCHOR`）。** 浮层暴露的下一个问题是**业务关联**：
+   一张"各渠道月度销量"浮在工艺流程图上就是硬凑的 —— 判据是"**把图遮住，这张卡片还说不说得通**"。
+   于是：图表画某个单元的运行数据、表单是对某个单元的操作，两者都带 `anchor: { value, label? }`
+   （`value` 是单元 id 或位号）。表现上复用「指着讲」的通路（`StageView.anchor` → `DiagramLayer.pointAt`）：
+   卡片浮起来时那个单元被高亮、镜头跟过去；表单提交后再闪一次（`anchorFeedback()`，在 boot 的
+   `onFormSubmit` 里调）。`anchor` 与 `pointAt` **分开存**：后者会被下一条指着讲改写，
+   前者要留到另一张卡片把它换掉为止。
+   ⚠️ **模型给的 `anchor` 必须在进渲染前摘掉**（`buildLlmPlan` 里 `delete rest.anchor`）：
+   它就写在工具参数顶层、而那一层正是图表 DSL —— DSL 校验只认自己的字段，多一个键会被判不合法，
+   然后走成"自修复"，把一张本来好好的卡片修没（不报错，只表现为"卡片莫名消失"）。
+   锚不上（图里没有这个 id/位号）时**不改镜头、不报错**，卡片照常显示。
+  断言"有没有重画"用 `__iceAgentConsole.stageInfo().builds`；
+   `stageInfo().visible` 是"当前真正显示着哪几层"（卡片期间是 `['diagram','chart']`）。
+   图层之间**不并排**（各自一块画布、各自一个 ICE 实例），不需要 `linkViewport` / `setInputPassthrough`。
 5a. **画布命令走 CUSTOM，不走 tool call、不进 state。** 目前三条：`ice/point-at`
    （指着讲，`{ value, blink? }`）、`ice/point-clear`、`ice/zoom`
    （缩放视图，载荷是 `{ direction, factor?, steps?, scale? }`）。
@@ -114,9 +135,21 @@
    症状是打包期一堆 node polyfill 找不到、或者打出一个巨大的假包。
    两条 transport 共用 `src/domain/agui/run-input.ts` 的输入映射与 `RunTransport` 签名，
    **别各拼一份输入**（`resume` 空数组不带那个条件很容易漏）；
-   取消语义也要一致（`AbortError` 静默返回、不当错误上报）。
-   开关是"构建期默认 + 运行期覆盖"两级，见 `src/domain/agui/transport.ts`。
-   模式判定必须能被单测，所以 `globalThis.location` 只在 boot.ts 里读、不进纯函数。
+  取消语义也要一致（`AbortError` 静默返回、不当错误上报）。
+  开关是"构建期默认 + 运行期覆盖"两级，见 `src/domain/agui/transport.ts`。
+  模式判定必须能被单测，所以 `globalThis.location` 只在 boot.ts 里读、不进纯函数。
+11. **助手气泡的 Markdown 只走 `src/view/markdown.ts`，**那里全程 `createElement` +
+   `textContent`，**没有一处 `innerHTML`** —— 模型输出是不可信输入（它可能复述网页、
+   也可能自己写出一段 `<img onerror=…>`）。新加语法时照这个口径写，别图省事把
+   `markdown-it` 的 `render()` 结果塞进 `innerHTML`（那样等于把注入点交给模型）。
+   链接只放行 `http(s)`/`mailto` 并加 `rel="noopener noreferrer"`；**图片不自动加载**
+   （URL 也是模型给的，加载等于把"我看了这张图"告诉对方服务器）。
+12. **「正在思考」的判据是"本轮"有没有内容**（最后一条用户消息之后的条目），
+   **不是**扫整个 `items`。踩过：扫全量时，历史里只要出现过一张工具卡（几乎必然），
+   新一轮就再也不显示等待提示 —— 而且单测（state 干净）看不出来，只有连发两轮才暴露。
+13. **e2e 必须把 agent 钉在剧本模式**（`playwright.config.ts` 的 `env: { ICE_LLM_MODE: 'scripted' }`）。
+   开发机上常有 `.env` 指着自己的模型，而 `loadConfig` 的优先级是「环境变量 > .env」——
+   不钉住的话，"我这台机器配了模型"会变成 e2e 的隐藏输入（CI 绿、本机红，最难查）。
 11. **canvas 里没有 DOM 目标可定位。** 要测"点中某个控件"，走
    `__iceAgentConsole.widgetRects()`（应用挂出来的矩形查询），不要写死像素偏移 ——
    按钮宽度是按文案字数算的，改一个字就全错位。

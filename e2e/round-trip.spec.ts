@@ -12,7 +12,7 @@ test('点击数据点触发一轮新 run，且交互通过 context 上报', asyn
   const errors = collectErrors(page);
   await page.goto('/');
 
-  const before = await useChip(page, '看看各渠道的月度销量');
+  const before = await useChip(page, '看看出水 COD 的趋势');
   const textBefore = before.items.filter((i) => i.kind === 'text').length;
 
   // canvas 里没有 DOM 目标可定位，所以按实测位置依次尝试（见 helpers.clickChartItem）
@@ -40,7 +40,7 @@ test('框选区间触发一轮新 run', async ({ page }) => {
   const errors = collectErrors(page);
   await page.goto('/');
 
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
 
   const canvas = page.locator(CHART_CANVAS).first();
   const box = await canvas.boundingBox();
@@ -63,7 +63,7 @@ test('框选区间触发一轮新 run', async ({ page }) => {
 
 test('点击不会破坏已有图表（上行不该有副作用）', async ({ page }) => {
   await page.goto('/');
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
 
   const hit = await settleAfter(page, async () => {
     if (!(await clickChartItem(page))) throw new Error('没能在图表上点中任何数据点');

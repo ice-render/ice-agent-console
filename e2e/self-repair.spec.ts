@@ -45,13 +45,13 @@ test('坏 DSL 被拦下 → 诊断回灌 → 自动修复', async ({ page }) => 
   const tools = state.items.filter((i) => i.kind === 'tool') as any[];
 
   // ---- 第一条条目：坏 DSL，没上绘图区，列了诊断 ----
-  expect(tools[0].dsl.encoding.y).toBe('销售额');
+  expect(tools[0].dsl.encoding.y).toBe('COD浓度');
   const firstEntry = page.locator(TOOL_ENTRY).first();
   await expect(firstEntry).toHaveAttribute('data-status', 'error');
   await expect(firstEntry.locator('.card-head .status')).toHaveText('校验不通过');
   // 诊断必须带"可用列名"，否则回灌给模型也没法修
-  await expect(firstEntry.locator('.diag li').first()).toContainText('销售额');
-  await expect(firstEntry.locator('.diag li').first()).toContainText('销量');
+  await expect(firstEntry.locator('.diag li').first()).toContainText('COD浓度');
+  await expect(firstEntry.locator('.diag li').first()).toContainText('COD');
 
   // ★ 两次 tool call，但图表图层**只建过一次**。
   //   这就是"失败那一轮没上画布"的**非竞态**证法：要在坏的那一轮当场量状态是做不到的
@@ -63,7 +63,7 @@ test('坏 DSL 被拦下 → 诊断回灌 → 自动修复', async ({ page }) => 
   expect(afterRepair.shows.chart, '只有成功的那一次显示过').toBe(1);
 
   // ---- 第二条条目：修好了，画出来了 ----
-  expect(tools[1].dsl.encoding.y).toBe('销量');
+  expect(tools[1].dsl.encoding.y).toBe('COD');
   const secondEntry = page.locator(TOOL_ENTRY).nth(1);
   await expect(secondEntry).toHaveAttribute('data-status', 'done');
   await expect(page.locator(CHART_CANVAS)).toBeVisible();
@@ -96,7 +96,7 @@ test('修好之后还能接着问下一句（修复轮不会把会话搞乱）',
     { timeout: 40_000 }
   );
 
-  await useChip(page, '看看各渠道的月度销量');
+  await useChip(page, '看看出水 COD 的趋势');
   await page.waitForFunction(
     () => (window as any).__iceAgentConsole.getState().status === 'idle',
     undefined,

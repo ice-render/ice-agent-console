@@ -21,6 +21,8 @@ import { EventType } from '@ag-ui/core';
 import {
   EVT_POINT_AT,
   EVT_POINT_CLEAR,
+  EVT_REASONING,
+  EVT_ANCHOR,
   EVT_ZOOM,
   RENDER_DIAGRAM_TOOL,
   STATE_CHART_KEY,
@@ -62,7 +64,22 @@ export interface ToolItem {
   submitted?: boolean;
 }
 
-export type ThreadItem = TextItem | ToolItem;
+/**
+ * 模型的**思考过程**（推理模型才有），与对话消息并列但语义不同：
+ * 它不是"说给用户听的话"，而是"它正在想什么"。所以单独一种条目 ——
+ * 视图层据此把它折起来、用弱化的样式画，而不是当成一条助手发言。
+ */
+export interface ReasoningItem {
+  kind: 'reasoning';
+  /** 按 `runId + phase` 聚合：同一次模型调用（同一段思考）落在同一条里。 */
+  id: string;
+  phase: number;
+  text: string;
+  /** 这一轮思考是否已经结束（正文开始 / run 结束）。视图据此自动收起。 */
+  done: boolean;
+}
+
+export type ThreadItem = TextItem | ToolItem | ReasoningItem;
 
 export interface ThreadState {
   threadId: string;
@@ -89,6 +106,13 @@ export interface ThreadState {
    * `seq` 递增是为了让视图能区分"同一个值再指一次"——高亮动画需要重新触发。
    */
   pointAt: { value: any; seq: number } | null;
+  /**
+   * 当前这张卡片**关联的工艺图单元**（`EVT_ANCHOR`）。
+   *
+   * 与 `pointAt` 分开存，因为生命周期不同：`pointAt` 是"讲到哪了"、会被下一条指着讲改写；
+   * 锚定是"这张卡片说的是谁"，要一直留到另一张卡片把它换掉 —— 表单提交后的反馈靠它。
+   */
+  anchor: { value: string; label?: string; seq: number } | null;
   /**
    * 最近一次缩放视图的指令。
    *
@@ -126,6 +150,11 @@ export type Effect =
   | { type: 'append-rows'; toolCallId: string; rows: any[][] }
   /** `blink` 是"高亮之后再闪一下"，与 `value` 同属一次定位动作（见 shared/contract.ts）。 */
   | { type: 'point-at'; value: any; blink?: boolean }
+  /**
+   * 卡片锚定到工艺图上的某个单元（`EVT_ANCHOR`）：视图把它**高亮 + 镜头跟过去**，
+   * 并记住它 —— 表单提交后要回到同一个单元上给反馈。
+   */
+  | { type: 'anchor'; value: string; label?: string }
   | { type: 'clear-point' }
   | { type: 'zoom'; direction: ZoomDirection; factor?: number; steps?: number; scale?: number }
   /**
@@ -175,6 +204,7 @@ export function initialState(threadId: string): ThreadState {
     items: [],
     sharedState: null,
     pointAt: null,
+    anchor: null,
     zoom: null,
     diagnostics: null,
     interrupt: null,
@@ -277,6 +307,10 @@ export function reduce(state: ThreadState, action: Action): Reduction {
 
     case EventType.RUN_FINISHED: {
       bump();
+      // run 结束了，还开着的思考条目一并收口（模型只思考、没说话的那种轮次）
+      next.items = next.items.map((item) =>
+        item.kind === 'reasoning' && !item.done ? { ...item, done: true } : item
+      );
       const interrupts = action.outcome?.type === 'interrupt' ? action.outcome.interrupts : null;
       if (Array.isArray(interrupts) && interrupts.length > 0) {
         // 注意：中断**也是** RUN_FINISHED（协议如此），所以这里不改 RunFinished 的语义，
@@ -291,6 +325,9 @@ export function reduce(state: ThreadState, action: Action): Reduction {
 
     case EventType.RUN_ERROR: {
       bump();
+      next.items = next.items.map((item) =>
+        item.kind === 'reasoning' && !item.done ? { ...item, done: true } : item
+      );
       next.status = 'error';
       next.error = action.message || 'run 失败';
       return { state: next, effects };
@@ -299,6 +336,12 @@ export function reduce(state: ThreadState, action: Action): Reduction {
     // ---------------------------------------------------------------- 文本
     case EventType.TEXT_MESSAGE_START: {
       bump();
+      // 正文开始了 = 这一段思考结束了：把还开着的思考条目收口（视图据此自动折叠）。
+      // 放在这里而不是等 RUN_FINISHED：思考与正文是同一轮里的前后两段，
+      // 正文一到就该让位，不然用户要一直看着"思考中"和正文并排。
+      next.items = next.items.map((item) =>
+        item.kind === 'reasoning' && !item.done ? { ...item, done: true } : item
+      );
       next.items.push({
         kind: 'text',
         id: action.messageId,
@@ -447,7 +490,35 @@ export function reduce(state: ThreadState, action: Action): Reduction {
     // ---------------------------------------------------------- 自定义 / 叙事
     case EventType.CUSTOM: {
       bump();
-      if (action.name === EVT_POINT_AT) {
+      if (action.name === EVT_REASONING) {
+        // 思考过程：按 `runId + phase` 聚合到一条里，增量累加。
+        // 推理模型（如本机跑的 qwopus-coder）在正文之前会吐几十秒的思考，
+        // 不显示的话，界面上只有转圈 —— 用户分不清"它在想"还是"它挂了"。
+        const phase = Number(action.value?.phase) || 0;
+        const delta = typeof action.value?.delta === 'string' ? action.value.delta : '';
+        const id = `reason_${next.runId ?? 'run'}_${phase}`;
+        const index = indexOfItem(next.items, id);
+        if (index === -1) {
+          next.items.push({ kind: 'reasoning', id, phase, text: delta, done: false });
+        } else {
+          const item = next.items[index] as any;
+          next.items[index] = { ...item, text: item.text + delta };
+        }
+      } else if (action.name === EVT_ANCHOR) {
+        /**
+         * 卡片与工艺图上某个单元的**关联关系**（见 `shared/contract.ts` 的 `EVT_ANCHOR`）。
+         *
+         * 它与 `pointAt` 分开存：`pointAt` 是"讲到哪了"（会被下一条命令改写），
+         * 而锚定是"当前这张卡片说的是谁"—— 表单提交后要在**同一个单元**上给反馈，
+         * 靠的就是它没被后续事件冲掉。
+         */
+        const value = action.value?.value;
+        if (typeof value === 'string' && value) {
+          const label = typeof action.value?.label === 'string' ? action.value.label : undefined;
+          next.anchor = { value, ...(label ? { label } : {}), seq: (state.anchor?.seq ?? 0) + 1 };
+          effects.push({ type: 'anchor', value, ...(label ? { label } : {}) } as Effect);
+        }
+      } else if (action.name === EVT_POINT_AT) {
         // seq 递增：同一个值连指两次也要重新触发高亮
         next.pointAt = { value: action.value?.value, seq: (state.pointAt?.seq ?? 0) + 1 };
         effects.push({

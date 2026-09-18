@@ -23,6 +23,8 @@ export const TOOL_ENTRY = '.tool-entry';
 export interface StageInfo {
   active: 'diagram' | 'chart' | 'form' | null;
   layers: string[];
+  /** 当前**真的显示着**的层（工艺图 + 可能压在上面的那张卡片）。 */
+  visible: string[];
   builds: Record<string, number>;
   shows: Record<string, number>;
   canvasCount: number;
