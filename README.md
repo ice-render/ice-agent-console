@@ -46,7 +46,7 @@
 
 ## 1. 快速开始
 
-前置：**五个**兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录：
+前置：**六个**兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录：
 运行时靠 webpack `resolve.alias`、类型靠 tsconfig `paths`、测试靠 jest `moduleNameMapper`）。
 
 ```bash
@@ -1139,7 +1139,8 @@ ice-agent-console/
 │       ├── scenarios.ts     剧本模式：关键词 → 计划
 │       ├── llm.ts           模型模式：LlmAgent（自然语言 → 计划）
 │       ├── llm-client.ts    模型模式：/chat/completions 客户端（fetch，无 SDK）
-│       └── tools.ts         模型模式：tool 定义 + 系统提示词
+│       ├── tools.ts         模型模式：tool 定义 + 系统提示词
+│       └── stream-queue.ts  推→拉接缝：把回调式模型流变成可 await 的事件流
 ├── src/
 │   ├── domain/              纯逻辑，无 DOM
 │   │   ├── agui/            事件 → 状态的归约 / JSON Patch / **两条 transport**
@@ -1147,7 +1148,10 @@ ice-agent-console/
 │   │   │   ├── transport.ts   ★ 传输开关：构建期默认 + `?demo=` 覆盖（见 §1.0）
 │   │   │   ├── autoplay.ts    ★ 开页自动开演的开关（构建期默认 + `?autoplay=`）
 │   │   │   ├── client.ts      连后端：`fetch` + SSE
-│   │   │   └── local-agent.ts 纯前端：把 `ScriptedAgent` 喂成同一条事件流
+│   │   │   ├── local-agent.ts 纯前端：把 `ScriptedAgent` 喂成同一条事件流
+│   │   │   ├── reducer.ts     事件归约器：把 AG-UI 事件折叠成 thread 状态（见 §3）
+│   │   │   ├── sse.ts         SSE 解析：把 fetch 文本分片还原成事件（纯逻辑，可单测）
+│   │   │   └── state-patch.ts JSON Patch 子集 + append 行识别（STATE_DELTA 用）
 │   │   ├── ice/             协议 → ICE 的纯翻译 + Layer/LayerSet（层）
 │   │   ├── diagram/         图 DSL：白名单 / 校验 / 编译（纯逻辑，node 可测）
 │   │   └── theme.ts         主题：一份 token 分发给画布与 DOM（含浮层三件套）
@@ -1158,6 +1162,8 @@ ice-agent-console/
 │   │   ├── widget-layer.ts  图表图层的第二块画布（控件条，浮在绘图区底部）
 │   │   ├── form-layer.ts    表单图层（ice-web-components-dsl 画的）
 │   │   ├── tool-entry.ts    对话里的工具条目（**只有外壳，没有画布**）
+│   │   ├── dom-shield.ts    把浮层对画布"透明"：掐掉指针/滚轮/点击冒泡（见 §3.2）
+│   │   ├── markdown.ts      把模型 Markdown 渲染成真 DOM 节点（不信任输入，见 §3.2.1）
 │   │   └── chat.ts          对话面板外壳 + 浮层的 stopPropagation + 有条件跟随滚动
 │   └── entries/boot.ts      页面类 `AgentConsolePage`（一页一个类，见 §3.4）：
 │                            开页画图、分发动作、执行 effects、触发 run、挂调试句柄
@@ -1176,7 +1182,12 @@ ice-agent-console/
 │   ├── dev.mjs              一条命令起两个进程
 │   ├── llm-check.ts         npm run llm:check —— 配完模型先跑这个
 │   ├── shoot-docs.cjs       npm run shoot —— 重拍 README 里的截图（含演示模式那张）
-│   └── deploy-pages.mjs     npm run deploy:pages —— 构建演示产物 + 自检 + 推 gh-pages
+│   ├── deploy-pages.mjs     npm run deploy:pages —— 构建演示产物 + 自检 + 推 gh-pages
+│   ├── seo-check.mjs        npm run seo:check —— 线上 SEO / 爬虫体检（见 §12.6）
+│   ├── layout-model.mjs     离线量重叠（不启浏览器，见 §2.0.2）
+│   ├── layout-sandbox.mjs   布局沙盘：离线试缩放 / 覆写参数（见 §2.0.2）
+│   └── lib/
+│       └── html-audit.mjs   从 HTML 读 TDK / 爬虫字段（deploy 自检 + seo-check 共用）
 ├── tests/  e2e/             jest 单测 + playwright（seo.test.ts / seo.spec.ts 见 §12）
 ├── docs/images/             README 里的截图（2× 采集；绘图区整幅 / 对话面板整块）
 └── docs/upstream-gaps.md    对上游的观察
