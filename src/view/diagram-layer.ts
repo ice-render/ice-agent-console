@@ -44,7 +44,7 @@ import { tween, type ICETweenHandle } from 'ice-web-components';
 import { Layer } from '../domain/ice/layer';
 import { applyThemeToIce } from '../domain/theme';
 import { compileDiagramDsl, type DiagramOp } from '../domain/diagram/compile';
-import { normalClearanceOf, planLabelOffsets, type LabelBox } from '../domain/diagram/label-avoidance';
+import { buildPlacements, planLabelOffsets, planLabelPlacement, type LabelBox } from '../domain/diagram/label-avoidance';
 import type { WaterProcessDslDocument } from '../../shared/diagram';
 import type { ZoomDirection } from '../../shared/contract';
 
@@ -234,6 +234,8 @@ export class DiagramLayer {
   private readonly pinnedLabelIds = new Set<string>();
   /** 标注避让已经排进 rAF 了吗（同一帧里建图 + fit 只跑一次）。 */
   private avoidScheduled = false;
+  /** 上一趟避让有没有改动（改了就要按新的盒形再解一趟 —— 转角度会改变盒形）。 */
+  private labelsChangedThisPass = false;
 
   // 拖拽平移的临时状态
   private panning = false;
@@ -371,6 +373,16 @@ export class DiagramLayer {
     /** 这条标注**锚在折线上的那个点**（世界坐标）。`中心 - 锚点` 就是当前偏移。 */
     anchorX: number;
     anchorY: number;
+    /** 当前旋转角（弧度，绕 `anchorX/anchorY` 偏移后的中心）。0 = 横排。 */
+    angle: number;
+    /** 锚点所在那一段折线的长度与走向（判断"该不该转"的依据，e2e / 诊断用）。 */
+    segmentLength: number;
+    vertical: boolean;
+    /** 折线顶点（诊断用：判断锚点是不是落在拐点上、两条腿各多长）。 */
+    points: Array<{ x: number; y: number }>;
+    /** 未旋转的盒子尺寸（判断"装不装得下"用）。 */
+    boxW: number;
+    boxH: number;
   }> {
     const edges: any[] = this.designer.edges || [];
     const out: ReturnType<DiagramLayer['edgeLabelBoxes']> = [];
@@ -382,6 +394,12 @@ export class DiagramLayer {
       const left = Number(edge.state?.left) || 0;
       const top = Number(edge.state?.top) || 0;
       const [dx, dy] = this.__labelOffsetOf(edge);
+      // 排版判定是纯函数，这里再算一次只为把"用的哪条腿"报给诊断 / e2e（与避让那一趟同源）
+      const localPoints = this.__pointsOf(edge);
+      const placement = planLabelPlacement(localPoints, { x: Number(info.x) - dx, y: Number(info.y) - dy }, {
+        w: Number(info.w) || info.halfW * 2,
+        h: Number(info.h) || info.halfH * 2,
+      });
       out.push({
         id: String(edge.state?.id ?? ''),
         text: String(info.text),
@@ -391,6 +409,13 @@ export class DiagramLayer {
         maxY: top + Number(info.y) + info.halfH,
         anchorX: left + Number(info.x) - dx,
         anchorY: top + Number(info.y) - dy,
+        angle: this.__labelAngleOf(edge),
+        segmentLength: Number(placement.segmentLength.toFixed(1)),
+        vertical: placement.vertical,
+        // 世界坐标（与 `anchorX / anchorY` 同口径，外部量测不必再自己加 left/top）
+        points: localPoints.map((pt) => ({ x: pt.x + left, y: pt.y + top })),
+        boxW: Number(info.w) || info.halfW * 2,
+        boxH: Number(info.h) || info.halfH * 2,
       });
     }
     return out;
@@ -983,12 +1008,26 @@ export class DiagramLayer {
   private __scheduleLabelAvoidance(): void {
     if (this.avoidScheduled) return;
     this.avoidScheduled = true;
-    const run = (attempt: number): void => {
+    /**
+     * 跑一趟避让；**改了东西就再跑一趟**（有界）。
+     *
+     * 为什么不能只跑一趟：这一趟里会同时改"角度"和"偏移"，而角度会**改变盒形**
+     * （竖线长标注从横排变成竖排：横向从字宽缩到字高、纵向反过来）——
+     * 第一趟是按"还没转"的盒子解的冲突，转完之后可能又压上了。
+     * 第二趟拿的是旋转后的真实盒子，能把它解掉；`planLabelOffsets` 是幂等的，
+     * 稳定之后这一趟什么都不改，循环自然停（上限 3 兜底）。
+     */
+    const run = (attempt: number, pass = 0): void => {
       this.avoidScheduled = false;
       if (!this.__avoidLabelOverlaps() && attempt < 5) {
         // 折线还没算出来（首帧前后）—— 下一帧再试，别拿没量准的盒子当真值去挪
         this.avoidScheduled = true;
-        requestAnimationFrame(() => run(attempt + 1));
+        requestAnimationFrame(() => run(attempt + 1, pass));
+        return;
+      }
+      if (this.labelsChangedThisPass && pass < 3) {
+        this.avoidScheduled = true;
+        requestAnimationFrame(() => run(attempt, pass + 1));
       }
     };
     requestAnimationFrame(() => run(0));
@@ -1000,6 +1039,7 @@ export class DiagramLayer {
     const labels: LabelBox[] = [];
     const pinned: Array<{ id: string; box: { minX: number; minY: number; maxX: number; maxY: number } }> = [];
     const byId = new Map<string, any>();
+
 
     for (const edge of edges) {
       if (typeof edge?.getLabelRenderInfo !== 'function') continue;
@@ -1019,34 +1059,64 @@ export class DiagramLayer {
         maxX: left + anchor.x + info.halfW,
         maxY: top + anchor.y + info.halfH,
       };
-      if (this.pinnedLabelIds.has(id)) pinned.push({ id, box });
-      else
+      if (this.pinnedLabelIds.has(id)) {
+        pinned.push({ id, box });
+      } else {
+        // 默认排版：贴在管子旁边；竖线上的长标注转 90° 顺着管子走（见 `planLabelPlacement`）
+        const w = Number(info.w) || info.halfW * 2;
+        const h = Number(info.h) || info.halfH * 2;
+        const placement = planLabelPlacement(this.__pointsOf(edge), anchor, { w, h });
         labels.push({
           id,
           text: String(info.text),
-          // 默认法向净距：标签贴在管子旁边而不是压在上面（图纸惯例，也省得避让时跳很远）
-          base: normalClearanceOf(points as Array<{ x: number; y: number }>, anchor),
+          base: placement.base,
           ...box,
+          anchor: { x: anchor.x + left, y: anchor.y + top },
+          // 候选排版：首选（竖线长标注 = 转 90°）落不下就退回横排 —— 窄走廊里竖排反而放不下
+          // ⚠️ 候选盒子要用**世界坐标**锚点（这里的 labels/units 都是世界坐标；
+          // 局部坐标只用于几何判定 —— 混了就会像"避让忽然全失效"那样毫无提示）
+          placements: buildPlacements({ x: anchor.x + left, y: anchor.y + top }, w, h, placement),
         });
+      }
       byId.set(id, edge);
     }
     if (!labels.length && !pinned.length) return true;
 
     const units = this.nodeBoxes().map((b) => ({ minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY }));
-    const planned = planLabelOffsets({ units, labels, pinned });
+    // `maxSteps: 6`（≈ 96 世界像素）：转 90° 之后标注变"横窄竖高"，
+    // 在拥挤的走廊里要多试几跳才落得下；上限仍然是有界的，不会把标注甩到别处去。
+    const planned = planLabelOffsets({ units, labels, pinned, maxSteps: 6 });
 
     let changed = false;
     for (const plan of planned) {
       const edge = byId.get(plan.id);
       if (!edge) continue;
       const current = this.__labelOffsetOf(edge);
-      if (current[0] === plan.offset[0] && current[1] === plan.offset[1]) continue;
+      const angle = plan.angle;
+      if (current[0] === plan.offset[0] && current[1] === plan.offset[1] && this.__labelAngleOf(edge) === angle) continue;
       // `setState` 走深合并，只给 label.offset 不会把 fontSize / 底色抹掉
-      edge.setState({ style: { label: { offset: [plan.offset[0], plan.offset[1]] } } });
+      edge.setState({ style: { label: { offset: [plan.offset[0], plan.offset[1]], angle } } });
       changed = true;
     }
     if (changed) this.ice.requestRepaint();
+    this.labelsChangedThisPass = changed;
     return true;
+  }
+
+  /**
+   * 读折线顶点。⚠️ 引擎的 `state.points` 是 **`[[x, y], …]` 数组**（不是 `{x, y}` 对象）——
+   * 直接当对象用会得到 `NaN`，症状是"几何判定全部静默失效"（本仓 2026-09-26 踩过一次：
+   * 标签一条都没转，而单测用的是 `{x,y}` 所以全绿）。
+   */
+  private __pointsOf(edge: any): Array<{ x: number; y: number }> {
+    const raw = Array.isArray(edge?.state?.points) ? edge.state.points : [];
+    return raw.map((pt: any) => ({ x: Number(pt[0]) || 0, y: Number(pt[1]) || 0 }));
+  }
+
+  /** 读一条边当前生效的标注旋转角（`style.label.angle`，弧度），非法值当 0。 */
+  private __labelAngleOf(edge: any): number {
+    const raw = Number(edge?.state?.style?.label?.angle);
+    return Number.isFinite(raw) ? raw : 0;
   }
 
   /** 读一条边当前生效的标注偏移（`style.label.offset`），非法值当 0。 */

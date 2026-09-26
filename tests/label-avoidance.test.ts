@@ -10,8 +10,9 @@
  */
 import { test, expect, describe } from '@jest/globals';
 import {
+  LABEL_EDGE_GAP,
   LABEL_CLEARANCE,
-  normalClearanceOf,
+  planLabelPlacement,
   planLabelOffsets,
   overlapRatio,
   shifted,
@@ -39,7 +40,7 @@ describe('planLabelOffsets：管线标注往哪挪', () => {
   test('本来就不撞 → 一条都不动（别把好好的标注推走）', () => {
     const units = [box(0, 0)];
     const labels = [label('a', 500, 500)];
-    expect(planLabelOffsets({ units, labels })).toEqual([{ id: 'a', offset: [0, 0] }]);
+    expect(planLabelOffsets({ units, labels })).toEqual([{ id: 'a', offset: [0, 0], angle: 0 }]);
   });
 
   test('★ 标注压在单元上 → 挪到不压，且方向是"离开那个单元"', () => {
@@ -106,46 +107,116 @@ describe('planLabelOffsets：管线标注往哪挪', () => {
   });
 
   /**
-   * ★ **默认离线**（2026-09-26 加）：标注本来就该贴在管子旁边，而不是压在管子上。
-   * 判据取自锚点所在那一段折线的法向 —— 水平段往上、竖直段往右（固定规则，可复现）。
+   * ★ **默认排版**（2026-09-26 加）：标注贴在管子旁边，而不是压在管子上；
+   * **竖线上的长标注转 90°**（自下而上读）顺着管子走 —— 横排时盒宽就是字宽，
+   * 无论往左还是往右挪都可能仍然压着线。
    */
-  describe('默认法向净距：标签贴在管子旁边', () => {
+  describe('默认排版：贴在旁边；竖线长标注转 90°', () => {
     const points = (...pairs: Array<[number, number]>) => pairs.map(([x, y]) => ({ x, y }));
+    /** 一个 108 × 28 的标注盒（≈ 14 号字、5 个字符那条 `DN1000 污水`） */
+    const size = { w: 108, h: 28 };
+    const up = [0, -(size.h / 2 + LABEL_EDGE_GAP)] as [number, number];
 
-    test('水平段 → 往上让', () => {
+    test('水平段 → 横排、往上让（盒下缘离线 4px）', () => {
       const seg = points([0, 100], [200, 100]);
-      expect(normalClearanceOf(seg, { x: 100, y: 100 })).toEqual([0, -LABEL_CLEARANCE]);
+      expect(planLabelPlacement(seg, { x: 100, y: 100 }, size)).toMatchObject({ angle: 0, base: up });
     });
 
-    test('竖直段 → 往右让', () => {
-      const seg = points([50, 0], [50, 200]);
-      expect(normalClearanceOf(seg, { x: 50, y: 100 })).toEqual([LABEL_CLEARANCE, 0]);
+    test('★ 竖段且装得下 → 转 -90°、往右让（横排时盒子仍然压着线，转完只剩字高）', () => {
+      const seg = points([50, 0], [50, 400]);                       // 400 ≥ 108 + 8
+      expect(planLabelPlacement(seg, { x: 50, y: 200 }, size)).toMatchObject({
+        angle: -Math.PI / 2,
+        base: [size.h / 2 + LABEL_EDGE_GAP, 0],
+        vertical: true,
+      });
     });
 
-    test('锚点在折点上 → 取离它最近的那一段（不抄"第 i 段"那条规则）', () => {
-      // 曼哈顿折线：先横后竖，锚点落在拐点上
-      const folded = points([0, 100], [100, 100], [100, 200]);
-      const clearance = normalClearanceOf(folded, { x: 100, y: 100 });
-      expect([[0, -LABEL_CLEARANCE], [LABEL_CLEARANCE, 0]]).toContainEqual(clearance);
+    test('竖段但太短 → 不转（转了字会戳出管子两头），照旧往上让', () => {
+      const seg = points([50, 0], [50, 80]);                        // 80 < 108 + 8
+      expect(planLabelPlacement(seg, { x: 50, y: 40 }, size)).toMatchObject({ angle: 0, base: up });
+    });
+
+    test('斜段按主轴归并（曼哈顿走向下这条几乎不触发）', () => {
+      const flat = points([0, 0], [200, 60]);
+      expect(planLabelPlacement(flat, { x: 100, y: 30 }, size).angle).toBe(0);
+      const steep = points([0, 0], [60, 200]);
+      expect(planLabelPlacement(steep, { x: 30, y: 100 }, size).angle).toBe(-Math.PI / 2);
+    });
+
+    test('★ 锚点在拐点上（横竖两腿等距）→ 竖腿装得下就转，不能交给数组顺序', () => {
+      // 曼哈顿折线：先横（100px）后竖（400px），锚点落在拐点上 —— 两段到锚点距离都是 0
+      const folded = points([0, 100], [100, 100], [100, 500]);
+      expect(planLabelPlacement(folded, { x: 100, y: 100 }, size)).toMatchObject({
+        angle: -Math.PI / 2,
+        vertical: true,
+      });
+      // 反过来：竖腿太短（80 < 108 + 8）→ 退回横排，按更长的那条腿（这里是 100px 的横腿）办
+      const shortVertical = points([0, 100], [100, 100], [100, 180]);
+      expect(planLabelPlacement(shortVertical, { x: 100, y: 100 }, size)).toMatchObject({
+        angle: 0,
+        vertical: false,
+        segmentLength: 100,
+      });
     });
 
     test('没有折线（点数不足）→ 不平移，别硬编一个方向', () => {
-      expect(normalClearanceOf([], { x: 0, y: 0 })).toEqual([0, 0]);
-      expect(normalClearanceOf(points([1, 1]), { x: 1, y: 1 })).toEqual([0, 0]);
+      expect(planLabelPlacement([], { x: 0, y: 0 }, size)).toMatchObject({ angle: 0, base: [0, 0] });
+      expect(planLabelPlacement(points([1, 1]), { x: 1, y: 1 }, size)).toMatchObject({ angle: 0, base: [0, 0] });
     });
 
     test('★ 基准位（base）参与求解：本来就撞不着 + 有默认净距 → 结果就是那个净距', () => {
       const units: Box[] = [box(0, 0, 100, 20)];
-      const labels = [{ ...label('a', 0, 200), base: [0, -LABEL_CLEARANCE] as [number, number] }];
+      const labels = [{ ...label('a', 0, 200), base: up }];
       const [plan] = planLabelOffsets({ units, labels });
-      expect(plan.offset).toEqual([0, -LABEL_CLEARANCE]);
+      expect(plan.offset).toEqual(up);
+    });
+
+    test('★ 首选朝向放不下 → 退回备选朝向（竖排被窄走廊卡住时退回横排）', () => {
+      // 锚点 (100,100)、盒 108×28、间隙 4：
+      //   横排盒 = x[46,154] y[68,96]；竖排盒 = x[104,132] y[46,154]
+      // 障碍墙 = x[100,200] y[130,300]：只压竖排（横排的 y 够不着它）。
+      // 用 maxSteps=1 把搜索限制在 ±16，让竖排确实无处可去 —— 此时必须退回横排。
+      const anchor = { x: 100, y: 100 };
+      const w = 108;
+      const h = 28;
+      const gap = 4;
+      const flatBox = {
+        minX: anchor.x - w / 2,
+        minY: anchor.y - h / 2 - gap,
+        maxX: anchor.x + w / 2,
+        maxY: anchor.y + h / 2 - gap,
+      };
+      const rotatedBox = {
+        minX: anchor.x + h / 2 + gap - h / 2,
+        minY: anchor.y - w / 2,
+        maxX: anchor.x + h / 2 + gap + h / 2,
+        maxY: anchor.y + w / 2,
+      };
+      const units: Box[] = [box(100, 130, 100, 170)];
+      const labels = [
+        {
+          id: 'a',
+          minX: anchor.x - 1,
+          minY: anchor.y - 1,
+          maxX: anchor.x + 1,
+          maxY: anchor.y + 1,
+          placements: [
+            { angle: -Math.PI / 2, base: [h / 2 + gap, 0] as [number, number], box: rotatedBox },
+            { angle: 0, base: [0, -(h / 2 + gap)] as [number, number], box: flatBox },
+          ],
+        },
+      ];
+      const [plan] = planLabelOffsets({ units, labels, step: 16, maxSteps: 1 });
+      expect(plan.angle).toBe(0);                                   // 退回了横排
+      expect(plan.offset).toEqual([0, -(h / 2 + gap)]);              // 而且是横排的基准位
+      expect(overlapsAfter(units, labels, [plan]).vsUnits).toBe(0);
     });
 
     test('★ 基准位本身压着东西 → 在基准位基础上继续推（不是退回原位）', () => {
       const units: Box[] = [box(0, 188, 100, 20)];                     // 正好压住 base 之后的标注
-      const labels = [{ ...label('a', 0, 200), base: [0, -LABEL_CLEARANCE] as [number, number] }];
+      const labels = [{ ...label('a', 0, 200), base: up }];
       const [plan] = planLabelOffsets({ units, labels });
-      expect(plan.offset[1]).not.toBe(-LABEL_CLEARANCE);
+      expect(plan.offset[1]).not.toBe(up[1]);
       expect(overlapsAfter(units, labels, [plan]).vsUnits).toBe(0);
     });
   });

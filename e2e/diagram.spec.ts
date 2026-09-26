@@ -190,6 +190,10 @@ test('★ 标注不压图元：单元×单元、标注×标注、单元×标注 
   expect(stats.minLabelClearance, '标注离自己那根线太近（又压在线上了）').toBeGreaterThanOrEqual(
     LABEL_CLEARANCE - 0.5
   );
+  // ★ **竖线上的长标注要转 90°**（横排时盒宽就是字宽，怎么挪都还可能压着线）：
+  // 转过的一定是 -90°（自下而上读），不能是别的角度。
+  expect(stats.rotated, '竖线上的长标注一条都没转').toBeGreaterThan(0);
+  expect(stats.oddAngles, '出现不是 -90° 的旋转角').toBe(0);
 
   // 提标改造之后（增删图元）还得重新解一次 —— 加一个池子就可能多一处压住
   await useChip(page, '提标改造');
@@ -198,6 +202,7 @@ test('★ 标注不压图元：单元×单元、标注×标注、单元×标注 
   expect(after.units).toBe(SYMBOLS + UPGRADE_UNITS.length - UPGRADE_REMOVED_UNIT_IDS.length);
   expect({ uu: after.unitVsUnit, ll: after.labelVsLabel, ul: after.unitVsLabel }).toEqual({ uu: 0, ll: 0, ul: 0 });
   expect(after.minLabelClearance).toBeGreaterThanOrEqual(LABEL_CLEARANCE - 0.5);
+  expect(after.oddAngles).toBe(0);
 
   expect(errors, errors.join('\n')).toEqual([]);
 });

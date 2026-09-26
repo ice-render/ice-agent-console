@@ -102,6 +102,10 @@ export async function labelOverlapStats(page: Page, minRatio = 0.02): Promise<{
   unitVsLabel: number;
   /** 标注中心离它自己那根线的锚点的**最小距离**（世界像素）—— "标签贴在旁边"的读数。 */
   minLabelClearance: number;
+  /** 转过的标注条数（竖线上的长标注应当转 90°）。 */
+  rotated: number;
+  /** 转过但角度不是 -90° 的条数（应当恒为 0）。 */
+  oddAngles: number;
 }> {
   return page.evaluate((ratio) => {
     const api = (window as any).__iceAgentConsole;
@@ -113,6 +117,7 @@ export async function labelOverlapStats(page: Page, minRatio = 0.02): Promise<{
       maxY: number;
       anchorX: number;
       anchorY: number;
+      angle: number;
     }>;
     const area = (b: any) => Math.max(0, b.maxX - b.minX) * Math.max(0, b.maxY - b.minY);
     const inter = (a: any, b: any) => {
@@ -130,6 +135,8 @@ export async function labelOverlapStats(page: Page, minRatio = 0.02): Promise<{
       unitVsUnit: units.filter((u, i) => units.some((o, j) => j > i && hit(u, o))).length,
       labelVsLabel: labels.filter((l, i) => labels.some((o, j) => j > i && hit(l, o))).length,
       unitVsLabel: labels.filter((l) => units.some((u) => hit(l, u))).length,
+      rotated: labels.filter((l) => Math.abs(l.angle) > 1e-6).length,
+      oddAngles: labels.filter((l) => Math.abs(l.angle) > 1e-6 && Math.abs(l.angle + Math.PI / 2) > 1e-6).length,
       minLabelClearance: labels.length
         ? Math.min(
             ...labels.map((l) =>
