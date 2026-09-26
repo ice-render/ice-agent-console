@@ -30,7 +30,7 @@
     "@ag-ui/core": "0.0.59",
     "@damoqiongqiu/ice-chart": "0.30.19",
     "@damoqiongqiu/ice-chart-dsl": "0.6.5",
-    "ice-entity-designer": "0.12.4",
+    "ice-entity-designer": "0.13.0",
     "ice-render": "4.3.1",
     "ice-web-components": "1.22.4",
     "ice-web-components-dsl": "0.6.4",

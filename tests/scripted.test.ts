@@ -249,7 +249,7 @@ describe('图卡剧本（内置案例：污水处理工艺图）', () => {
     const plan = buildPlan({ message: '故意画错工艺图', hasDiagnostics: false }) as ToolCallCardPlan;
     expect(toolOf(plan)).toBe(RENDER_DIAGRAM_TOOL);
     const kinds = payloadOf(plan).units.map((u: any) => u.kind);
-    expect(kinds).toContain('greaseTrap'); // 隔油池：看着合理，但不在这套 31 种符号里
+    expect(kinds).toContain('greaseTrap'); // 隔油池：看着合理，但不在这套 38 种符号里
   });
 
   it('★ 修复轮按 diagnosticsTool 吐回同一种卡片（不然图 DSL 写错会被"修"成柱状图）', () => {

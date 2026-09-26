@@ -34,11 +34,23 @@ function messages(result: ReturnType<typeof validateDiagramDsl>): string {
 }
 
 describe('图 DSL 校验：白名单来自上游包', () => {
-  it('31 种符号 / 9 种介质是从 ice-entity-designer 转发的，不是本仓复制的一张表', () => {
+  it('38 种符号 / 11 种介质是从 ice-entity-designer 转发的，不是本仓复制的一张表', () => {
     // 转发的意义：上游加一种符号，本仓不用改就认。这里断言"确实取到了上游那份"。
-    expect(SYMBOL_KINDS.length).toBe(31);
+    expect(SYMBOL_KINDS.length).toBe(38);
     expect(Object.keys(MEDIUM_STYLES).sort()).toEqual(
-      ['air', 'chemical', 'effluent', 'power', 'recycle', 'returnSludge', 'sewage', 'signal', 'sludge'].sort()
+      [
+        'air',
+        'backwash',
+        'chemical',
+        'effluent',
+        'power',
+        'reclaimed',
+        'recycle',
+        'returnSludge',
+        'sewage',
+        'signal',
+        'sludge',
+      ].sort()
     );
   });
 });

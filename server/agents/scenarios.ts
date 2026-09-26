@@ -64,7 +64,7 @@ const BROKEN_DSL = {
  * 故意写错的图 DSL：加了一个「隔油池」。
  *
  * 为什么挑这个错：它**看起来完全合理** —— 隔油池是真实存在的构筑物，
- * 只是不在这套 31 种符号的记号集里（那套是 AAO 工艺线的记号）。
+ * 只是不在这套 38 种符号的记号集里（那套是 AAO 工艺线的记号）。
  * 这正是要演示的那类错误：不是拼写错误，而是"用了一套记号里没有的东西"。
  * 校验器会指出未知种类并**列出合法值**，agent 据此就能修。
  */
@@ -838,7 +838,7 @@ function repairPlan(hasDiagnostics: boolean, failedTool?: string): ToolCardPlan 
     return diagramCard(WATER_PROCESS_DSL, {
       intro:
         '收到诊断了 —— `ice-entity-designer` 里没有「隔油池」这种符号，' +
-        '这套 31 种符号是给排水工艺图的记号集，不含隔油池。去掉它重画：',
+        '这套 38 种符号是给排水工艺图的记号集，不含隔油池。去掉它重画：',
       beats: [{ text: '主流程不受影响，还是从进水一路走到排放口。', pointAt: 'inlet' }],
     });
   }

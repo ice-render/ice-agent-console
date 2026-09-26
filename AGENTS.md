@@ -82,7 +82,7 @@
 5b. **图卡的 DSL 守卫在本仓**（`src/domain/diagram/`）。上游 `ice-entity-designer-dsl`
    **没有** water 编译器，所以那套 kind-first 的 DSL 定义在这里。
    它的校验器与另两张卡同口径：**永不抛、只给结构化诊断** —— 自修复回路靠这个文本。
-   白名单（31 种符号 / 9 种介质）**从 `ice-entity-designer` 转发，不要在本仓复制**，
+   白名单（上游 0.13.0 起 38 种符号 / 11 种介质）**从 `ice-entity-designer` 转发，不要在本仓复制**，
    否则上游加一种符号就会两边不一致（agent 吐的合法载荷被自家校验器判成非法）。
    另外：`server/` 那套 tsconfig 不加载 DOM，所以 `shared/` 里**只能放类型**，
    运行时的白名单留在 `src/domain/diagram/`。

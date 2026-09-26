@@ -30,7 +30,7 @@ import type { DiagramKind, DiagramPort } from '../../../shared/diagram';
 export { DIAGRAM_KINDS, DIAGRAM_PORTS };
 export type { DiagramKind, DiagramPort };
 
-/** 31 种符号种类（转发上游，只读）。 */
+/** 38 种符号种类（转发上游，只读；上游 0.13.0 起）。 */
 export const SYMBOL_KINDS: readonly string[] = WATER_SYMBOL_KINDS;
 
 /** 9 种介质的样式表；键就是合法介质。 */

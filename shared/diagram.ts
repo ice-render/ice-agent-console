@@ -16,7 +16,7 @@
  *
  * 所以分成两层，各管各的：
  * - **这里**：结构（有哪些字段、什么形状）—— 编译期管；
- * - **`src/domain/diagram/`**：取值白名单（31 个符号种类 / 9 种介质）—— 运行时管，
+ * - **`src/domain/diagram/`**：取值白名单（38 个符号种类 / 11 种介质）—— 运行时管，
  *   且直接从上游包 import，保证引擎加了 kind 之后不会静默漂移。
  */
 
@@ -45,7 +45,7 @@ export type DiagramPort = (typeof DIAGRAM_PORTS)[number];
 export interface WaterProcessUnit {
   /** 必填且在一份文档里唯一（管线的 `sourceId`/`targetId` 引用它） */
   id: string;
-  /** 符号种类，取值见 `WATER_SYMBOL_KINDS`（31 种） */
+  /** 符号种类，取值见 `WATER_SYMBOL_KINDS`（38 种） */
   kind: string;
   /** 中文名（画在符号下方） */
   name?: string;
