@@ -9,10 +9,10 @@
  *
  * ⚠️ 这个模型必须先**与浏览器实测对得上**再用它迭代布局（见 calibrate 输出）。
  */
-// 家族包不在 node_modules 里（走 alias / moduleNameMapper），所以直接引兄弟仓的产物。
+// 家族包是普通 npm 依赖（口径见 README §8.1），这个脚本不经过打包器，直接按包名引。
 import { createRequire } from 'node:module';
 const require_ = createRequire(import.meta.url);
-const { WATER_SYMBOL_PRESETS } = require_('../../ice-entity-designer/dist/index.cjs');
+const { WATER_SYMBOL_PRESETS } = require_('ice-entity-designer');
 
 const TAG_TOP = -18;
 const TAG_H = Math.round(9.5 * 1.4);   // 13

@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "AG-UI 事件流驱动 ICE 画布的控制台：Thread 式对话，图表内联成卡片",
+  "engines": {
+    "node": ">=18",
+    "npm": ">=9"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:api": "tsx watch server/index.ts",
@@ -24,6 +28,12 @@
   },
   "dependencies": {
     "@ag-ui/core": "0.0.59",
+    "@damoqiongqiu/ice-chart": "0.30.19",
+    "@damoqiongqiu/ice-chart-dsl": "0.6.5",
+    "ice-entity-designer": "0.12.2",
+    "ice-render": "4.3.0",
+    "ice-web-components": "1.22.4",
+    "ice-web-components-dsl": "0.6.4",
     "markdown-it": "^14.3.2"
   },
   "devDependencies": {

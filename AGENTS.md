@@ -15,8 +15,13 @@
 
 1. **不要改上游仓库。** `ice-render` / `ice-chart` / `ice-chart-dsl` 是同级目录里的独立仓库。
    在这个工程里发现上游缺陷时，写进 `docs/upstream-gaps.md`，不要顺手改。
-2. **不要用 `file:` 依赖家族包。** 运行时靠 webpack `resolve.alias`、类型靠 tsconfig `paths`、
-   测试靠 jest `moduleNameMapper`。装 `file:` 会引入有记录在案的 npm / symlink 问题。
+2. **家族包走 npm 依赖：不许 `file:`，也不许把 alias / `paths` / `moduleNameMapper`
+   指到同级仓库目录。** 六个包写在 `package.json` 的 `dependencies` 里（**精确 pin**），
+   webpack / tsc / jest 三处都是默认解析（口径与理由见 README §8.1）。
+   装 `file:` 有记录在案的 npm / symlink 问题；指向同级目录则是"只 clone 了本仓的机器跑不起来"
+   —— webpack 的 alias 与 jest 的映射**都不回落**，指到不存在的目录就是硬失败
+   （那些目录只在家族工作区里有）。上游改了的口径是**发版 → 本仓跟进 pin**。
+   ⚠️ 引擎（`ice-render`）全工程只能有一份，靠 npm 的 dedupe 保证 —— 别把家族包搞成嵌套安装。
 3. **不要用 `renderChartDsl`。** 它每次 `createChart`，流式更新会泄漏实例并丢掉交互监听。
    用 `validateChartDsl → compileChartDsl → createChart / setOption`，实例只建一次。
 4. **`appendData` 只能用在数值/时间轴。** 它不补 `xAxis.data`，类目轴追加新类目会错位。
@@ -378,7 +383,8 @@ npm run verify        # types:check + jest + build
 npm run verify:full   # 上面 + playwright
 ```
 
-前置：三个兄弟仓库要先 `npm run build`（需要它们的 `dist/` 与 `dist/types/`）。
+前置：`npm install` 装好即可 —— 六个家族包是 npm 上的发布版（见第 1 节第 2 条）。
+改了上游就先发版、再把本仓的 pin 跟上去。
 
 新增行为时要**自设计单测**。归约器和事件序列编译器的用例都在 `tests/`，
 e2e 的判据不要只看"DOM 里有没有元素"——canvas 全白是很典型的一种失败，要数像素。

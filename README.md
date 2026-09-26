@@ -46,22 +46,27 @@
 
 ## 1. 快速开始
 
-前置：**六个**兄弟仓库要先构建过（工程不装它们的 npm 包，直接指向同级目录：
-运行时靠 webpack `resolve.alias`、类型靠 tsconfig `paths`、测试靠 jest `moduleNameMapper`）。
+**只有这一个仓库也能跑**：六个家族包（引擎 / 图表 / chart-dsl / 控件库 / 表单 DSL /
+实体设计器）是 npm 上的发布版，写在 `dependencies` 里；不需要先 clone 六个兄弟仓库。
+前置只有 **Node ≥ 18 / npm ≥ 9**（`package.json` 的 `engines`，与六个家族包的要求一致）。
 
 ```bash
-# 在 ice-render/ 目录下
-ls ice-render/dist/index.cjs ice-chart/dist/index.cjs ice-chart-dsl/dist/index.cjs \
-   ice-web-components/dist/index.cjs ice-web-components-dsl/dist/index.cjs \
-   ice-entity-designer/dist/index.cjs   # 都应在（工艺图用 ice-entity-designer）
-
-cd ice-agent-console
+git clone <本仓地址> && cd ice-agent-console
 npm install
 npm run dev          # 同时起 AG-UI 后端(8099) 和前端 dev server(8100)
 ```
 
 打开 http://localhost:8100 。**不配任何东西**就能用 —— 这时走的是内置剧本。
 （本地开发**不会**自动开演；想直接看那个效果加 `?autoplay=1`，见 §1.0。）
+
+#### 改了上游怎么办
+
+上游那六个包改完之后：**发版 → 本仓把 pin 跟上去**（`npm install ice-render@4.3.1`
+会替你改 `package.json`），然后 `npm run dev`。没有"直接链到同级仓库目录"那条路
+（为什么不做，见 §8.1）。
+
+⚠️ **忘了跟 pin 不会报错**，症状是"我发版了但页面还是老样子" —— 那时先看
+`package.json` 里那个包的版本号，再看 `npm ls <包名>`。
 
 下面那排快捷按钮各对应一条回路。它们**按"作用对象"分成两组** ——
 **「工艺图」那一组排在最前**（那张图是整页主体，大多数动作都作用在它上面），
@@ -192,9 +197,10 @@ Pages 也配着，站点却一直 404，且没有任何报错。
 （本仓第一次就是这个状态：`build_type: workflow` + 零个 workflow + 零次构建记录。
 改成分支之后第一次构建 21 秒就过了。）
 
-顺带一句：**这个仓库天生不适合 Actions 构建** —— 它要六个兄弟仓的 `dist/` 才能打包
-（见 §8.1，家族包走 alias 指向同级目录，`node_modules` 里一个都没有），
-CI 里得先把六个仓库全 clone + build 一遍。直接推产物比修那条流水线划算得多。
+顺带一句：这条流水线以前不值得修 —— 打包要六个兄弟仓的 `dist/`，CI 里得先把六个仓库
+全 clone + build 一遍。2026-09-26 起不必了：六个家族包是普通 npm 依赖（见 §8.1），
+**只 clone 本仓**就能 `npm ci && npm run build:demo`。
+（"整份覆盖推送"这条路仍然是发版用的那条，两者别混。）
 
 它也自包含到**单个 JS**，所以连 `file://` 双击打开都能跑
 （代价见下面"为什么不用动态 `import()`"）。
@@ -1197,18 +1203,33 @@ ice-agent-console/
 
 ## 8. 工程约定
 
-### 8.1 家族包怎么解析（三处，都不用 `file:`）
+### 8.1 家族包怎么解析（就是普通的 npm 依赖）
+
+六个包（引擎 / 图表 / chart-dsl / 控件库 / 表单 DSL / **实体设计器**）写在
+`dependencies` 里，**精确 pin**，由 webpack / tsc / jest 各自按默认规则从
+`node_modules` 解析。没有 `resolve.alias`、没有 `paths`、没有 `moduleNameMapper`、
+没有 `file:` —— 三处都**不需要配**，这就是"结构清楚"那一半：
 
 | 用途 | 机制 |
 |---|---|
-| 运行时打包 | webpack `resolve.alias` → 同级仓库目录（5 个：引擎 / 图表 / chart-dsl / 控件库 / 表单 DSL） |
-| 类型检查 | tsconfig `paths` → 同级仓库目录 |
-| 单测 | jest `moduleNameMapper` → 同级仓库的 `dist/index.cjs` |
+| 运行时打包 | webpack 默认解析（`node_modules`），包自己的 `exports` 决定用哪个产物 |
+| 类型检查 | tsc 默认解析（`node_modules/<包>/dist/types/index.d.ts`） |
+| 单测 | jest 默认解析（同上） |
 
-`node_modules` 里不塞任何家族包。理由与代价见 `docs/upstream-gaps.md` 第 6 条。
+**为什么会变成这样（2026-09-26 的取舍）**：原先这三处都指向**同级的兄弟仓库目录**，
+好处是"改完上游源码 `npm run build` 一下立刻生效"。但那条路要求使用者先把六个仓库
+clone 到同级 —— 只 clone 本仓的人 `npm run dev` 直接模块找不到
+（webpack 的 alias 与 jest 的映射**都不回落**，指到不存在的目录就是硬失败）。
+现在按"**工程要能跑起来、结构要清楚**"这条取舍，改成"上游发版 → 本仓跟进 pin"：
+多一步发版，换来任何机器 clone 下来都能跑、且解析规则只有 npm 一套。
 
-**alias 是为了强制单实例**：各包的 `node_modules` 里可能躺着版本不同的 `ice-render` 副本，
-解析出多份引擎会让 `typeId` 注册表错位（`ice-chart` 造出来的图元在引擎眼里不是"同一个 ICE 的组件"）。
+**单实例靠 npm 的 dedupe**：引擎全工程只能有一份，否则 `typeId` 注册表错位
+（`ice-chart` 造出来的图元在引擎眼里不是"同一个 ICE 的组件"）。六个包的 `ice-render`
+peer 范围互相兼容，npm 会把顶层那一份铺给所有人 —— `npm ls ice-render` 里全是 `deduped`
+（2026-09-26 实测：15 个包，无嵌套副本）。⚠️ 因此**不要把某个家族包改成嵌套安装**
+（比如手动 `npm i --install-strategy=nested`），那会悄悄造出第二份引擎。
+
+**不用 `file:` 链同级仓库**：那条路有记录在案的坑，见 `docs/upstream-gaps.md` 第 6 条。
 
 ### 8.2 双 tsconfig
 
@@ -1274,12 +1295,12 @@ OpenAI 兼容接口（随机端口），让 `LlmAgent` 真去调它。之所以�
 
 | 项 | 数字 |
 |---|---|
-| 单测 | **281 passed** / 15 suites（含 `seo.test.ts` 与 `pageConvention.test.ts`） |
-| e2e | **55 passed** / 11 specs |
-| 生产包 | 约 1.36 MiB（引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个兄弟仓的产物 + 应用自己那点） |
+| 单测 | **321 passed** / 22 suites（含 `seo.test.ts` 与 `pageConvention.test.ts`） |
+| e2e | **58 passed** / 4 skipped / 15 specs |
+| 生产包 | **2.17 MiB**（压缩前；引擎 / 图表 / 控件库 / 两个 DSL / 设计器六个包的产物 + 应用自己那点） |
 
-> 两个大头：控件库（`ice-web-components`）488 KiB —— 它是个 84 个组件的完整工具集，
-> 这里只用到了 `ICEButton`；设计器（`ice-entity-designer`）196 KiB —— 它带 9 个领域包的记号集，
+> 两个大头：控件库（`ice-web-components`）508 KiB —— 它是个 84 个组件的完整工具集，
+> 这里只用到了 `ICEButton`；设计器（`ice-entity-designer`）214 KiB —— 它带 9 个领域包的记号集，
 > 工艺图只用了其中给排水那一个。两个都是"反着用"的代价，真要瘦身得走 tree-shaking
 > （它们目前的产物都是 UMD 单文件，摇不掉）。
 

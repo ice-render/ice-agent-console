@@ -3,7 +3,6 @@ const fs = require('fs');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
-const WORKSPACE = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.resolve(__dirname, 'public');
 
 /**
@@ -55,29 +54,21 @@ class CopyPublicFiles {
 }
 
 /**
- * ICE 家族在本地是**并列的仓库**，不是一个 monorepo。
+ * 家族包（引擎 / 图表 / chart-dsl / 控件库 / 表单 DSL / 实体设计器）走
+ * **`package.json` 的 `dependencies`**，由 webpack 正常从 `node_modules` 解析 ——
+ * 这里**没有 alias**。
  *
- * 每个包的 node_modules 里还各自躺着一份自己装的 ice-render，直接用 node 的解析规则
- * 打包会解析出**多份引擎实例**，引擎的类身份（typeId 注册表、instanceof、事件总线）
- * 就会错位——ice-chart 造出来的图元在引擎眼里不是"同一个 ICE 的组件"。
+ * 2026-09-26 之前有：把六个包 alias 到同级的兄弟仓库目录，好让"改完兄弟仓的源码
+ * 立刻生效"。撤掉的理由是"工程要能跑起来、结构要清楚"（见 README §8.1）——
+ * 只 clone 了本仓的机器上没有那些同级目录，而 webpack 的 alias **不回落**
+ * （tsc 的 `paths` 会、jest 的 `moduleNameMapper` 不会），构建直接 `Module not found`。
+ * 现在上游迭代的口径是**改上游 → 发版 → 本仓跟进 pin**，不再指着同级目录。
  *
- * 所以这里把用到的家族包**全部 alias 到同级仓库目录**，强制全工程只有一份 ice-render。
- * 副作用是好的：改完兄弟仓库的源码 npm run build 一下，本工程立刻吃到新版本。
- *
- * （M1 用引擎 + 图表 + DSL 三个包；控件层用 ice-web-components。）
+ * ⚠️ 别顺手加回来。哪怕只是"加一条 alias 省得装包"，也得连带处理
+ * "目录不存在时不要写这条 alias"，否则等于把修好的洞重新挖开。
+ * 单实例（引擎全工程只能有一份，否则 typeId 注册表错位）现在靠 npm 的 dedupe：
+ * 六个包共用顶层那一份 `ice-render`，`npm ls ice-render` 里全是 `deduped`。
  */
-const family = {
-  'ice-render': path.resolve(WORKSPACE, 'ice-render'),
-  '@damoqiongqiu/ice-chart': path.resolve(WORKSPACE, 'ice-chart'),
-  '@damoqiongqiu/ice-chart-dsl': path.resolve(WORKSPACE, 'ice-chart-dsl'),
-  'ice-web-components': path.resolve(WORKSPACE, 'ice-web-components'),
-  'ice-web-components-dsl': path.resolve(WORKSPACE, 'ice-web-components-dsl'),
-  // 图卡片用：`ice-entity-designer` 把 `ice-render` 当 peer 依赖（它的 dist 里是
-  // `require("ice-render")`），必须让它解析到**同一个**引擎目录，否则会出现第二份内核
-  // —— 设计器建的图元在引擎眼里不是"同一个 ICE 的组件"。
-  'ice-entity-designer': path.resolve(WORKSPACE, 'ice-entity-designer'),
-};
-
 module.exports = (env, argv) => {
   const isProd = argv.mode === 'production';
 
@@ -113,7 +104,6 @@ module.exports = (env, argv) => {
     },
     resolve: {
       extensions: ['.ts', '.js'],
-      alias: family,
     },
     module: {
       rules: [

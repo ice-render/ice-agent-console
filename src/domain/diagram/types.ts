@@ -8,8 +8,8 @@
  * agent 产出的 DSL 完全合法，本仓的校验器却把它判成"未知种类" ——
  * 这类"两边各有一份真相"的分歧正是 `shared/contract.ts` 抬头警告的那种最难查的 bug。
  *
- * 所以这里只做转发，不复制。jest 侧靠 `moduleNameMapper` 让这个包在 node 环境可加载；
- * 打包侧靠 webpack 的 `resolve.alias` 把它钉到同级仓库目录（避免第二份 `ice-render` 内核）。
+ * 所以这里只做转发，不复制。`ice-entity-designer` 是普通 npm 依赖（口径见 README §8.1），
+ * node 侧与打包侧都从 node_modules 里那一份解析 —— 全工程因此只有一份 `ice-render` 内核。
  *
  * ## 为什么这个文件不能进 `shared/`
  *

@@ -14,25 +14,9 @@
     "noEmit": true,
     "types": ["jest", "node"],
 
-    // 家族包的类型从**同级仓库目录**直接解析，不走 node_modules。
-    //
-    // 为什么不装成 `file:` 依赖（即家族里 react-demo 的做法）：那条路有记录在案的坑——
-    // `file:` 会让 npm 遍历被链接包的依赖树跑 prepare，撞上某些包锁定的老 typescript；
-    // 而且它留下的 node_modules 软链在后续 install 时会写坏宿主工程的 @types。
-    // 这里只需要类型（运行时由 webpack 的 resolve.alias 负责），所以 paths 就够，
-    // 不往 node_modules 里塞任何东西。
-    //
-    // 代价必须知道：`npm install` 之后仍需要三个兄弟仓库各自 `npm run build`
-    // 生成 dist/types，否则类型检查会报找不到模块。
-    "baseUrl": ".",
-    "paths": {
-      "ice-render": ["../ice-render"],
-      "@damoqiongqiu/ice-chart": ["../ice-chart"],
-      "@damoqiongqiu/ice-chart-dsl": ["../ice-chart-dsl"],
-      "ice-web-components": ["../ice-web-components"],
-      "ice-web-components-dsl": ["../ice-web-components-dsl"],
-      "ice-entity-designer": ["../ice-entity-designer"]
-    }
+    // 六个家族包是 package.json 里的普通 npm 依赖，类型从 node_modules 里那份
+    // `dist/types/index.d.ts` 解析 —— 没有 baseUrl / paths（口径见 README §8.1）。
+    // 用 `file:` 链到同级仓库有记录在案的坑，所以不那样做。
   },
   "include": ["src", "shared", "tests", "e2e", "playwright.config.ts", "playwright.cdp.config.ts"]
 }

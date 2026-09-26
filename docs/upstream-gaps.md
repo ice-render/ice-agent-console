@@ -115,7 +115,7 @@ server 侧运行时依赖收敛到只有 `@ag-ui/core`。
 
 ---
 
-## 6. 【参考】家族包的本地解析方式：`paths` 而不是 `file:`
+## 6. 【参考】家族包的解析方式：npm 依赖，不用 `file:`、也不链同级仓库
 
 不是缺陷，是**本工程对家族既有实践的一处偏离**，记在这里以免以后困惑。
 
@@ -123,10 +123,24 @@ server 侧运行时依赖收敛到只有 `@ag-ui/core`。
 那条路有记录在案的坑：`file:` 会让 npm 遍历被链接包的依赖树跑 `prepare`（会撞上某些包
 锁定的老 typescript），而且它留下的 `node_modules` 软链在后续 install 时会写坏宿主工程的 `@types`。
 
-本工程只用到三样东西：**运行时由 webpack 的 `resolve.alias` 负责，类型由 tsconfig 的 `paths` 负责，
-测试由 jest 的 `moduleNameMapper` 负责**——三处都指向同级仓库目录，`node_modules` 里不塞任何东西。
+**本工程的做法（2026-09-26 定稿）**：六个家族包就是 `package.json` 里的普通 npm 依赖
+（**精确 pin**），webpack / tsc / jest 三处都用**默认解析**——没有 `resolve.alias`、
+没有 `paths`、没有 `moduleNameMapper`、没有 `file:`。上游改了的口径是
+**发版 → 本仓跟进 pin**（README §8.1 记了这次取舍的来龙去脉）。
 
-代价：`npm install` 之后仍需要三个兄弟仓库各自 `npm run build` 生成 `dist/` 与 `dist/types/`。
+两个代价，都要记住：
+
+1. **上游改了但没发版（或忘了跟 pin），本仓看不出变化** —— 症状是"我改了啊，
+   页面怎么还是老样子"，而且**不报错**。排查顺序：`package.json` 里那个包的版本
+   → `npm ls <包名>`。
+2. 单实例（引擎全工程只能有一份，否则 `typeId` 注册表错位）现在靠 **npm 的 dedupe**：
+   六个包的 `ice-render` peer 范围互相兼容，npm 把顶层那一份铺给所有人。
+   别把家族包搞成嵌套安装，那会悄悄造出第二份引擎。
+
+（更早的形态是"三处都 alias / paths 到同级仓库目录，改完源码立刻生效"。撤掉的直接原因是
+**只 clone 了本仓的机器跑不起来**：webpack 的 alias 与 jest 的映射**都不回落**，
+指到不存在的目录就是 `Module not found`。当时的"两全"改法是"同级在场才指过去"，
+2026-09-26 按"工程要能跑起来、结构要清楚"又收敛成了现在这个单一来源。）
 
 ---
 
@@ -463,7 +477,7 @@ JSON Patch 只管 `units` 数组，级联是**渲染层**的行为 —— 而 `s
 | 3 | 绕过 | 官方 encoder 拖 protobuf | 否 |
 | 4 | **已修 09-18** | `ChartEventName` 缺两个事件名 | 否 —— 类型已补齐 + 棘轮 |
 | 5 | 观察（有解 09-18） | 折线图命中区窄 | 否 —— 现在有公开选项 `hitRadius`（`types.ts`）可按图放宽 |
-| 6 | 参考 | 用 `paths` 而非 `file:` | 否 |
+| 6 | 参考 | 家族包走 npm 依赖（不用 `file:` / 不链同级仓库） | 否 |
 | 7 | 请求 | `ice-chart` 不接受外部 ICE | 否（改用两块画布绕开） |
 | 8 | 观察（位置已变） | `ICEPanel` 不能当布局容器（用 `ICEGroup`） | 否 —— `ICEGroup` 与布局器已**下沉到引擎** |
 | 9 | 已修 | `fitCanvasToDisplaySize` 不置脏 → resize 静默白屏 | 否（`ice-render` 2.12.1 已修） |
