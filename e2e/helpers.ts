@@ -100,11 +100,20 @@ export async function labelOverlapStats(page: Page, minRatio = 0.02): Promise<{
   unitVsUnit: number;
   labelVsLabel: number;
   unitVsLabel: number;
+  /** 标注中心离它自己那根线的锚点的**最小距离**（世界像素）—— "标签贴在旁边"的读数。 */
+  minLabelClearance: number;
 }> {
   return page.evaluate((ratio) => {
     const api = (window as any).__iceAgentConsole;
     const units = api.diagramBoxes() as Array<{ minX: number; minY: number; maxX: number; maxY: number }>;
-    const labels = api.diagramEdgeLabels() as Array<{ minX: number; minY: number; maxX: number; maxY: number }>;
+    const labels = api.diagramEdgeLabels() as Array<{
+      minX: number;
+      minY: number;
+      maxX: number;
+      maxY: number;
+      anchorX: number;
+      anchorY: number;
+    }>;
     const area = (b: any) => Math.max(0, b.maxX - b.minX) * Math.max(0, b.maxY - b.minY);
     const inter = (a: any, b: any) => {
       const w = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
@@ -121,6 +130,13 @@ export async function labelOverlapStats(page: Page, minRatio = 0.02): Promise<{
       unitVsUnit: units.filter((u, i) => units.some((o, j) => j > i && hit(u, o))).length,
       labelVsLabel: labels.filter((l, i) => labels.some((o, j) => j > i && hit(l, o))).length,
       unitVsLabel: labels.filter((l) => units.some((u) => hit(l, u))).length,
+      minLabelClearance: labels.length
+        ? Math.min(
+            ...labels.map((l) =>
+              Math.hypot((l.minX + l.maxX) / 2 - l.anchorX, (l.minY + l.maxY) / 2 - l.anchorY)
+            )
+          )
+        : Number.POSITIVE_INFINITY,
     };
   }, minRatio);
 }

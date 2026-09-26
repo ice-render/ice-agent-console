@@ -9,7 +9,14 @@
  * 就是"偏移该给多少"那套纯逻辑。判据与 `layout.ts` 同口径：占小盒 ≥2% 才算压住。
  */
 import { test, expect, describe } from '@jest/globals';
-import { planLabelOffsets, overlapRatio, shifted, type Box } from '../src/domain/diagram/label-avoidance';
+import {
+  LABEL_CLEARANCE,
+  normalClearanceOf,
+  planLabelOffsets,
+  overlapRatio,
+  shifted,
+  type Box,
+} from '../src/domain/diagram/label-avoidance';
 
 const box = (minX: number, minY: number, w = 100, h = 20): Box => ({
   minX,
@@ -96,5 +103,50 @@ describe('planLabelOffsets：管线标注往哪挪', () => {
     const units = [box(0, 0, 0, 0)];
     const labels = [label('a', 0, 0)];
     expect(planLabelOffsets({ units, labels })[0].offset).toEqual([0, 0]);
+  });
+
+  /**
+   * ★ **默认离线**（2026-09-26 加）：标注本来就该贴在管子旁边，而不是压在管子上。
+   * 判据取自锚点所在那一段折线的法向 —— 水平段往上、竖直段往右（固定规则，可复现）。
+   */
+  describe('默认法向净距：标签贴在管子旁边', () => {
+    const points = (...pairs: Array<[number, number]>) => pairs.map(([x, y]) => ({ x, y }));
+
+    test('水平段 → 往上让', () => {
+      const seg = points([0, 100], [200, 100]);
+      expect(normalClearanceOf(seg, { x: 100, y: 100 })).toEqual([0, -LABEL_CLEARANCE]);
+    });
+
+    test('竖直段 → 往右让', () => {
+      const seg = points([50, 0], [50, 200]);
+      expect(normalClearanceOf(seg, { x: 50, y: 100 })).toEqual([LABEL_CLEARANCE, 0]);
+    });
+
+    test('锚点在折点上 → 取离它最近的那一段（不抄"第 i 段"那条规则）', () => {
+      // 曼哈顿折线：先横后竖，锚点落在拐点上
+      const folded = points([0, 100], [100, 100], [100, 200]);
+      const clearance = normalClearanceOf(folded, { x: 100, y: 100 });
+      expect([[0, -LABEL_CLEARANCE], [LABEL_CLEARANCE, 0]]).toContainEqual(clearance);
+    });
+
+    test('没有折线（点数不足）→ 不平移，别硬编一个方向', () => {
+      expect(normalClearanceOf([], { x: 0, y: 0 })).toEqual([0, 0]);
+      expect(normalClearanceOf(points([1, 1]), { x: 1, y: 1 })).toEqual([0, 0]);
+    });
+
+    test('★ 基准位（base）参与求解：本来就撞不着 + 有默认净距 → 结果就是那个净距', () => {
+      const units: Box[] = [box(0, 0, 100, 20)];
+      const labels = [{ ...label('a', 0, 200), base: [0, -LABEL_CLEARANCE] as [number, number] }];
+      const [plan] = planLabelOffsets({ units, labels });
+      expect(plan.offset).toEqual([0, -LABEL_CLEARANCE]);
+    });
+
+    test('★ 基准位本身压着东西 → 在基准位基础上继续推（不是退回原位）', () => {
+      const units: Box[] = [box(0, 188, 100, 20)];                     // 正好压住 base 之后的标注
+      const labels = [{ ...label('a', 0, 200), base: [0, -LABEL_CLEARANCE] as [number, number] }];
+      const [plan] = planLabelOffsets({ units, labels });
+      expect(plan.offset[1]).not.toBe(-LABEL_CLEARANCE);
+      expect(overlapsAfter(units, labels, [plan]).vsUnits).toBe(0);
+    });
   });
 });

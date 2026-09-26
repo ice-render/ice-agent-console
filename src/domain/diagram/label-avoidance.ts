@@ -44,6 +44,15 @@ export interface Box {
 export interface LabelBox extends Box {
   id: string;
   text?: string;
+  /**
+   * 这条标注的**默认错开量**（世界单位，相对折线上的锚点）。
+   *
+   * 图纸惯例是"标注贴在管子旁边"而不是压在管子上，所以调用方先算一个法向净距
+   * （见 `normalClearanceOf()`），本模块在它**之上**再解冲突 —— 于是
+   * "本来就压不住"的那些标注也会离开线，而不是只有撞了的才挪。
+   * 不传就是老行为（从锚点原位开始试）。
+   */
+  base?: [number, number];
 }
 
 /** 显式给了偏移的标注：自动避让**不许动它**，但别人要躲开它。 */
@@ -96,11 +105,57 @@ export const shifted = (b: Box, offset: [number, number]): Box => ({
 
 const centerOf = (b: Box): [number, number] => [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2];
 
+/** 标注默认离线的净距（世界像素）。12 ≈ 一个标注盒高度的 2/3，看着"贴在旁边"而不是"飘走"。 */
+export const LABEL_CLEARANCE = 12;
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * 算一条标注的**默认法向错开量**：从锚点所在的那一段折线取法向。
+ *
+ * 规则（固定 → 结果可复现）：找**离锚点最近的那一段**（垂距最小），
+ * 水平段（|dx| ≥ |dy|）往上让，竖直段往右让。斜段按这两个轴归并 ——
+ * 本仓的折线是曼哈顿走向，绝大多数段就是纯水平 / 纯竖直。
+ *
+ * ⚠️ 为什么用"离锚点最近的那段"而不是"第 i 段"：锚点由引擎的 `getLabelPosition()` 定
+ * （2 点取中点、多点取中间折点），在这里把那条规则再抄一份就等着漂移。
+ * 拿引擎给的锚点反查最近的段，既不用抄规则，折点处（两段相交）也自然取到其中一段。
+ */
+export function normalClearanceOf(points: Point[], anchor: Point, clearance = LABEL_CLEARANCE): [number, number] {
+  let best: { dx: number; dy: number; dist: number } | null = null;
+  for (let i = 1; i < (points?.length || 0); i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) continue;
+    // 点到线段的垂距（投影夹到 [0,1]，端点上就是点到端点的距离）
+    const t = Math.max(0, Math.min(1, ((anchor.x - a.x) * dx + (anchor.y - a.y) * dy) / (len * len)));
+    const px = a.x + t * dx;
+    const py = a.y + t * dy;
+    const dist = Math.hypot(anchor.x - px, anchor.y - py);
+    if (!best || dist < best.dist) best = { dx, dy, dist };
+  }
+  if (!best) return [0, 0];
+  return Math.abs(best.dx) >= Math.abs(best.dy) ? [0, -clearance] : [clearance, 0];
+}
+
 /**
  * 候选位移：**最近优先**，方向按"远离撞得最狠的那个障碍"排。
- * 第一个候选永远是 `[0, 0]`（原位），所以"本来就不撞"的标注不会被无谓地挪走。
+ * 第一个候选永远是"基准位"（有 `base` 就是默认法向错开量，没有就是 `[0, 0]` 原位），
+ * 所以"在基准位就不撞"的标注只做默认错开、不会被无谓地推更远。
  */
-function candidates(label: Box, obstacles: Box[], step: number, maxSteps: number): Array<[number, number]> {
+function candidates(
+  label: Box,
+  obstacles: Box[],
+  step: number,
+  maxSteps: number,
+  base: [number, number]
+): Array<[number, number]> {
   let worst: { box: Box; ov: number } | null = null;
   for (const o of obstacles) {
     const ov = intersection(label, o);
@@ -124,9 +179,9 @@ function candidates(label: Box, obstacles: Box[], step: number, maxSteps: number
     dirs.push([0, -1], [0, 1], [1, 0], [-1, 0]);
   }
 
-  const out: Array<[number, number]> = [[0, 0]];
+  const out: Array<[number, number]> = [[base[0], base[1]]];
   for (let k = 1; k <= maxSteps; k++) {
-    for (const [ux, uy] of dirs) out.push([ux * k * step, uy * k * step]);
+    for (const [ux, uy] of dirs) out.push([base[0] + ux * k * step, base[1] + uy * k * step]);
   }
   return out;
 }
@@ -153,9 +208,10 @@ export function planLabelOffsets(input: LabelPlanInput): PlannedOffset[] {
   }
 
   for (const label of input.labels) {
-    let chosen: [number, number] = [0, 0];
+    const base: [number, number] = label.base ? [label.base[0], label.base[1]] : [0, 0];
+    let chosen: [number, number] = base;
     let bestCost = Number.POSITIVE_INFINITY;
-    for (const offset of candidates(label, placedUnits, step, maxSteps)) {
+    for (const offset of candidates(label, placedUnits, step, maxSteps, base)) {
       const box = shifted(label, offset);
       if (!blocked(box, placedUnits) && !blocked(box, placedLabels)) {
         chosen = offset;

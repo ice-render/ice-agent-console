@@ -44,7 +44,7 @@ import { tween, type ICETweenHandle } from 'ice-web-components';
 import { Layer } from '../domain/ice/layer';
 import { applyThemeToIce } from '../domain/theme';
 import { compileDiagramDsl, type DiagramOp } from '../domain/diagram/compile';
-import { planLabelOffsets } from '../domain/diagram/label-avoidance';
+import { normalClearanceOf, planLabelOffsets, type LabelBox } from '../domain/diagram/label-avoidance';
 import type { WaterProcessDslDocument } from '../../shared/diagram';
 import type { ZoomDirection } from '../../shared/contract';
 
@@ -361,9 +361,19 @@ export class DiagramLayer {
    * ⚠️ 只取标注盒，**不取整条管线的包围盒**：管线本来就要连到单元上，
    * 按整条线算的话每一根都"压着"两端的单元，全是假阳性。
    */
-  edgeLabelBoxes(): Array<{ id: string; text: string; minX: number; minY: number; maxX: number; maxY: number }> {
+  edgeLabelBoxes(): Array<{
+    id: string;
+    text: string;
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    /** 这条标注**锚在折线上的那个点**（世界坐标）。`中心 - 锚点` 就是当前偏移。 */
+    anchorX: number;
+    anchorY: number;
+  }> {
     const edges: any[] = this.designer.edges || [];
-    const out: Array<{ id: string; text: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
+    const out: ReturnType<DiagramLayer['edgeLabelBoxes']> = [];
     for (const edge of edges) {
       if (typeof edge?.getLabelRenderInfo !== 'function') continue;
       const info = edge.getLabelRenderInfo();
@@ -371,15 +381,16 @@ export class DiagramLayer {
       // 局部 → 世界
       const left = Number(edge.state?.left) || 0;
       const top = Number(edge.state?.top) || 0;
-      const cx = left + Number(info.x);
-      const cy = top + Number(info.y);
+      const [dx, dy] = this.__labelOffsetOf(edge);
       out.push({
         id: String(edge.state?.id ?? ''),
         text: String(info.text),
-        minX: cx - info.halfW,
-        minY: cy - info.halfH,
-        maxX: cx + info.halfW,
-        maxY: cy + info.halfH,
+        minX: left + Number(info.x) - info.halfW,
+        minY: top + Number(info.y) - info.halfH,
+        maxX: left + Number(info.x) + info.halfW,
+        maxY: top + Number(info.y) + info.halfH,
+        anchorX: left + Number(info.x) - dx,
+        anchorY: top + Number(info.y) - dy,
       });
     }
     return out;
@@ -986,7 +997,7 @@ export class DiagramLayer {
   /** @returns 这一轮是否量到了真几何（false = 折线还没算完，等下一帧） */
   private __avoidLabelOverlaps(): boolean {
     const edges: any[] = this.designer.edges || [];
-    const labels: Array<{ id: string; text: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
+    const labels: LabelBox[] = [];
     const pinned: Array<{ id: string; box: { minX: number; minY: number; maxX: number; maxY: number } }> = [];
     const byId = new Map<string, any>();
 
@@ -1001,14 +1012,22 @@ export class DiagramLayer {
       const top = Number(edge.state?.top) || 0;
       const current = this.__labelOffsetOf(edge);
       // info 给的是**含当前偏移**的盒子，减掉它才是零偏移的位置
+      const anchor = { x: Number(info.x) - current[0], y: Number(info.y) - current[1] };
       const box = {
-        minX: left + info.x - current[0] - info.halfW,
-        minY: top + info.y - current[1] - info.halfH,
-        maxX: left + info.x - current[0] + info.halfW,
-        maxY: top + info.y - current[1] + info.halfH,
+        minX: left + anchor.x - info.halfW,
+        minY: top + anchor.y - info.halfH,
+        maxX: left + anchor.x + info.halfW,
+        maxY: top + anchor.y + info.halfH,
       };
       if (this.pinnedLabelIds.has(id)) pinned.push({ id, box });
-      else labels.push({ id, text: String(info.text), ...box });
+      else
+        labels.push({
+          id,
+          text: String(info.text),
+          // 默认法向净距：标签贴在管子旁边而不是压在上面（图纸惯例，也省得避让时跳很远）
+          base: normalClearanceOf(points as Array<{ x: number; y: number }>, anchor),
+          ...box,
+        });
       byId.set(id, edge);
     }
     if (!labels.length && !pinned.length) return true;

@@ -16,6 +16,7 @@
  * 第 4 层是反转之后新加的：**不重画**。`stageInfo().builds.diagram` 是它的直接读数。
  */
 import { expect, test } from '@playwright/test';
+import { LABEL_CLEARANCE } from '../src/domain/diagram/label-avoidance';
 import {
   UPGRADE_BRIDGE_PIPES,
   UPGRADE_PIPES,
@@ -183,6 +184,12 @@ test('★ 标注不压图元：单元×单元、标注×标注、单元×标注 
   expect(stats.unitVsUnit, '单元之间压住（layout.ts 那套棘轮管的事）').toBe(0);
   expect(stats.labelVsLabel, '标注互相压').toBe(0);
   expect(stats.unitVsLabel, '管线标注压在单元上').toBe(0);
+  // ★ 标签**贴在管子旁边**而不是压在上面：每个标注的中点离它锚在折线上的那个点
+  // 至少 `LABEL_CLEARANCE`（判据来自 `src/domain/diagram/label-avoidance.ts`，不是这里拍的数）。
+  // 这条是 2026-09-26 按"图上标签不必压在线条上"的版面意见加的：默认法向净距 + 不够再推。
+  expect(stats.minLabelClearance, '标注离自己那根线太近（又压在线上了）').toBeGreaterThanOrEqual(
+    LABEL_CLEARANCE - 0.5
+  );
 
   // 提标改造之后（增删图元）还得重新解一次 —— 加一个池子就可能多一处压住
   await useChip(page, '提标改造');
@@ -190,6 +197,7 @@ test('★ 标注不压图元：单元×单元、标注×标注、单元×标注 
   const after = await labelOverlapStats(page);
   expect(after.units).toBe(SYMBOLS + UPGRADE_UNITS.length - UPGRADE_REMOVED_UNIT_IDS.length);
   expect({ uu: after.unitVsUnit, ll: after.labelVsLabel, ul: after.unitVsLabel }).toEqual({ uu: 0, ll: 0, ul: 0 });
+  expect(after.minLabelClearance).toBeGreaterThanOrEqual(LABEL_CLEARANCE - 0.5);
 
   expect(errors, errors.join('\n')).toEqual([]);
 });
