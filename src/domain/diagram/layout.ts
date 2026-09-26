@@ -38,6 +38,13 @@
  * ⚠️ 保持这个模型与上游同步：那三个常数抄自 `ice-entity-designer` 的
  * `water_shapes.ts` `syncShape()` 末尾的排版。上游若改了字号或 `labelWidth` 公式，
  * 这里要跟着改 —— 否则这个测试会开始说假话（而且它会说"没问题"）。
+ *
+ * ⚠️ **2026-09-26 起，这个模型只对"标签居中"成立**：上游 `ice-entity-designer@0.12.3` 让
+ * **顶边 / 底边被连线占用**的单元把位号 / 名称**往右让开**（见 `docs/upstream-gaps.md` 第 17 条），
+ * 那些单元的真实落墨盒比这里算的**更宽**。于是本文件用 `left/top` 推出来的盒子是**下界**：
+ * - 它仍然够用来查"两个单元的形状 / 居中标签会不会撞"（也就是这条棘轮的原意）；
+ * - 但"改完之后画面上真的不撞"要以 **e2e 那条用引擎真实盒子（`diagramBoxes()`）的棘轮**为准
+ *   （`e2e/diagram.spec.ts` 的「标注不压图元…三类都为零」，它读的是真实渲染包围盒）。
  */
 import { WATER_SYMBOL_PRESETS } from 'ice-entity-designer';
 import type { WaterProcessUnit } from '../../../shared/diagram';
