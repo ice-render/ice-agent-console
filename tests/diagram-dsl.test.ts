@@ -136,6 +136,30 @@ describe('图 DSL 校验', () => {
     expect(messages(result)).toContain('非法端口');
   });
 
+  /**
+   * 标注偏移：**非法值必须报错，不能被静默忽略**。
+   *
+   * 它关系到"这条线的标注压不压住图元" —— 静默丢弃会让人以为避让生效了，
+   * 而画面照旧压着（这类"看起来成功了"的失败最难查）。
+   * 合法值与"不写这个字段"都要能过（不写 = 交给自动避让）。
+   */
+  it('★ labelOffset 必须是两个有限数：非法值报错，合法值 / 不写都放过', () => {
+    const withOffset = (labelOffset: any) =>
+      messages(
+        validateDiagramDsl(
+          minimal({
+            pipes: [{ id: 'p1', sourceId: 'inlet', targetId: 'pump', medium: 'sewage', labelOffset }],
+          })
+        )
+      );
+
+    expect(withOffset([0, -16])).not.toContain('标注偏移');
+    expect(withOffset(undefined)).not.toContain('标注偏移');
+    for (const bad of [[0], [0, 1, 2], ['a', 0], [NaN, 0], 'x', { dx: 0, dy: -16 }]) {
+      expect(withOffset(bad)).toContain('标注偏移');
+    }
+  });
+
   it('坐标不是有穷数 / 量级离谱 → 报错', () => {
     const nan = validateDiagramDsl(
       minimal({ units: [{ id: 'a', kind: 'pump', left: NaN, top: 0 }], pipes: [] })
@@ -225,6 +249,20 @@ describe('图 DSL 编译', () => {
     });
     const pipe = compileDiagramDsl(doc).find((o) => o.op === 'pipe') as any;
     expect([pipe.sourcePort, pipe.targetPort]).toEqual(['B', 'T']);
+  });
+
+  it('★ labelOffset 原样透传到建图指令（不写就不带这个键）', () => {
+    const withOffset = compileDiagramDsl(
+      minimal({
+        pipes: [{ id: 'p1', sourceId: 'inlet', targetId: 'pump', medium: 'sewage', labelOffset: [0, -16] }],
+      })
+    ).find((o) => o.op === 'pipe') as any;
+    expect(withOffset.labelOffset).toEqual([0, -16]);
+
+    const without = compileDiagramDsl(
+      minimal({ pipes: [{ id: 'p1', sourceId: 'inlet', targetId: 'pump', medium: 'sewage' }] })
+    ).find((o) => o.op === 'pipe') as any;
+    expect('labelOffset' in without).toBe(false);
   });
 
   it('省略的 name / tag / dn 归一成空串（不让 undefined 流到引擎）', () => {

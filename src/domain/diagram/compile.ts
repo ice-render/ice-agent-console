@@ -45,6 +45,11 @@ export type DiagramOp =
       dn: string;
       sourcePort: DiagramPort;
       targetPort: DiagramPort;
+      /**
+       * 显式给的标注偏移（不写就是让应用层的自动避让去算）。
+       * 这里只透传，不改值 —— 合法性在 `validate.ts` 那道关口上判。
+       */
+      labelOffset?: [number, number];
     };
 
 /**
@@ -80,6 +85,7 @@ export function compileDiagramDsl(doc: DiagramDslDocument): DiagramOp[] {
       dn: pipe.dn === undefined ? '' : String(pipe.dn),
       sourcePort: pipe.sourcePort ?? DEFAULT_SOURCE_PORT,
       targetPort: pipe.targetPort ?? DEFAULT_TARGET_PORT,
+      ...(Array.isArray(pipe.labelOffset) ? { labelOffset: [pipe.labelOffset[0], pipe.labelOffset[1]] as [number, number] } : {}),
     });
   }
 

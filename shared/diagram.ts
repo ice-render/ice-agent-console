@@ -71,6 +71,19 @@ export interface WaterProcessPipe {
    */
   sourcePort?: DiagramPort;
   targetPort?: DiagramPort;
+  /**
+   * 管线**标注**（`DN700 污水` 那类文字）相对折线锚点的偏移，世界单位 `[dx, dy]`。
+   *
+   * 为什么要暴露它：标注锚点由引擎定死在折线的**中段折点**上，而折点是路由器
+   * 绕开**符号盒**折出来的 —— 于是标注与符号的相对位置**尺度不变**：把图元间距放大，
+   * 标注照样压在单元的位号 / 名称文字上（本仓实测 50 处，见 `docs/upstream-gaps.md` 第 16 条）。
+   * 引擎给了 `style.label.offset`，这个字段就是它在 DSL 这一侧的入口。
+   *
+   * **不写** = 交给应用层的自动避让算（`src/domain/diagram/label-avoidance.ts`，
+   * 建完图后按引擎自己的标注盒与单元落墨盒解冲突）；
+   * **写了** = 以它为准，自动避让不再动这条线（人工 / 模型显式表达优先）。
+   */
+  labelOffset?: [number, number];
 }
 
 /** 给水排水工艺流程图（`kind: 'water-process'`）。 */

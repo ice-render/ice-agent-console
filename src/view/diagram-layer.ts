@@ -44,6 +44,7 @@ import { tween, type ICETweenHandle } from 'ice-web-components';
 import { Layer } from '../domain/ice/layer';
 import { applyThemeToIce } from '../domain/theme';
 import { compileDiagramDsl, type DiagramOp } from '../domain/diagram/compile';
+import { planLabelOffsets } from '../domain/diagram/label-avoidance';
 import type { WaterProcessDslDocument } from '../../shared/diagram';
 import type { ZoomDirection } from '../../shared/contract';
 
@@ -229,6 +230,10 @@ export class DiagramLayer {
   private zoomTween: ICETweenHandle | null = null;
   /** 上一次缩放命令（`zoomInfo()` 给 e2e 用）。 */
   private lastZoom: { direction: string; from: number; to: number } | null = null;
+  /** 显式给了 `labelOffset` 的管线：自动避让不许动它们，但会躲开它们。 */
+  private readonly pinnedLabelIds = new Set<string>();
+  /** 标注避让已经排进 rAF 了吗（同一帧里建图 + fit 只跑一次）。 */
+  private avoidScheduled = false;
 
   // 拖拽平移的临时状态
   private panning = false;
@@ -276,6 +281,9 @@ export class DiagramLayer {
     // 建完把选中态清掉：`createSymbol` 每建一个都会把它记成选中项
     this.designer.select(null);
 
+    // 标注避让：建完、引擎把折线算出来之后再挪文字（见 `__scheduleLabelAvoidance`）。
+    this.__scheduleLabelAvoidance();
+
     this.__installPointer();
   }
 
@@ -292,6 +300,9 @@ export class DiagramLayer {
       this.viewportReady = true;
       this.__applyInitialViewport();
     }
+    // 尺寸到位之后折线才算得出来 —— 这里再排一次，兜住"构造时还没量到尺寸"那条路。
+    // 幂等，重复排没有副作用。
+    this.__scheduleLabelAvoidance();
   }
 
   /** 符号 / 管线条数（e2e 用它钉「图真的建出来了、数量对」）。 */
@@ -671,7 +682,7 @@ export class DiagramLayer {
       added++;
     }
     for (const pipe of pipes) {
-      this.designer.createPipe({
+      const created = this.designer.createPipe({
         id: pipe.id,
         sourceId: pipe.sourceId,
         targetId: pipe.targetId,
@@ -680,6 +691,9 @@ export class DiagramLayer {
         sourcePort: pipe.sourcePort,
         targetPort: pipe.targetPort,
       });
+      if (Array.isArray(pipe.labelOffset)) {
+        this.__pinLabelOffset(pipe.id, created, [Number(pipe.labelOffset[0]), Number(pipe.labelOffset[1])]);
+      }
       added++;
     }
 
@@ -694,6 +708,8 @@ export class DiagramLayer {
       // `createSymbol` 每建一个都会把它记成选中项 —— 与构造里一样要清掉
       this.designer.select(null);
       this.ice.requestRepaint();
+      // 图变了 → 挪完位置再解一次标注冲突（加一个池子就可能多一处压住）
+      this.__scheduleLabelAvoidance();
     }
     return { added, removed };
   }
@@ -926,7 +942,7 @@ export class DiagramLayer {
           draggable: false,
         });
       } else {
-        this.designer.createPipe({
+        const pipe = this.designer.createPipe({
           id: op.id,
           sourceId: op.sourceId,
           targetId: op.targetId,
@@ -935,8 +951,99 @@ export class DiagramLayer {
           sourcePort: op.sourcePort,
           targetPort: op.targetPort,
         });
+        // 显式给了偏移就以它为准（自动避让之后不再动这一条）。
+        if (op.labelOffset) this.__pinLabelOffset(op.id, pipe, op.labelOffset);
       }
     }
+  }
+
+  /**
+   * 标注避让：**建完图之后**按引擎自己的读数挪文字，解掉"标注压住单元 / 标注互相压"。
+   *
+   * 为什么在视图层做而不是编译期：标注锚点 = 折线的中段折点，而折线由**引擎的路由器**
+   * 算出来（`state.points`）。编译期还没有折线，想在那里算就得把路由算法抄一份 ——
+   * 抄一份真相必然漂移（本仓在 `ZoomDirection` 上吃过这个亏）。所以走
+   * "先建、建完再量、量完再挪"：尺寸与位置全部来自引擎的 `nodeBoxes()` /
+   * `getLabelRenderInfo()`，与画布同源。附带好处是**内置案例与模型给的图走同一条路**。
+   *
+   * 幂等：偏移读的是"零偏移盒子"（把当前偏移减掉），写的是**绝对**位移，重复跑结果不变；
+   * 图变了之后原来挪开的标注会自己回位（见 `planLabelOffsets` 的约定）。
+   */
+  private __scheduleLabelAvoidance(): void {
+    if (this.avoidScheduled) return;
+    this.avoidScheduled = true;
+    const run = (attempt: number): void => {
+      this.avoidScheduled = false;
+      if (!this.__avoidLabelOverlaps() && attempt < 5) {
+        // 折线还没算出来（首帧前后）—— 下一帧再试，别拿没量准的盒子当真值去挪
+        this.avoidScheduled = true;
+        requestAnimationFrame(() => run(attempt + 1));
+      }
+    };
+    requestAnimationFrame(() => run(0));
+  }
+
+  /** @returns 这一轮是否量到了真几何（false = 折线还没算完，等下一帧） */
+  private __avoidLabelOverlaps(): boolean {
+    const edges: any[] = this.designer.edges || [];
+    const labels: Array<{ id: string; text: string; minX: number; minY: number; maxX: number; maxY: number }> = [];
+    const pinned: Array<{ id: string; box: { minX: number; minY: number; maxX: number; maxY: number } }> = [];
+    const byId = new Map<string, any>();
+
+    for (const edge of edges) {
+      if (typeof edge?.getLabelRenderInfo !== 'function') continue;
+      const points = edge.state?.points;
+      if (!Array.isArray(points) || points.length < 2) return false;
+      const info = edge.getLabelRenderInfo();
+      if (!info || !info.text) continue;
+      const id = String(edge.state?.id ?? '');
+      const left = Number(edge.state?.left) || 0;
+      const top = Number(edge.state?.top) || 0;
+      const current = this.__labelOffsetOf(edge);
+      // info 给的是**含当前偏移**的盒子，减掉它才是零偏移的位置
+      const box = {
+        minX: left + info.x - current[0] - info.halfW,
+        minY: top + info.y - current[1] - info.halfH,
+        maxX: left + info.x - current[0] + info.halfW,
+        maxY: top + info.y - current[1] + info.halfH,
+      };
+      if (this.pinnedLabelIds.has(id)) pinned.push({ id, box });
+      else labels.push({ id, text: String(info.text), ...box });
+      byId.set(id, edge);
+    }
+    if (!labels.length && !pinned.length) return true;
+
+    const units = this.nodeBoxes().map((b) => ({ minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY }));
+    const planned = planLabelOffsets({ units, labels, pinned });
+
+    let changed = false;
+    for (const plan of planned) {
+      const edge = byId.get(plan.id);
+      if (!edge) continue;
+      const current = this.__labelOffsetOf(edge);
+      if (current[0] === plan.offset[0] && current[1] === plan.offset[1]) continue;
+      // `setState` 走深合并，只给 label.offset 不会把 fontSize / 底色抹掉
+      edge.setState({ style: { label: { offset: [plan.offset[0], plan.offset[1]] } } });
+      changed = true;
+    }
+    if (changed) this.ice.requestRepaint();
+    return true;
+  }
+
+  /** 读一条边当前生效的标注偏移（`style.label.offset`），非法值当 0。 */
+  private __labelOffsetOf(edge: any): [number, number] {
+    const raw = edge?.state?.style?.label?.offset;
+    if (!Array.isArray(raw) || raw.length !== 2) return [0, 0];
+    const dx = Number(raw[0]);
+    const dy = Number(raw[1]);
+    return Number.isFinite(dx) && Number.isFinite(dy) ? [dx, dy] : [0, 0];
+  }
+
+  /** 显式偏移：写进去 + 记下来（自动避让不再动它，但会躲开它）。 */
+  private __pinLabelOffset(id: string, pipe: any, offset: [number, number]): void {
+    if (!pipe || !Number.isFinite(offset[0]) || !Number.isFinite(offset[1])) return;
+    pipe.setState({ style: { label: { offset: [offset[0], offset[1]] } } });
+    this.pinnedLabelIds.add(String(id));
   }
 
   /**

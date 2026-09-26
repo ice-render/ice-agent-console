@@ -77,5 +77,6 @@ export const WATER_PIPE_KEYS = [
   'dn',
   'sourcePort',
   'targetPort',
+  'labelOffset',
 ] as const;
 export const WATER_ROOT_KEYS = ['kind', 'title', 'viewport', 'units', 'pipes'] as const;

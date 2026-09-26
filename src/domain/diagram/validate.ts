@@ -249,6 +249,21 @@ export function validateDiagramDsl(input: unknown): DiagramValidationResult {
         }
       }
 
+      // 标注偏移：`[dx, dy]`，两个有限数。**非法值必须报错而不是被忽略** ——
+      // 它关系到"这条线的标注压不压住图元"，静默丢弃等于让人以为避让生效了。
+      if (pipe.labelOffset !== undefined) {
+        const value: any = pipe.labelOffset;
+        const ok =
+          Array.isArray(value) && value.length === 2 && value.every((n: any) => Number.isFinite(Number(n)));
+        if (!ok) {
+          e(
+            `${at}.labelOffset`,
+            `标注偏移必须是两个有限数组成的数组，如 [0, -16]；收到 ${JSON.stringify(value)}。` +
+              `不想要这个偏移就**别写这个字段**（会自动避让）。`
+          );
+        }
+      }
+
       for (const key of extraKeys(pipe, WATER_PIPE_KEYS)) {
         w(`${at}.${key}`, `多余的字段「${key}」会被忽略；管线只认 ${WATER_PIPE_KEYS.join(' / ')}`);
       }

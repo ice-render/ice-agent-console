@@ -31,6 +31,7 @@ import {
   chipLocator,
   collectErrors,
   countInk,
+  labelOverlapStats,
   panelGeometry,
   readStage,
   readState,
@@ -149,6 +150,46 @@ test('开页就是工艺图：无需任何对话、数量对、引擎校验无�
   // 出水路径必须有在线监测 / 剩余污泥要有出路 / AAO 要有内回流。
   // 同一份数据在 ice-smart-water 里也是零问题 —— 两边一致才说明搬的时候没改语义。
   expect(stats.issues).toEqual([]);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+/**
+ * ★ **标注避让**（2026-09-26 立，与 `layout.ts` 那条"图元之间不许压"是两件事）
+ *
+ * `layout.ts` 那套只保证**单元之间**（落墨盒含位号/名称）—— 线上实测 0 处，一直是对的。
+ * 但另外两类它管不到，实测（线上产物）分别是 **50 处**（管线标注压在单元上，占小盒 25%~55%）
+ * 与 **5 处**（标注互相压）：锚点被引擎定死在折线的中段折点上，而折点是路由器绕开
+ * **符号盒**折出来的 —— 尺度不变，把图元间距放大 1.45→2.2 倍数量一动不动。
+ *
+ * 现在由 `DiagramLayer.__avoidLabelOverlaps()` 在建完图之后按引擎自己的读数挪文字
+ * （`src/domain/diagram/label-avoidance.ts` 那套纯逻辑）。这条用例钉的就是"挪完是真的不压了"：
+ * 判据是**引擎的盒子**，不是"有没有调用过避让"。
+ *
+ * ⚠️ 唯一还没解决的是**线穿过位号/名称文字带**（端口取形状盒边中点，而位号/名称也居中画在
+ * 那条中轴线上 → 上下进线必然穿过）。那不是标注的事，需要上游改端口/标签几何，
+ * 记在 `docs/upstream-gaps.md` 第 17 条。所以这里**不**把"文字带里没有线"写成断言。
+ */
+test('★ 标注不压图元：单元×单元、标注×标注、单元×标注 三类都为零', async ({ page }) => {
+  const errors = collectErrors(page);
+  await page.goto('/');
+  await waitDiagramReady(page);
+  // 避让是建完之后按 rAF 补跑的一趟（要等折线算出来），给它几帧
+  await page.waitForTimeout(500);
+
+  const stats = await labelOverlapStats(page);
+  expect(stats.units).toBe(SYMBOLS);
+  expect(stats.labels).toBeGreaterThan(0);
+  expect(stats.unitVsUnit, '单元之间压住（layout.ts 那套棘轮管的事）').toBe(0);
+  expect(stats.labelVsLabel, '标注互相压').toBe(0);
+  expect(stats.unitVsLabel, '管线标注压在单元上').toBe(0);
+
+  // 提标改造之后（增删图元）还得重新解一次 —— 加一个池子就可能多一处压住
+  await useChip(page, '提标改造');
+  await page.waitForTimeout(500);
+  const after = await labelOverlapStats(page);
+  expect(after.units).toBe(SYMBOLS + UPGRADE_UNITS.length - UPGRADE_REMOVED_UNIT_IDS.length);
+  expect({ uu: after.unitVsUnit, ll: after.labelVsLabel, ul: after.unitVsLabel }).toEqual({ uu: 0, ll: 0, ul: 0 });
 
   expect(errors, errors.join('\n')).toEqual([]);
 });

@@ -85,6 +85,47 @@ export async function readStage(page: Page): Promise<StageInfo> {
 }
 
 /**
+ * 量"图上有没有东西压着东西"：单元落墨盒（含位号/名称）、管线标注盒，两两算一遍。
+ *
+ * 判据与 `src/domain/diagram/layout.ts` 同口径（占**小盒** ≥2% 才算压住）——
+ * 这个阈值写在两处会漂，所以这里只做计算，阈值由调用方传。
+ *
+ * 为什么要这些读数：canvas 上没有 DOM 目标，"压没压住"只有人眼看得见，
+ * 而人眼在 CI 里不管用。盒子全部来自引擎自己的读数（`diagramBoxes` /
+ * `diagramEdgeLabels`），不是从 DSL 坐标 + 预设尺寸推的。
+ */
+export async function labelOverlapStats(page: Page, minRatio = 0.02): Promise<{
+  units: number;
+  labels: number;
+  unitVsUnit: number;
+  labelVsLabel: number;
+  unitVsLabel: number;
+}> {
+  return page.evaluate((ratio) => {
+    const api = (window as any).__iceAgentConsole;
+    const units = api.diagramBoxes() as Array<{ minX: number; minY: number; maxX: number; maxY: number }>;
+    const labels = api.diagramEdgeLabels() as Array<{ minX: number; minY: number; maxX: number; maxY: number }>;
+    const area = (b: any) => Math.max(0, b.maxX - b.minX) * Math.max(0, b.maxY - b.minY);
+    const inter = (a: any, b: any) => {
+      const w = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+      const h = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+      return w > 0 && h > 0 ? w * h : 0;
+    };
+    const hit = (a: any, b: any) => {
+      const min = Math.min(area(a), area(b));
+      return min > 0 && inter(a, b) / min >= ratio;
+    };
+    return {
+      units: units.length,
+      labels: labels.length,
+      unitVsUnit: units.filter((u, i) => units.some((o, j) => j > i && hit(u, o))).length,
+      labelVsLabel: labels.filter((l, i) => labels.some((o, j) => j > i && hit(l, o))).length,
+      unitVsLabel: labels.filter((l) => units.some((u) => hit(l, u))).length,
+    };
+  }, minRatio);
+}
+
+/**
  * 等**开页就绪**：绘图区上已经有工艺图，而且 78 个符号都建好了。
  *
  * ⚠️ 这里**不能用 `waitSettled`**：那条判据要求 `eventCount` 涨过基线，
