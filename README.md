@@ -316,11 +316,18 @@ ice-agent-console · 大模型配置自检
 | `render_diagram` | 把**图**切到 diagram 图层：kind-first 的图 DSL，目前一种 kind = `water-process`（给排水工艺流程图，`ice-entity-designer`） |
 | `collect_input` | **渲染成可填的表单，并让这一轮停下来等提交** —— 在协议里这就是一次中断 |
 | `point_at` | 画完之后指着某个地方讲（图表：`xValue` 是 x 刻度；工艺图：`xValue` 是单元 id 或位号，如 `ana` / `AE-101`），可带 `blink` |
-| `zoom_view` | 缩放视图（工艺图专用）：`direction: 'in' \| 'out' \| 'reset'` |
+| `zoom_view` | 缩放视图（工艺图专用）：相对 `in` / `out`（可带 `factor` / `steps`）、`reset` 回初始视野、**`to` + `scale` 绝对倍率** |
 
 一次 run 里**调两次模型**：第一次让它选工具；把工具结果回灌之后再调第二次，拿"画完之后的那句话"
 （第二次只带 `point_at` / `zoom_view` 这两个"图上动作"工具 —— 不许在讲的时候又画一张）。
 这是为了对齐剧本里的节奏（`先说一句 → 切图层 → 再讲一句`），也是真实 agent 循环的形状。
+
+⚠️ **`point_at` / `zoom_view` 两次调用都可能出现，两条路都要认**：用户只说「放大一点 / 看全貌 /
+点一下那台泵」时，模型第一次（往往也是唯一一次）就调它们，这一轮**根本没有卡片**，
+只有一条画布命令。第一版只认第二次调用，这种"只有动作"的一轮会被兜底成图表卡 ——
+`{direction:"in"}` 拿去当图表 DSL 校验，前端必然报"缺少 kind"，而那句诊断和缩放毫无关系
+（2026-09-26 修，`buildLlmPlan` 里单列一支 + 4 条单测钉着；实测 qwopus-coder 对这三句话
+选的全是这两个工具）。
 
 > **工具 schema 故意写得不等穷尽。** 表单 DSL 的完整约束有 38 个错误码，
 > 全塞进 schema 既贵又没用 —— 值语义（"默认值必须在 options 里"）本来就不是 JSON Schema 能表达的。

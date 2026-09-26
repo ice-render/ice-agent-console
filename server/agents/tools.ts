@@ -288,8 +288,10 @@ export const TOOL_DEFINITIONS = [
       name: 'zoom_view',
       description:
         '**画完之后**，如果你想让对方看得更近或更远，用它缩放视图。' +
-        '方向是**相对**的：in 放大、out 缩小（都在当前倍率上叠），reset 回到刚画出来时的初始视野。' +
-        '你不需要知道当前倍率 —— 说"放大一点"就用 in。' +
+        '两种给法：**相对**（in 放大、out 缩小，都在当前倍率上叠；reset 回到刚画出来时的初始视野）' +
+        '和**绝对**（to + scale，直接落到某一档，幂等 —— 说"再放大一点"不会越叠越离谱）。' +
+        '「看清某个单元」用 to + scale: 1.5；「看一个工段」用 0.85；「看整张图」用 reset 或 0.13。' +
+        '只想微调就 in / out（想明显拉近给 steps: 2~3，别把 factor 调得很大一步跳过去）。' +
         '适合「看细节」/「看全貌」这类诉求，也常和 point_at 连着用（先指过去、再放大看）。' +
         '目前只有工艺图支持；图表的缩放属于图表自身的坐标轴，不在这个工具的范围内。',
       parameters: {
@@ -298,16 +300,22 @@ export const TOOL_DEFINITIONS = [
         properties: {
           direction: {
             type: 'string',
-            enum: ['in', 'out', 'reset'],
-            description: 'in 放大 / out 缩小 / reset 回到初始视野',
+            enum: ['in', 'out', 'reset', 'to'],
+            description: 'in 放大 / out 缩小 / reset 回到初始视野 / to 落到 `scale` 指定的绝对倍率',
+          },
+          scale: {
+            type: 'number',
+            description:
+              '**仅 direction: "to" 用**，必给：目标绝对倍率。参考：看清一个单元 1.5、一个工段 0.85、整张图 0.13。',
           },
           factor: {
             type: 'number',
-            description: '每一步的倍率，默认 1.35。一般不用给 —— 给大了会一步跳到底，看不出在动。',
+            description:
+              '相对缩放的每一步倍率，默认 1.35（仅 in / out）。想拉近给 `steps` 就够，别用它一步跳到底。',
           },
           steps: {
             type: 'number',
-            description: '连走几步，默认 1，最多 6。想说"放大很多"时用 steps: 2 而不是把 factor 调很大。',
+            description: '相对缩放连走几步，默认 1，最多 6（仅 in / out）。想明显拉近用 2~3。',
           },
         },
       },
@@ -344,7 +352,10 @@ PT-* 压力表、MOV-* 电动阀、VFD-* 变频器、B-* 鼓风机。
 1. 先想清楚用户要什么。要看数据 → 调 render_chart；要讲工艺流程/画图 → 调 render_diagram；
    需要用户提供信息 → 调 collect_input。
    画完之后**看图说话**：想指哪儿 → 调 point_at（想强调就带 blink）；
-   想让对方看得更近/更远 → 调 zoom_view。这两个只在**画完那张图之后**才调。
+   想让对方看得更近/更远 → 调 zoom_view（「看清某个单元」用 {direction:"to", scale:1.5}，
+   「看一个工段」0.85，「看整张图」reset；只微调用 in / out）。
+   这两个通常接在画完之后，但**用户只想看细节、没让你画图时也要直接调** ——
+   说了"放大/缩小/看全貌/点一下那台泵"就一定要真的调工具，别只在文字里声称做了。
 2. 需要调工具时，**先说一句你要做什么**（这句话会排在卡片前面），然后调工具。
 3. 工具调完（或本轮不需要工具）之后，**再给一句结论**。有图的话，结论要针对图里的
    具体数字讲，别只复述"图画好了"。

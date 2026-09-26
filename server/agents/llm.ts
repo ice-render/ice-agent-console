@@ -33,6 +33,7 @@ import type { LlmConfig } from '../config';
 import { DSL_DIAGNOSTICS_CONTEXT_KEY, VIEW_INTERACTION_CONTEXT_KEY, COLLECT_INPUT_TOOL, RENDER_CHART_TOOL, STATE_CHART_KEY, STATE_FORM_KEY,
   RENDER_DIAGRAM_TOOL,
   STATE_DIAGRAM_KEY,
+  type ZoomDirection,
 } from '../../shared/contract';
 import { planToEvents, type AnyEvent, type ToolCardPlan } from './dsl-to-events';
 import { chatStream, type ChatMessage, type ChatResult, type ToolCall } from './llm-client';
@@ -100,10 +101,6 @@ function contextNotes(input: RunAgentInput): string[] {
 }
 
 /**
- * 读模型给的缩放指令。方向非法就当没给（不编一个默认方向出来 ——
- * 那会让"模型说了个没用的方向"变成"画面莫名其妙动了一下"）。
- */
-/**
  * 把模型给的 `anchor` 归一成 `{ value, label? }`；认不出来就返回 null。
  *
  * 容忍两种写法（都是实测里真会出现的）：
@@ -122,14 +119,39 @@ function normalizeAnchor(raw: any): { value: string; label?: string } | null {
   return { value: value.trim(), ...(label ? { label } : {}) };
 }
 
-function readZoomCommand(call: { name: string; args: any } | null | undefined): {
-  direction: 'in' | 'out' | 'reset';
+/**
+ * 模型能用哪几档缩放方向。
+ *
+ * **取值以 `shared/contract.ts` 的 `ZoomDirection` 为唯一出处**，别在这里再抄一份字面量
+ * （抄了就会在加方向时漏改某处，而漏改的症状是"命令合法、视图也实现了，却被静默丢掉"）。
+ * 这里只把 `fit`（整图适配）挡在外面：模型说"看整张图"用 `reset` 就够，
+ * 多一档反而更容易选错。
+ */
+type ModelZoomDirection = Exclude<ZoomDirection, 'fit'>;
+
+/** 从模型载荷里读出来的缩放命令。 */
+interface ReadZoom {
+  direction: ModelZoomDirection;
   factor?: number;
   steps?: number;
-} | null {
+  scale?: number;
+}
+
+/**
+ * 读模型给的缩放指令。方向非法就当没给（不编一个默认方向出来 ——
+ * 那会让"模型说了个没用的方向"变成"画面莫名其妙动了一下"）。
+ */
+function readZoomCommand(call: { name: string; args: any } | null | undefined): ReadZoom | null {
   if (!call || call.name !== ZOOM_VIEW_TOOL) return null;
   const direction = call.args?.direction;
+  if (direction === 'to') {
+    // `to` 是**绝对**倍率，`scale` 必给 —— 少了它就落不到任何一档，
+    // 这时候当"没给"比编一个倍率出来诚实（画面不动，但不会莫名其妙跳一下）。
+    const scale = Number(call.args?.scale);
+    return Number.isFinite(scale) && scale > 0 ? { direction, scale } : null;
+  }
   if (direction !== 'in' && direction !== 'out' && direction !== 'reset') return null;
+  // factor / steps 只对 in / out 有意义（协议里就是这么定的），`to` / `reset` 上给了也不认。
   const factor = Number(call.args?.factor);
   const steps = Number(call.args?.steps);
   return {
@@ -137,6 +159,29 @@ function readZoomCommand(call: { name: string; args: any } | null | undefined): 
     ...(Number.isFinite(factor) && factor > 0 ? { factor } : {}),
     ...(Number.isFinite(steps) && steps > 0 ? { steps: Math.floor(steps) } : {}),
   };
+}
+
+/**
+ * 从一个工具调用里读"画完之后那一类动作"：指哪儿（`point_at`）/ 缩放（`zoom_view`）。
+ *
+ * ⚠️ 这两个工具**两次调用都可能出现**，读法必须同一份：
+ * - 第二次调用——常规路径：画完卡片，模型在给结论的同时指过去 / 推镜头；
+ * - **第一次调用**——用户只说「放大一点」「点一下那台泵」时，模型第一次（往往也是
+ *   唯一一次）就调它，这一轮根本没有卡片。2026-09-26 之前这种第一次调用会被兜底成
+ *   图表卡，于是 `{direction:"in"}` 被当成图表 DSL，前端必然判"校验不通过"
+ *   （实测：qwopus-coder 对"放大/缩小/点名"三句话选的全是这两个工具）。
+ */
+function readPostRender(call: { name: string; args: any } | null | undefined): {
+  pointAt?: string;
+  blink: boolean;
+  zoom: ReadZoom | null;
+} {
+  if (!call) return { blink: false, zoom: null };
+  const raw = call.name === POINT_AT_TOOL ? call.args?.xValue : undefined;
+  const pointAt = typeof raw === 'string' && raw ? raw : undefined;
+  // blink 只在同时有 pointAt 时才有意义（闪的前提是已经指到某处）
+  const blink = pointAt !== undefined && call.args?.blink === true;
+  return { ...(pointAt !== undefined ? { pointAt } : {}), blink, zoom: readZoomCommand(call) };
 }
 
 /**
@@ -173,6 +218,35 @@ export function buildLlmPlan(
     } as ToolCardPlan;
   }
 
+  // ---- 第一次调用就调了「画完之后」那一类工具：这一轮**没有卡片**，只有一条画布命令 ----
+  //
+  // 用户只说「放大一点 / 看全貌 / 点一下那台泵」时，模型第一次就会调 `zoom_view` / `point_at`
+  // —— 它并不想画卡片。这一支必须**排在下面那张卡片路由表之前**：
+  // 落到兜底里的话，`{direction:"in"}` 会被当成图表 DSL 去校验，前端必然打回
+  // "缺少 kind"，而那份诊断（图表缺 kind）和模型想干的事（缩放）毫无关系 ——
+  // 它只会更懵。实测（2026-09-26，qwopus-coder）：放大 / 缩小 / 点名三句话选的都是这两个工具。
+  // 形状与"纯文字回复"那支一样：不产卡片、不写共享状态，只在那一拍上挂个动作。
+  if (call.name === POINT_AT_TOOL || call.name === ZOOM_VIEW_TOOL) {
+    const acted = readPostRender(call);
+    const tail = readPostRender(second?.toolCall);
+    // 两边都给时以第一次为准：那是对用户这句话的直接回应；
+    // 第二次是"画完之后的那句话"，它顺手带的动作只是补充。
+    const pointAt = acted.pointAt ?? tail.pointAt;
+    const blink = acted.pointAt !== undefined ? acted.blink : tail.blink;
+    const zoom = acted.zoom ?? tail.zoom;
+    const text = [intro, second?.text.trim()].filter(Boolean).join('\n');
+    return {
+      beats: [
+        {
+          text,
+          ...(pointAt !== undefined ? { pointAt } : {}),
+          ...(blink ? { blink: true } : {}),
+          ...(zoom ? { zoom } : {}),
+        },
+      ],
+    } as ToolCardPlan;
+  }
+
   const isForm = call.name === COLLECT_INPUT_TOOL;
   // 名字 → {工具, stateKey} 的映射表，**不是**二元分支。
   // 写成 `isForm ? 表单 : 图表` 的话，模型调 `render_diagram` 会被当成图表卡渲染
@@ -192,17 +266,12 @@ export function buildLlmPlan(
   // ---- 第二次调用的产出：结论（可能顺带指着某个点 / 缩放视图）----
   const beats: ToolCardPlan['beats'] = [];
   if (second) {
-    const call2 = second.toolCall;
-    const pointAt =
-      call2?.name === POINT_AT_TOOL && typeof call2.args?.xValue === 'string' ? call2.args.xValue : undefined;
-    // blink 只在同时有 pointAt 时才有意义（闪的前提是已经指到某处）
-    const blink = pointAt !== undefined && call2?.args?.blink === true;
-    const zoom = readZoomCommand(call2);
+    const { pointAt, blink, zoom } = readPostRender(second.toolCall);
     const text = second.text.trim();
-    if (text || pointAt || zoom) {
+    if (text || pointAt !== undefined || zoom) {
       beats.push({
         text,
-        ...(pointAt ? { pointAt } : {}),
+        ...(pointAt !== undefined ? { pointAt } : {}),
         ...(blink ? { blink: true } : {}),
         ...(zoom ? { zoom } : {}),
       });

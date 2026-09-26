@@ -171,6 +171,94 @@ describe('buildLlmPlan：模型的选择 → 计划（纯函数，不碰网络�
     expect(plan.beats).toEqual([{ text: '看这个尖峰。', pointAt: '3月' }]);
   });
 
+  /**
+   * ★ **第一次**就调「画完之后」那一类工具：这一轮没有卡片，只有一条画布命令。
+   *
+   * 用户只说「放大一点 / 点一下那台泵」时，模型第一次（往往也是唯一一次）就会调
+   * `zoom_view` / `point_at` —— 它并不想画卡片。这两条钉住的正是 2026-09-26 之前那个洞：
+   * 第一次调用落到"认不出来的工具名 → 按图表卡兜底"，于是 `{direction:"in"}`
+   * 被当成图表 DSL 去校验，前端必然判"缺少 kind"，用户看到一条和缩放八竿子打不着的错误，
+   * 画面一动不动（诊断回灌之后模型更懵）。真模型下"放大/缩小/看全貌/点名"是必踩的。
+   */
+  it('★ 第一次调 `zoom_view` → 不产卡片，只在那一拍上缩放（别兜底成图表卡）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'zoom_view', args: { direction: 'in' }, id: 'z1' } },
+      { text: '镜头推近一点。', toolCall: null },
+      'r1'
+    );
+    expect(plan.tool).toBeUndefined(); // 没有卡片
+    expect(plan.payload).toBeUndefined();
+    expect(plan.stateKey).toBeUndefined();
+    expect(plan.intro).toBeUndefined(); // 没卡片就不能用 intro（那是"画之前先说一句"）
+    expect(plan.beats).toEqual([{ text: '镜头推近一点。', zoom: { direction: 'in' } }]);
+  });
+
+  it('★ 第一次调 `point_at` → 不产卡片，只在那一拍上高亮（带 blink）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '就是这台。', toolCall: { name: 'point_at', args: { xValue: 'inletPump', blink: true }, id: 'p1' } },
+      null,
+      'r1'
+    );
+    expect(plan.tool).toBeUndefined();
+    expect(plan.payload).toBeUndefined();
+    expect(plan.beats).toEqual([{ text: '就是这台。', pointAt: 'inletPump', blink: true }]);
+  });
+
+  it('第一次调 `zoom_view` 且第二次没说话 → 只有动作、没有空话', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'zoom_view', args: { direction: 'reset' }, id: 'z2' } },
+      { text: '', toolCall: null },
+      'r1'
+    );
+    expect(plan.beats).toEqual([{ text: '', zoom: { direction: 'reset' } }]);
+  });
+
+  it('第一次调 `zoom_view`、第二次又调一次 → 以第一次为准（那才是对用户这句话的回应）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'zoom_view', args: { direction: 'in' }, id: 'z1' } },
+      { text: '好了。', toolCall: { name: 'zoom_view', args: { direction: 'out' }, id: 'z2' } },
+      'r1'
+    );
+    expect(plan.beats).toEqual([{ text: '好了。', zoom: { direction: 'in' } }]);
+  });
+
+  /**
+   * `to`：**绝对**倍率（演示里"看清一个单元"就是 `to: 1.5`）。
+   *
+   * 2026-09-26 之前没往模型这边开 —— 于是它只能用相对的 `in`（默认一步 ×1.35），
+   * 用户说"看清这个池子"也只能放大一点点（实测：全貌 0.124 → 0.167，而演示是 1.5）。
+   * 协议层、归约器（含 `scale` 的正数校验）、前端转发本来就都认 `to`，缺的只是工具 schema 与这里。
+   */
+  it('★ `zoom_view {direction:"to", scale}` → 原样进那一拍（绝对倍率，才有演示那种特写）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'zoom_view', args: { direction: 'to', scale: 1.5 }, id: 'z1' } },
+      { text: '拉近到好氧池 A。', toolCall: null },
+      'r1'
+    );
+    expect(plan.tool).toBeUndefined();
+    expect(plan.beats).toEqual([{ text: '拉近到好氧池 A。', zoom: { direction: 'to', scale: 1.5 } }]);
+  });
+
+  it('`to` 没给 scale（或给了非正数）→ 当没给，不编一个倍率出来', () => {
+    const zoomOf = (args: any) => {
+      const plan: any = buildLlmPlan({ text: '', toolCall: { name: 'zoom_view', args, id: 'z1' } }, null, 'r1');
+      return plan.beats[0].zoom;
+    };
+    expect(zoomOf({ direction: 'to' })).toBeUndefined();
+    expect(zoomOf({ direction: 'to', scale: 0 })).toBeUndefined();
+    expect(zoomOf({ direction: 'to', scale: -1.5 })).toBeUndefined();
+    expect(zoomOf({ direction: 'to', scale: Number('x') })).toBeUndefined();
+  });
+
+  it('`to` 上带的 factor / steps 会被忽略（协议里它们只属于 in / out）', () => {
+    const plan: any = buildLlmPlan(
+      { text: '', toolCall: { name: 'zoom_view', args: { direction: 'to', scale: 0.85, factor: 2, steps: 3 }, id: 'z1' } },
+      null,
+      'r1'
+    );
+    expect(plan.beats[0].zoom).toEqual({ direction: 'to', scale: 0.85 });
+  });
+
   it('调 collect_input → 计划里带**中断**（"要用户提供信息"在协议里就是 interrupt）', () => {
     const args = {
       kind: 'form',
