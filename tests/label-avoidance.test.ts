@@ -100,6 +100,35 @@ describe('planLabelOffsets：管线标注往哪挪', () => {
     expect(overlapsAfter(units, labels, one).vsUnits).toBe(0);
   });
 
+  /**
+   * ★ **最受限优先**（fail-first，经典 LPL 启发式）：候选最少的标注先放。
+   *
+   * 为什么值得：真实案例上的离线单因子实验（`docs/label-placement-notes.md` 有表）
+   * 只加这一条就把**最大位移从 81.2 降到 65.5 世界像素**（重叠仍是 0/0）。
+   *
+   * 这条用例把机制本身钉住：灵活的标注若先放、占掉了挑剔标注的唯一空位，
+   * 挑剔的那条就会被推到很远；反过来（先放挑剔的）两条都只需小幅移动。
+   */
+  test('★ 灵活的先放会挤走挑剔的 → 应当让"候选最少的"先放', () => {
+    // 墙把空间分成三格：x ∈ [-200,0] / [0,100] / [100,300]，中间那格只够放一个标注
+    const wallLeft = box(-400, -400, 200, 800);      // 左侧墙
+    const wallRight = box(100, -400, 200, 800);      // 右侧墙
+    const units: Box[] = [];
+    // 挑剔的：基准位正好落在"中间那格"，只能往左或往右挪出这格
+    const picky = { ...label('picky', 10, 0, 70, 20), anchor: { x: 45, y: 10 } };
+    // 灵活的：附近空得很（哪边都能挪）
+    const flexible = { ...label('flexible', 210, 0, 70, 20), anchor: { x: 245, y: 10 } };
+    const plans = planLabelOffsets({ units: [wallLeft, wallRight], labels: [flexible, picky], step: 16, maxSteps: 6 });
+    const byId = new Map(plans.map((p) => [p.id, p.offset]));
+    // 挑剔的只用小幅位移（它先挑位置），灵活的承担剩下的
+    expect(Math.hypot(...byId.get('picky')!)).toBeLessThanOrEqual(16);
+    expect(overlapsAfter([wallLeft, wallRight], [flexible, picky], plans).vsUnits).toBe(0);
+    // 反过来把它放在最后（输入顺序无关紧要）—— 结果必须一样
+    const plans2 = planLabelOffsets({ units: [wallLeft, wallRight], labels: [picky, flexible], step: 16, maxSteps: 6 });
+    const byId2 = new Map(plans2.map((p) => [p.id, p.offset]));
+    expect(Math.hypot(...byId2.get('picky')!)).toBeLessThanOrEqual(16);
+  });
+
   test('退化盒（宽或高为 0）不算撞 —— 别被零面积的对象骗到', () => {
     const units = [box(0, 0, 0, 0)];
     const labels = [label('a', 0, 0)];

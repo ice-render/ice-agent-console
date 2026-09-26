@@ -318,15 +318,42 @@ export function planLabelOffsets(input: LabelPlanInput): PlannedOffset[] {
     placedLabels.push({ ...pinned.box });
   }
 
-  for (const label of input.labels) {
+  /** 一个标注的候选排版列表（给了 `placements` 用它，否则退回"单一位移候选"）。 */
+  const optionsOf = (label: LabelBox) =>
+    label.placements?.length
+      ? label.placements
+      : [{ angle: 0, base: label.base ?? ([0, 0] as [number, number]), box: shifted(label, label.base ?? [0, 0]) }];
+
+  /**
+   * **最受限优先**（fail-first，经典 LPL 启发式）：先数每个标注"有多少个干净候选位"
+   * （不压单元、不压已放的、不压回自己那根线），**少的先放** —— 让最挑剔的标注先挑位置，
+   * 灵活的标注最后补空。同分按输入顺序（稳定），保证结果可复现。
+   *
+   * 为什么值得：离线原型在真实案例上做过单因子对比（`docs/label-placement-notes.md` 有表），
+   * 只加这一条就把**最大位移从 81.2 降到 65.5 世界像素**（−19%），而重叠仍是 0/0；
+   * 同一批实验里"沿线滑动候选"单独加没有收益、两条一起反而把中位位移从 18 抬到 21.3。
+   */
+  const queue = input.labels.map((label, index) => {
+    let freedom = 0;
+    for (const option of optionsOf(label)) {
+      for (const delta of candidates(option.box, placedUnits, step, maxSteps)) {
+        const box = shifted(option.box, delta);
+        if (blocked(box, placedUnits) || blocked(box, placedLabels)) continue;
+        if (label.anchor && pointBoxDistance(label.anchor, box) < ANCHOR_KEEP_OUT) continue;
+        freedom++;
+      }
+    }
+    return { label, index, freedom };
+  });
+  queue.sort((a, b) => a.freedom - b.freedom || a.index - b.index);
+
+  for (const { label } of queue) {
     const base: [number, number] = label.base ? [label.base[0], label.base[1]] : [0, 0];
     /**
      * 候选排版：给了 `placements` 就按它的顺序（每种自带角度与"基准位下的盒子"），
      * 否则退回老行为 —— 单一位移候选（`base` + 位移、角度 0）。
      */
-    const options = label.placements?.length
-      ? label.placements
-      : [{ angle: 0, base, box: shifted(label, base) }];
+    const options = label.placements?.length ? label.placements : [{ angle: 0, base, box: shifted(label, base) }];
 
     let chosen: { offset: [number, number]; angle: number } = { offset: options[0].base, angle: options[0].angle };
     let bestCost = Number.POSITIVE_INFINITY;

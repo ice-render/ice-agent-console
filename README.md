@@ -1280,7 +1280,8 @@ ice-agent-console/
 │       └── html-audit.mjs   从 HTML 读 TDK / 爬虫字段（deploy 自检 + seo-check 共用）
 ├── tests/  e2e/             jest 单测 + playwright（seo.test.ts / seo.spec.ts 见 §12）
 ├── docs/images/             README 里的截图（2× 采集；绘图区整幅 / 对话面板整块）
-└── docs/upstream-gaps.md    对上游的观察
+├── docs/upstream-gaps.md    对上游的观察
+└── docs/label-placement-notes.md  标注排版：业界惯例 + 经典算法 + 我们的取舍（含离线对照实验）
 ```
 
 ---
